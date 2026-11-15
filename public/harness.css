@@ -50,48 +50,66 @@
 .tp-report { border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px; background: var(--surface); }
 .tp-report summary { cursor: pointer; font-size: 12.5px; font-weight: 600; color: var(--ink-2); }
 .tp-report .text { font-size: 12.5px; max-height: 420px; overflow: auto; overflow-wrap: anywhere; }
-.spawnbox textarea, .spawnbox input, .dcard textarea, .todoadd input {
+.spawnbox textarea, .spawnbox input {
   width: 100%; box-sizing: border-box; margin-top: 8px; border: 1px solid var(--line); border-radius: 8px;
   background: var(--surface-2); color: var(--ink); font: inherit; font-size: 12.5px; padding: 7px 9px;
 }
 .spawnbox .btn { margin-top: 8px; }
-.orch-tasks { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; }
-.orch-task {
-  display: flex; gap: 8px; align-items: center; border: 0; background: transparent; color: var(--ink-2);
-  font: inherit; font-size: 12.5px; padding: 4px 2px; cursor: pointer; text-align: left;
-}
-.orch-task:hover { color: var(--ink); }
-.orch-task .tt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* --- inbox --------------------------------------------------------------- */
-#inboxBody .sect { margin-top: 6px; }
-.dcard { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; margin: 8px 0; background: var(--surface); }
-.dcard.question { border-left: 3px solid var(--warn); }
-.dcard.action { border-left: 3px solid var(--accent); }
-.dcard.resume { border-left: 3px solid var(--bad); }
-.dcard .dh { display: flex; gap: 8px; align-items: center; }
-.dcard .dt {
-  border: 0; background: none; color: var(--ink); font: inherit; font-weight: 600; font-size: 12.5px;
-  cursor: pointer; padding: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+/* --- inbox view --------------------------------------------------------- */
+.inboxview { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.inboxview[hidden] { display: none; }
+.inboxbtn.on { color: var(--accent-ink); }
+.ibhead { display: flex; gap: 10px; align-items: center; padding: 14px 20px 8px; flex-wrap: wrap; }
+.ibhead h2 { font-size: 17px; margin: 0 auto 0 0; letter-spacing: -0.01em; }
+.ibhead .modeswitch { margin: 0; }
+.ibtabs { display: flex; gap: 2px; padding: 0 16px; border-bottom: 1px solid var(--line); overflow-x: auto; }
+.ibtab {
+  display: inline-flex; gap: 6px; align-items: center; border: 0; background: none; color: var(--muted);
+  font: inherit; font-size: 13px; padding: 8px 10px; cursor: pointer; border-bottom: 2px solid transparent;
+  margin-bottom: -1px; white-space: nowrap;
 }
-.dcard .dt:hover { text-decoration: underline; }
-.dcard .when, .evrow .when { margin-left: auto; color: var(--muted); font-size: 11px; flex: 0 0 auto; }
-.dcard .db { font-size: 13px; margin-top: 6px; overflow-wrap: anywhere; }
-.dcard .db p { margin: 0.3em 0; }
-.dcard .drow { display: flex; gap: 6px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
-.dcard .drow input[type="date"] {
+.ibtab:hover { color: var(--ink); }
+.ibtab.on { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
+.ibtab .n { font-size: 11px; padding: 0 6px; border-radius: 8px; background: var(--surface-2); color: var(--ink-2); }
+.ibtab .n.hot { background: color-mix(in srgb, var(--warn) 20%, transparent); color: var(--warn); }
+.iblist { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 6px 12px 30px; }
+.ibempty { color: var(--muted); font-size: 13px; padding: 28px 8px; text-align: center; }
+.ibsum { display: flex; gap: 8px; align-items: center; color: var(--muted); font-size: 12px; padding: 6px 8px; }
+.ibitem { border-radius: 10px; border: 1px solid transparent; }
+.ibitem.sel { border-color: var(--line); background: var(--surface); }
+.ibrow, .evrow {
+  display: flex; gap: 10px; align-items: center; width: 100%; border: 0; background: none; color: var(--ink-2);
+  font: inherit; font-size: 13px; padding: 8px; cursor: pointer; text-align: left; border-radius: 10px;
+}
+.ibrow:hover, .evrow:hover { background: var(--surface-2); }
+.ibitem.sel .ibrow:hover { background: none; }
+.ibrow .badge, .evrow .badge { flex: 0 0 auto; }
+.ibrow .ti, .evrow .ti, .todorow .ti { flex: 0 1 auto; max-width: 40%; font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ibrow .pv, .evrow .tx { flex: 1 1 0; min-width: 0; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ibrow .when, .evrow .when, .todorow .when { flex: 0 0 auto; color: var(--muted); font-size: 11px; margin-left: auto; }
+.evrow .when { width: 34px; margin-left: 0; }
+.ibdetail { padding: 2px 12px 12px; display: flex; flex-direction: column; gap: 8px; }
+.ibdetail .text { font-size: 13px; overflow-wrap: anywhere; }
+.ibdetail .text p { margin: 0.3em 0; }
+.ibdetail textarea, .todoadd input {
+  width: 100%; box-sizing: border-box; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--surface-2); color: var(--ink); font: inherit; font-size: 12.5px; padding: 7px 9px;
+}
+.ibnote { font-size: 12px; color: var(--warn); }
+.ibacts { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.ibacts .spacer { flex: 1 1 auto; }
+.ibacts input[type="date"] {
   border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); color: var(--ink);
   font: inherit; font-size: 12px; padding: 4px 6px;
 }
-.todorow { display: flex; gap: 8px; align-items: center; padding: 5px 0; font-size: 13px; }
-.todorow .tx { flex: 1 1 auto; min-width: 0; }
-.evrow {
-  display: flex; gap: 8px; width: 100%; border: 0; background: transparent; color: var(--ink-2); font: inherit;
-  font-size: 12px; padding: 4px 0; cursor: pointer; text-align: left; align-items: baseline;
+.todoadd { padding: 8px 8px 4px; }
+.todorow { display: flex; gap: 10px; align-items: center; padding: 8px; font-size: 13px; }
+.todorow .ti { max-width: none; flex: 1 1 auto; font-weight: 500; white-space: normal; }
+@media (max-width: 640px) {
+  .ibrow .pv, .evrow .tx { display: none; }
+  .ibrow .ti, .evrow .ti { max-width: none; flex: 1 1 auto; }
 }
-.evrow .when { margin-left: 0; width: 34px; }
-.evrow .nm { flex: 0 0 auto; font-weight: 600; color: var(--ink); }
-.evrow .tx { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* --- settings ------------------------------------------------------------ */
 #harnessSettings .sublbl { margin-top: 14px; }

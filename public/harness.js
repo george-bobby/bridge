@@ -6,7 +6,8 @@
  *
  *   - the Orchestrator chat, pinned at the top of the sidebar
  *   - task rows carrying their report status
- *   - the Inbox drawer: decisions waiting on you, to-dos, recent outcomes
+ *   - the Inbox view: decisions waiting on you, to-dos, task status and
+ *     recent activity
  *   - a task panel in the inspector: report TL;DR, worktree, relaunch, cleanup
  *   - relay / harness messages drawn as what they are, not as your words
  *   - a free-text top box: anything that isn't a Slack link goes to the
@@ -331,15 +332,9 @@ function renderOrchInspector() {
         dl.appendChild(el("dd", null, v));
       }
       sum.appendChild(dl);
-      const list = el("div", "orch-tasks");
-      for (const t of open.slice(0, 12)) {
-        const row = el("button", "orch-task");
-        row.appendChild(el("span", "badge " + (STATUS_TONE[t.live ? "working" : t.status] || ""), t.live ? "working" : STATUS_LABEL[t.status] || t.status || "new"));
-        row.appendChild(el("span", "tt", t.title));
-        row.onclick = () => openRun(t.id);
-        list.appendChild(row);
-      }
-      if (open.length) sum.appendChild(list);
+      const all = el("button", "btn ghost", "All tasks");
+      all.onclick = () => openInbox("tasks");
+      if (open.length) sum.appendChild(all);
     })
     .catch(() => {});
   body.appendChild(sum);
@@ -401,13 +396,55 @@ function modeSwitch() {
 
 /* ---------------------------------------------------------------- inbox */
 
-PANELS.inbox = "panelInbox";
+// The Inbox is a view in the main pane: one tab per list, one row per item,
+// and the selected row opens in place with its actions.
 
-const _renderPanels = renderPanels;
-renderPanels = function () {
-  _renderPanels();
-  renderHarnessSettings();
-  if (panelOpen("inbox")) renderInbox();
+const IB_TABS = [
+  ["decisions", "Needs you"],
+  ["todos", "To-dos"],
+  ["tasks", "Tasks"],
+  ["activity", "Activity"],
+];
+Object.assign(H, { view: false, tab: "decisions", sel: "", since: "8h", tasks: null, catchup: null, prev: "", drafts: {}, items: [] });
+
+function openInbox(tab) {
+  if (!H.view) H.prev = S.currentId || "";
+  H.view = true;
+  if (tab) H.tab = tab;
+  S.currentId = null;
+  S.run = null;
+  $("app").classList.add("reading");
+  history.replaceState(null, "", "#inbox");
+  renderChat();
+  renderInspector();
+  renderSidebar();
+  renderInbox(true);
+}
+
+function closeInbox(restore) {
+  H.view = false;
+  $("inboxView").hidden = true;
+  paintInboxBtn();
+  if (restore && H.prev && S.runs.some((r) => r.runId === H.prev)) return openRun(H.prev);
+  $("app").classList.remove("reading");
+  history.replaceState(null, "", location.pathname);
+  renderChat();
+}
+
+const _renderChat = renderChat;
+renderChat = function () {
+  _renderChat();
+  $("inboxView").hidden = !H.view;
+  if (H.view) {
+    $("chatEmpty").style.display = "none";
+    $("chatPane").style.display = "none";
+  }
+};
+
+const _openRun = openRun;
+openRun = function (id, o) {
+  if (H.view && id) closeInbox(false);
+  return _openRun(id, o);
 };
 
 function paintInboxBtn() {
@@ -417,97 +454,174 @@ function paintInboxBtn() {
   b.textContent = n ? String(n) : "";
   b.hidden = !n;
   $("inboxBtn").classList.toggle("hot", (H.inbox.counts.decisions || 0) > 0);
+  $("inboxBtn").classList.toggle("on", H.view);
 }
 
-async function renderInbox() {
-  const host = $("inboxBody");
-  if (!host) return;
-  host.innerHTML = "";
-  host.appendChild(modeSwitch());
+const _renderPanels = renderPanels;
+renderPanels = function () {
+  _renderPanels();
+  renderHarnessSettings();
+};
 
-  const sec = (label) => {
-    const s = el("div", "sect");
-    s.appendChild(el("div", "lbl", label));
-    host.appendChild(s);
-    return s;
-  };
+const post = (p, body) => api(p, { method: "POST", body: JSON.stringify(body || {}) });
 
-  const ds = sec(`Waiting on you · ${H.inbox.decisions.length}`);
-  if (!H.inbox.decisions.length) ds.appendChild(el("div", "d", "Nothing. Questions and action requests from workers land here."));
-  for (const d of H.inbox.decisions) ds.appendChild(decisionCard(d));
-
-  const ts = sec(`To-dos · ${H.inbox.todos.length}`);
-  for (const t of H.inbox.todos) ts.appendChild(todoRow(t));
-  const add = el("form", "todoadd");
-  const inp = el("input");
-  inp.placeholder = "Add a to-do only you can do…";
-  add.appendChild(inp);
-  add.onsubmit = async (e) => {
-    e.preventDefault();
-    const text = inp.value.trim();
-    if (!text) return;
-    try {
-      const out = await api("/api/todos", { method: "POST", body: JSON.stringify({ text, key: "" }) });
-      if (out.duplicate) toast("That's already on the list.", true);
-      inp.value = "";
-    } catch (err) {
-      toast(err.message, true);
-    }
-  };
-  ts.appendChild(add);
-
-  const es = sec("Recent");
+async function loadTab(tab) {
   try {
-    const out = await api("/api/catchup?since=24h");
-    const evs = out.events.filter((e) => !["nudged"].includes(e.name)).slice(-25).reverse();
-    if (!evs.length) es.appendChild(el("div", "d", "Nothing in the last 24 hours."));
-    for (const e of evs) {
-      const row = el("button", "evrow");
-      row.appendChild(el("span", "when", agoOf(e.at)));
-      row.appendChild(el("span", "nm", e.name));
-      row.appendChild(el("span", "tx", e.text || ""));
-      row.onclick = () => {
-        if (S.runs.some((r) => r.runId === e.taskId)) {
-          openPanel(null);
-          openRun(e.taskId);
-        }
-      };
-      es.appendChild(row);
-    }
-  } catch {}
+    if (tab === "tasks") H.tasks = await api("/api/tasks");
+    if (tab === "activity") H.catchup = await api(`/api/catchup?since=${H.since}`);
+  } catch (e) {
+    toast(e.message, true);
+  }
+  if (H.view && H.tab === tab) drawInbox();
 }
 
-function decisionCard(d) {
-  const c = el("div", "dcard " + d.kind);
-  const h = el("div", "dh");
-  h.appendChild(el("span", "badge " + (d.kind === "question" ? "hs-warn" : d.kind === "action" ? "hs-accent" : "hs-bad"), d.kind === "resume" ? "worker" : d.kind));
-  const t = el("button", "dt", d.title || d.taskId);
-  t.onclick = () => {
-    openPanel(null);
-    openRun(d.taskId);
+/** Redraw, and refetch whatever the open tab reads from the server. */
+function renderInbox(fetch) {
+  if (!H.view) return;
+  drawInbox();
+  if (fetch !== false && (H.tab === "tasks" || H.tab === "activity")) loadTab(H.tab);
+}
+
+function briefMe() {
+  post(`/api/runs/${ORCH}/followup`, {
+    text: `Catch me up on the last ${H.since}: what needs me first, then what moved. A few lines.`,
+    queue: true,
+  })
+    .then(() => openRun(ORCH))
+    .catch((e) => toast(e.message, true));
+}
+
+function drawInbox() {
+  const host = $("inboxView");
+  // A redraw (any SSE push) mustn't eat what you're typing.
+  const a = document.activeElement;
+  const refocus = a && host.contains(a) && a.dataset.draft;
+  host.innerHTML = "";
+
+  const head = el("div", "ibhead");
+  head.appendChild(el("h2", null, "Inbox"));
+  head.appendChild(modeSwitch());
+  const brief = el("button", "btn", "Brief me");
+  brief.title = `Ask the orchestrator for a few-line catch-up on the last ${H.since}`;
+  brief.onclick = briefMe;
+  head.appendChild(brief);
+  const x = el("button", "iconbtn", "×");
+  x.title = "Close (I)";
+  x.onclick = () => closeInbox(true);
+  head.appendChild(x);
+  host.appendChild(head);
+
+  const tabs = el("div", "ibtabs");
+  const count = {
+    decisions: H.inbox.counts.decisions || 0,
+    todos: H.inbox.counts.todos || 0,
+    tasks: H.tasks ? H.tasks.tasks.filter((t) => t.status !== "cleaned").length : "",
   };
-  h.appendChild(t);
-  h.appendChild(el("span", "when", agoOf(d.createdAt)));
-  c.appendChild(h);
-  const b = el("div", "db text");
+  IB_TABS.forEach(([k, label]) => {
+    const b = el("button", "ibtab" + (H.tab === k ? " on" : ""));
+    b.appendChild(el("span", null, label));
+    if (count[k]) b.appendChild(el("span", "n" + (k === "decisions" ? " hot" : ""), String(count[k])));
+    b.onclick = () => {
+      H.tab = k;
+      H.sel = "";
+      renderInbox(true);
+    };
+    tabs.appendChild(b);
+  });
+  host.appendChild(tabs);
+
+  const list = el("div", "iblist");
+  host.appendChild(list);
+  H.items = [];
+  ({ decisions: drawDecisions, todos: drawTodos, tasks: drawTasks, activity: drawActivity })[H.tab](list);
+
+  if (refocus) {
+    const n = host.querySelector(`[data-draft="${CSS.escape(refocus)}"]`);
+    if (n) {
+      n.focus();
+      n.setSelectionRange(n.value.length, n.value.length);
+    }
+  }
+}
+
+/** One inbox row. Clicking selects it and opens `body` beneath; `open` jumps to the chat. */
+function ibRow(list, { id, taskId, badge, tone, title, preview, at, body }) {
+  H.items.push({ id, taskId });
+  const sel = H.sel === id;
+  const wrap = el("div", "ibitem" + (sel ? " sel" : ""));
+  wrap.dataset.id = id;
+  const row = el("button", "ibrow");
+  if (badge) row.appendChild(el("span", "badge " + (tone || ""), badge));
+  row.appendChild(el("span", "ti", title));
+  row.appendChild(el("span", "pv", String(preview || "").replace(/\s+/g, " ")));
+  row.appendChild(el("span", "when", at ? agoOf(at) : ""));
+  row.onclick = () => {
+    H.sel = sel ? "" : id;
+    drawInbox();
+  };
+  wrap.appendChild(row);
+  if (sel && body) {
+    const d = el("div", "ibdetail");
+    body(d);
+    wrap.appendChild(d);
+  }
+  list.appendChild(wrap);
+}
+
+const draftBox = (key, placeholder) => {
+  const ta = el("textarea");
+  ta.rows = 2;
+  ta.placeholder = placeholder;
+  ta.dataset.draft = key;
+  ta.value = H.drafts[key] || "";
+  ta.oninput = () => (H.drafts[key] = ta.value);
+  return ta;
+};
+
+const openChatBtn = (taskId) => {
+  const b = el("button", "btn ghost", "Open chat");
+  b.onclick = () => openRun(taskId);
+  return b;
+};
+
+function drawDecisions(list) {
+  if (!H.inbox.decisions.length) return list.appendChild(el("div", "ibempty", "Nothing waiting on you. Workers' questions and action requests land here."));
+  for (const d of H.inbox.decisions) {
+    ibRow(list, {
+      id: d.id,
+      taskId: d.taskId,
+      badge: d.kind === "resume" ? "worker" : d.kind,
+      tone: d.kind === "question" ? "hs-warn" : d.kind === "action" ? "hs-accent" : "hs-bad",
+      title: d.title || d.taskId,
+      preview: d.text,
+      at: d.createdAt,
+      body: (c) => decisionBody(c, d),
+    });
+  }
+}
+
+function decisionBody(c, d) {
+  const b = el("div", "text");
   b.innerHTML = md(d.text);
   c.appendChild(b);
-
-  const row = el("div", "drow");
   const send = async (body, msg) => {
     try {
-      await api(`/api/decisions/${encodeURIComponent(d.id)}`, { method: "POST", body: JSON.stringify(body) });
+      await post(`/api/decisions/${encodeURIComponent(d.id)}`, body);
+      delete H.drafts[d.id];
+      H.sel = "";
       toast(msg);
     } catch (e) {
       toast(e.message, true);
     }
   };
+  const row = el("div", "ibacts");
   if (d.kind === "question") {
-    const ta = el("textarea");
-    ta.rows = 2;
-    ta.placeholder = "Your answer, in your words. It goes straight back to the worker.";
-    c.appendChild(ta);
+    const ta = draftBox(d.id, "Your answer, in your words. It goes straight back to the worker.");
     const ok = el("button", "btn primary", "Send answer");
+    ta.onkeydown = (e) => {
+      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) ok.click();
+    };
+    c.appendChild(ta);
     ok.onclick = () => (ta.value.trim() ? send({ action: "answer", answer: ta.value.trim() }, "Answer sent to the worker.") : ta.focus());
     row.appendChild(ok);
   } else if (d.kind === "action") {
@@ -528,38 +642,217 @@ function decisionCard(d) {
   lb.onclick = () => send({ action: "defer", answer: later.value }, `Deferred to ${later.value}.`);
   const dis = el("button", "btn ghost", "Dismiss");
   dis.onclick = () => send({ action: "dismiss" }, "Dismissed.");
-  row.appendChild(lb);
-  row.appendChild(later);
-  row.appendChild(dis);
+  row.append(lb, later, dis, el("span", "spacer"), openChatBtn(d.taskId));
   c.appendChild(row);
-  return c;
 }
 
-function todoRow(t) {
-  const r = el("div", "todorow");
-  const cb = el("input");
-  cb.type = "checkbox";
-  cb.onchange = async () => {
+function drawTodos(list) {
+  const add = el("form", "todoadd");
+  const inp = el("input");
+  inp.placeholder = "Add a to-do only you can do…";
+  inp.dataset.draft = "todo:new";
+  inp.value = H.drafts["todo:new"] || "";
+  inp.oninput = () => (H.drafts["todo:new"] = inp.value);
+  add.appendChild(inp);
+  add.onsubmit = async (e) => {
+    e.preventDefault();
+    const text = inp.value.trim();
+    if (!text) return;
     try {
-      await api("/api/todos/done", { method: "POST", body: JSON.stringify({ key: t.key }) });
-    } catch (e) {
-      toast(e.message, true);
-      cb.checked = false;
+      const out = await post("/api/todos", { text, key: "" });
+      if (out.duplicate) toast("That's already on the list.", true);
+      delete H.drafts["todo:new"];
+      inp.value = "";
+    } catch (err) {
+      toast(err.message, true);
     }
   };
-  r.appendChild(cb);
-  const tx = el("span", "tx", t.text);
-  r.appendChild(tx);
-  if (t.url) {
-    const a = el("a", "linkchip", "open");
-    a.href = t.url;
-    a.target = "_blank";
-    a.rel = "noopener noreferrer";
-    r.appendChild(a);
+  list.appendChild(add);
+  if (!H.inbox.todos.length) list.appendChild(el("div", "ibempty", "No to-dos. PR reviews from finished tasks are added here."));
+  for (const t of H.inbox.todos) {
+    H.items.push({ id: t.key, taskId: t.taskId });
+    const r = el("div", "ibitem todorow" + (H.sel === t.key ? " sel" : ""));
+    r.dataset.id = t.key;
+    const cb = el("input");
+    cb.type = "checkbox";
+    cb.title = "Done";
+    cb.onchange = async () => {
+      try {
+        await post("/api/todos/done", { key: t.key });
+      } catch (e) {
+        toast(e.message, true);
+        cb.checked = false;
+      }
+    };
+    r.appendChild(cb);
+    r.appendChild(el("span", "ti", t.text));
+    if (t.url) {
+      const a = el("a", "linkchip", "open");
+      a.href = t.url;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      r.appendChild(a);
+    }
+    if (t.taskId) {
+      const o = el("button", "linkchip", "chat");
+      o.onclick = () => openRun(t.taskId);
+      r.appendChild(o);
+    }
+    r.appendChild(el("span", "when", agoOf(t.createdAt)));
+    list.appendChild(r);
   }
-  return r;
 }
 
+function drawTasks(list) {
+  if (!H.tasks) return list.appendChild(el("div", "ibempty", "Loading…"));
+  const open = H.tasks.tasks.filter((t) => t.status !== "cleaned");
+  const c = H.tasks.harness;
+  list.appendChild(el("div", "ibsum", `${H.tasks.working} working · cap ${c.maxWorkers} total, ${c.maxPerRepo} per repo · ${open.filter((t) => t.status === "queued").length} queued`));
+  if (!open.length) return list.appendChild(el("div", "ibempty", "No tasks. Tell the orchestrator what to do from the top box."));
+  for (const t of open) {
+    const st = t.live ? "working" : t.status;
+    const waiting = t.declared && t.declared.state === "waiting" ? `waiting: ${t.declared.text}` : "";
+    ibRow(list, {
+      id: t.id,
+      taskId: t.id,
+      badge: t.live && t.awaiting ? "asking" : STATUS_LABEL[st] || st || "new",
+      tone: t.live && t.awaiting ? "hs-warn" : STATUS_TONE[st] || "",
+      title: t.title,
+      preview: waiting || t.phase || t.tldr || t.branch,
+      at: t.updatedAt,
+      body: (d) => taskBody(d, t),
+    });
+  }
+}
+
+function taskBody(c, t) {
+  if (t.tldr) {
+    const b = el("div", "text");
+    b.innerHTML = md(t.tldr);
+    c.appendChild(b);
+  }
+  const facts = el("dl", "tp-facts");
+  for (const [k, v] of [
+    ["Branch", t.branch],
+    ["Repo", t.repo],
+    ["Phase", t.phase],
+    ["Live", t.live ? `yes${t.idleSec != null ? `, idle ${t.idleSec}s` : ""}${t.tool ? `, in ${t.tool}` : ""}` : ""],
+    ["Queued", t.queuedFollowups ? `${t.queuedFollowups} follow-up(s)` : ""],
+  ]) {
+    if (!v) continue;
+    facts.appendChild(el("dt", null, k));
+    facts.appendChild(el("dd", "mono", v));
+  }
+  c.appendChild(facts);
+  for (const n of t.notes || []) c.appendChild(el("div", "ibnote", n));
+
+  const key = `fu:${t.id}`;
+  const ta = draftBox(key, t.live ? "Follow-up for this worker (delivered when its turn ends)…" : "Follow-up for this worker…");
+  c.appendChild(ta);
+
+  const acts = el("div", "ibacts");
+  const fu = el("button", "btn primary", "Send follow-up");
+  fu.onclick = async () => {
+    if (!ta.value.trim()) return ta.focus();
+    try {
+      const out = await post(`/api/runs/${encodeURIComponent(t.id)}/followup`, { text: ta.value.trim(), queue: true });
+      delete H.drafts[key];
+      toast(out.queued ? "Queued: delivered when the worker's turn ends." : "Sent.");
+      loadTab("tasks");
+    } catch (e) {
+      toast(e.message, true);
+    }
+  };
+  ta.onkeydown = (e) => {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) fu.click();
+  };
+  acts.appendChild(fu);
+  if (!t.live) {
+    const rl = el("button", "btn", t.status === "queued" ? "Start now" : "Relaunch");
+    rl.title = "Resume this worker's session where it left off";
+    rl.onclick = async () => {
+      rl.disabled = true;
+      try {
+        await post(`/api/tasks/${encodeURIComponent(t.id)}/relaunch`);
+        toast("Relaunched.");
+        loadTab("tasks");
+      } catch (e) {
+        toast(e.message, true);
+      }
+      rl.disabled = false;
+    };
+    acts.appendChild(rl);
+  }
+  if (!t.live && t.worktree) {
+    const cl = el("button", "btn", "Clean up");
+    cl.title = "Remove the worktree and keep the branch. Refuses if there is uncommitted or unpushed work.";
+    cl.onclick = () => cleanupTask(t.id, cl).then(() => loadTab("tasks"));
+    acts.appendChild(cl);
+  }
+  if (t.pr) {
+    const a = el("a", "linkchip", "Pull request");
+    a.href = t.pr;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    acts.appendChild(a);
+  }
+  acts.append(el("span", "spacer"), openChatBtn(t.id));
+  c.appendChild(acts);
+}
+
+function drawActivity(list) {
+  const bar = el("div", "ibsum");
+  bar.appendChild(el("span", null, "Since"));
+  const seg = el("div", "modeswitch small");
+  for (const v of ["3h", "8h", "24h", "3d"]) {
+    const b = el("button", "seg" + (H.since === v ? " on" : ""), v);
+    b.onclick = () => {
+      H.since = v;
+      H.catchup = null;
+      renderInbox(true);
+    };
+    seg.appendChild(b);
+  }
+  bar.appendChild(seg);
+  list.appendChild(bar);
+  if (!H.catchup) return list.appendChild(el("div", "ibempty", "Loading…"));
+  const titles = new Map(H.catchup.tasks.map((t) => [t.id, t.title]));
+  const evs = H.catchup.events.filter((e) => e.name !== "nudged").reverse();
+  if (!evs.length) return list.appendChild(el("div", "ibempty", `Nothing happened in the last ${H.since}.`));
+  for (const e of evs) {
+    const r = el("button", "evrow");
+    r.appendChild(el("span", "when", agoOf(e.at)));
+    r.appendChild(el("span", "badge " + (STATUS_TONE[e.status] || ""), e.name));
+    r.appendChild(el("span", "ti", e.taskId === ORCH ? "Orchestrator" : titles.get(e.taskId) || e.taskId));
+    r.appendChild(el("span", "tx", e.text || ""));
+    r.onclick = () => S.runs.some((x) => x.runId === e.taskId) && openRun(e.taskId);
+    list.appendChild(r);
+  }
+}
+
+// Keys while the Inbox is open: j/k move, Enter opens the chat. Capture phase, so app.js's own j/k (walk the chat list) stays out.
+document.addEventListener(
+  "keydown",
+  (e) => {
+    if (!H.view || e.metaKey || e.ctrlKey || e.altKey) return;
+    const a = document.activeElement;
+    if (/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) || a.isContentEditable) return;
+    if (document.querySelector(".palette-scrim.open, .confirmscrim.open, .memscrim.open")) return;
+    const i = H.items.findIndex((x) => x.id === H.sel);
+    let hit = true;
+    if (e.key === "j" || e.key === "ArrowDown") H.sel = (H.items[i + 1] || H.items[i] || {}).id || "";
+    else if (e.key === "k" || e.key === "ArrowUp") H.sel = (H.items[Math.max(i - 1, 0)] || {}).id || "";
+    else if (e.key === "Enter" && i >= 0 && H.items[i].taskId) return void (e.preventDefault(), e.stopPropagation(), openRun(H.items[i].taskId));
+    else hit = false;
+    if (!hit) return;
+    e.preventDefault();
+    e.stopPropagation();
+    drawInbox();
+    const n = H.sel && $("inboxView").querySelector(`[data-id="${CSS.escape(H.sel)}"]`);
+    if (n) n.scrollIntoView({ block: "nearest" });
+  },
+  true
+);
 /* -------------------------------------------------------------- settings */
 
 const POLICY_ROWS = [
@@ -688,7 +981,7 @@ function refreshHarnessViews() {
   paintInboxBtn();
   paintTitle();
   renderSidebar();
-  if (panelOpen("inbox")) renderInbox();
+  renderInbox(H.tab === "tasks");
   if (S.run && (S.run.kind === "orchestrator" || S.run.kind === "task")) renderInspector();
 }
 
@@ -702,16 +995,18 @@ function refreshHarnessViews() {
     const d = JSON.parse(e.data);
     notifyOutcome(d);
     if (S.run && S.run.runId === d.taskId) loadTask(d.taskId, true).then(() => renderInspector());
+    renderInbox(true);
   });
 })();
 
-$("inboxBtn").addEventListener("click", () => togglePanel("inbox"));
+const toggleInbox = () => (H.view ? closeInbox(true) : openInbox());
+$("inboxBtn").addEventListener("click", toggleInbox);
 document.addEventListener("keydown", (e) => {
   const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName) || document.activeElement.isContentEditable;
   if (typing || e.metaKey || e.ctrlKey) return;
   if (e.key === "i") {
     e.preventDefault();
-    togglePanel("inbox");
+    toggleInbox();
   }
   if (e.key === "o") {
     e.preventDefault();
@@ -723,5 +1018,6 @@ api("/api/inbox")
   .then((out) => {
     H.inbox = out;
     refreshHarnessViews();
+    if (location.hash === "#inbox") openInbox();
   })
   .catch(() => {});
