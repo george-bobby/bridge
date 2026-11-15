@@ -30,10 +30,12 @@ if [[ ! -f "$PROJ/.env" ]]; then
   exit 1
 fi
 
-set -a
-# shellcheck disable=SC1091
-. "$PROJ/.env"
-set +a
+# Read .env with the dashboard's own parser rather than sourcing it: a value
+# that's fine for node (parentheses, spaces) is a syntax error to the shell.
+# An exported variable still wins, as it does in lib/env.js.
+envval() { node -e 'const fs=require("fs");const m=fs.readFileSync(process.argv[1],"utf8").match(new RegExp("^\\s*(?:export\\s+)?"+process.argv[2]+"\\s*=\\s*[\"\x27]?([^\"\x27#\\s]*)","m"));process.stdout.write(m?m[1]:"")' "$PROJ/.env" "$1"; }
+: "${LAUNCHD_LABEL:=$(envval LAUNCHD_LABEL)}"
+: "${SLACK_BRIDGE_PORT:=$(envval SLACK_BRIDGE_PORT)}"
 
 LABEL="${LAUNCHD_LABEL:-local.slack-bridge}"
 DASH_LABEL="$LABEL.dashboard"
@@ -178,7 +180,7 @@ case "${1:-}" in
       echo "  check:  tail $PROJ/logs/dashboard.err.log"
     fi
     echo "  logs:   $PROJ/logs/dashboard.{out,err}.log"
-    echo "  stop:   ./scripts/install.sh stop"
+    echo "  stop:   npm stop"
     echo "Or from any Claude Code session: /slack-fetch-pipeline <slack-thread-url>"
     ;;
   stop)

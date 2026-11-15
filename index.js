@@ -716,6 +716,7 @@ server.on("error", (err) => {
   if (err.code !== "EADDRINUSE") throw err;
   console.error(`port ${PORT} is already in use — a dashboard is probably already running.`);
   console.error(`  open it:   http://localhost:${PORT}`);
+  console.error(`  stop it:   npm stop   (the background copy npm start runs)`);
   console.error(`  find it:   lsof -nP -iTCP:${PORT} -sTCP:LISTEN`);
   console.error(`  replace:   kill $(lsof -t -iTCP:${PORT} -sTCP:LISTEN) && node index.js`);
   console.error(`  or move:   SLACK_BRIDGE_PORT=4320 node index.js`);
