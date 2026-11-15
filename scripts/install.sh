@@ -114,12 +114,13 @@ dashboard_start() {
   [[ -f "$DASH_PLIST_SRC" ]] || { echo "error: missing $DASH_PLIST_SRC" >&2; exit 1; }
   mkdir -p "$HOME/Library/LaunchAgents" "$PROJ/logs"
 
-  # launchd runs jobs with a near-empty PATH, so resolve node here. Follow the
-  # symlink: version-manager shims can disappear on a switch, and a dead
-  # ProgramArguments[0] just makes launchd fail the job silently.
-  NODE_BIN="$(command -v node || true)"
-  [[ -n "$NODE_BIN" ]] || { echo "error: node not found in PATH" >&2; exit 1; }
-  NODE_BIN="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$NODE_BIN" 2>/dev/null || echo "$NODE_BIN")"
+  # launchd runs jobs with a near-empty PATH, so resolve node here. Ask node
+  # itself for its binary rather than following the symlink: a version-manager
+  # shim (mise, asdf) is a link to the manager, so its realpath is `mise`, and
+  # launchd would run `mise index.js` instead of node.
+  command -v node >/dev/null || { echo "error: node not found in PATH" >&2; exit 1; }
+  NODE_BIN="$(node -p 'process.execPath')"
+  [[ -x "$NODE_BIN" ]] || { echo "error: could not resolve the node binary (got '$NODE_BIN')" >&2; exit 1; }
 
   # Stop the old dashboard job BEFORE freeing the port — under KeepAlive it
   # would just respawn onto the port we're about to clear.
