@@ -59,9 +59,12 @@ reports, stops without a report (after one automatic nudge), stalls, dies, or
 hits a usage limit. Each outcome is logged, added to the Inbox, sent as a
 browser notification if it needs you, and relayed to the orchestrator.
 
-**Inbox** (`i`). Questions from workers (your answer goes straight back to the
-worker), requested outward writes, to-dos, and the last 24 hours of events.
-Any item can be deferred to a date. There are three modes: **normal**,
+**Inbox** (`i`). A page with four tabs: **Needs you** (questions from workers,
+where your answer goes straight back, and requested outward writes; any item
+can be deferred to a date), **To-dos**, **Tasks** (status, follow-up, relaunch,
+clean up) and **Activity** (what happened in the last 3h/8h/24h/3d). **Brief me**
+asks the orchestrator for a few-line catch-up. `j`/`k` move, `Enter` opens the
+chat. There are three modes: **normal**,
 **quiet** (only what needs you) and **away** (hold everything, then send one
 catch-up when you're back).
 
