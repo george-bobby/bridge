@@ -16,10 +16,11 @@
     "node": ">=18"
   },
   "scripts": {
-    "start": "node lib/render.js && node index.js",
-    "dev": "node lib/render.js && node --watch-path=index.js --watch-path=lib index.js",
+    "start": "./scripts/install.sh start",
+    "stop": "./scripts/install.sh stop",
+    "dev": "./scripts/install.sh stop >/dev/null; node lib/render.js && node --watch-path=index.js --watch-path=lib index.js",
+    "foreground": "node lib/render.js && node index.js",
     "render": "node lib/render.js",
-    "install-agent": "./scripts/install.sh start",
     "test": "node --test --test-concurrency=1 test/*.test.js"
   }
 }

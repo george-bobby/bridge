@@ -19,14 +19,15 @@ No `npm install` needed.
 
 ```bash
 cp .env.example .env      # fill it in (every key is described there)
-./scripts/install.sh start
+npm start
 open http://localhost:4319
 ```
 
-`install.sh start` renders the skill, links it into `~/.claude/skills/`, and
-runs the dashboard under launchd. Re-run it after changing `.env`, `lib/` or
-`templates/`. `./scripts/install.sh stop` stops it. To run it in the
-foreground instead, use `npm start`.
+`npm start` renders the skill, links it into `~/.claude/skills/`, and runs
+the dashboard in the background under launchd, so it comes back after a login.
+`npm stop` stops it, and `npm restart` picks up changes to `.env`, `lib/` or
+`templates/`. `npm run dev` stops the background copy and runs it in the
+foreground, restarting on server edits; `npm start` puts it back afterwards.
 
 To give the pipeline your repo's own commands (checks, log queries, prod read
 paths), copy `templates/slack-fetch-pipeline/SKILL.md` to
