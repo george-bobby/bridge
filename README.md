@@ -39,8 +39,7 @@ the questions workers are waiting on.
   it, then rebuild and relaunch the app from Settings.
 - **Four agents, one session.** Run any session on Claude Code, Codex, Cursor or
   Devin, with each one's own models (listed live from its CLI). Switch agents
-  mid-session and the next one is handed a briefing of the work so far. Ask a
-  second agent for a read-only second opinion in one click.
+  mid-session and the next one is handed a briefing of the work so far.
 - **Usage at a glance.** Plan limits for Claude, Codex and Cursor (session,
   weekly, monthly, with reset times and a "runs out at" projection) in the
   bottom-right corner, plus what Bridge ran on each agent this week and month.
@@ -71,7 +70,7 @@ real data.
 - Node 18+
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code), signed in. For Slack threads, its Slack and Linear connectors.
 - [`gh`](https://cli.github.com), signed in, for the PR views
-- Optional: a Linear personal API key for the Linear views; a Slack user token for the Slack view ([setup](docs/slack.md)); optionally iTerm or [cmux](https://cmux.com) to continue a session outside the app
+- Optional: a Linear personal API key for the Linear views; a Slack user token for the Slack view ([setup](docs/slack.md))
 
 ## Quick start
 
@@ -183,8 +182,7 @@ Switching agents mid-session is a handoff: the incoming agent's first turn
 opens with a briefing (task, branch and worktree, PR, the conversation since it
 last worked, the latest report). Bridge's guard hook runs only inside Claude
 Code; the other agents use their own sandboxes and approvals, and the chip
-marks that. **Second opinion** (the two-people button) starts another agent on
-the session read-only, in its own worktree.
+marks that.
 
 **Usage.** The strip in the bottom-right corner shows each agent's tightest
 limit; hover for every window, click for the Usage page (`⌘9`). Claude and
@@ -212,13 +210,15 @@ what's running and waiting, native notifications, and a Dock badge.
 
 **Terminal.** The chat's Terminal tab (``⌃` ``, or the terminal button in the
 header) continues the session inside Bridge, in an embedded terminal in the
-session's folder. "Open in External Terminal" in the ⋯ menu hands it to
-Terminal instead (`TERMINAL_APP`: Terminal, the default, iTerm or cmux).
+session's folder.
 
 **Split panes.** Drag a chat from the sidebar, or a tab (Chat, Changes,
-Terminal, a browser tab), onto the left or right edge of a chat to open it
-side by side; drop it in the middle to replace that pane. `⌘\` splits,
-`⌘⇧W` closes the focused pane, and the divider resizes.
+Terminal, a browser tab), onto the left or right half of a chat to open it
+side by side; once split, drop it in the middle of a pane to replace it.
+⌥-click a sidebar chat (or "Open to the Side" in its menu) does the same
+without dragging. `⌘\` splits, `⌘⇧W` closes the focused pane, and the
+divider resizes. With panes side by side the details panel docks under the
+focused pane.
 
 **Dev servers.** Ports your processes listen on (node, python, bun and the
 like) are matched to the worktree they run in and shown on the session and
@@ -273,7 +273,7 @@ beside **Send** set the next job's:
 | Model / Thinking / Capacity | model alias, `--effort`, 1M context |
 | Repo | the working directory |
 
-**Terminal** reopens the session in the chat's embedded terminal; **Open in External Terminal** uses `TERMINAL_APP` (Terminal, iTerm or cmux).
+**Terminal** reopens the session in the chat's embedded terminal.
 
 ## `bin/sb`
 

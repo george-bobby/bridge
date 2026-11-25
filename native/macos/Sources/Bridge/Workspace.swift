@@ -32,7 +32,7 @@ struct Sidebar: View {
                     if !pinned.isEmpty {
                         SideLabel("Pinned")
                         ForEach(pinned) { s in
-                            SessionNavItem(session: s).draggable(s.id)
+                            SessionNavItem(session: s)
                                 .transition(.opacity.combined(with: .move(edge: .leading)))
                         }
                     }
@@ -210,7 +210,7 @@ struct ProjectSection: View {
                 VStack(alignment: .leading, spacing: 1) {
                     OrchestratorNavItem(project: project)
                     ForEach(showAll.v ? sessions : Array(sessions.prefix(8))) { s in
-                        SessionNavItem(session: s).draggable(s.id)
+                        SessionNavItem(session: s)
                             .transition(.opacity.combined(with: .move(edge: .leading)))
                     }
                     if sessions.count > 8 && !showAll.v {
@@ -238,20 +238,21 @@ struct OrchestratorNavItem: View {
         let id = model.orchestratorId(project.id)
         let on = model.route == .session(id)
         let s = model.sessions.first { $0.id == id }
-        Button { model.openOrchestrator(project.id) } label: {
-            HStack(spacing: 9) {
-                Image(systemName: "sparkles").font(.system(size: 12, weight: .medium)).foregroundStyle(T.purple).frame(width: 18)
-                Text("Orchestrator").font(T.ui(13, on ? .medium : .regular)).foregroundStyle(on ? T.text : T.text2)
-                Spacer()
-                if let s, model.isLive(s) { LiveIcon(size: 11) }
-                else if let s, s.unread && !on { Circle().fill(T.accent).frame(width: 6, height: 6) }
-            }
-            .padding(.horizontal, 10).frame(height: 30)
-            .background(NavHighlight(on: on, hover: hover.v))
-            .contentShape(Rectangle())
+        HStack(spacing: 9) {
+            Image(systemName: "sparkles").font(.system(size: 12, weight: .medium)).foregroundStyle(T.purple).frame(width: 18)
+            Text("Orchestrator").font(T.ui(13, on ? .medium : .regular)).foregroundStyle(on ? T.text : T.text2)
+            Spacer()
+            if let s, model.isLive(s) { LiveIcon(size: 11) }
+            else if let s, s.unread && !on { Circle().fill(T.accent).frame(width: 6, height: 6) }
         }
-        .buttonStyle(Pressable(scale: 0.98))
+        .padding(.horizontal, 10).frame(height: 30)
+        .background(NavHighlight(on: on, hover: hover.v))
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if s != nil && NSEvent.modifierFlags.contains(.option) { model.openToSide(id) } else { model.openOrchestrator(project.id) }
+        }
         .hoverBox(hover)
+        .onDrag { NSItemProvider(object: (s == nil ? "" : id) as NSString) }
     }
 }
 

@@ -12,7 +12,7 @@ struct ChatView: View {
 
     /// The details panel is for the chat and its changes; a browser or
     /// terminal wants the width.
-    var showsInspector: Bool { model.inspectorShown && (model.chatTab == "chat" || model.chatTab == "changes") }
+    var showsInspector: Bool { model.showsDetails }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -21,17 +21,23 @@ struct ChatView: View {
             HStack(spacing: 0) {
                 PaneArea()
                     .frame(maxWidth: .infinity)
-                if showsInspector {
+                // One pane: a trailing column. Side by side, the details dock
+                // under the focused pane instead (PaneView), so no pane
+                // gives up its width.
+                if showsInspector && !model.isSplit {
                     HStack(spacing: 0) {
                         Rectangle().fill(T.line).frame(width: 1)
-                        PropertiesPanel(id: id).frame(width: 300)
+                        PropertiesPanel(id: id).frame(width: 312)
                     }
+                    // A drag let go over the details still means "beside it".
+                    .overlay { if model.paneDragActive { inspectorCatcher } }
                     .transition(.move(edge: .trailing).combined(with: .opacity))
                 }
             }
             .clipped()
         }
         .animation(M.snappy, value: showsInspector)
+        .animation(M.snappy, value: model.isSplit)
         .task(id: id) {
             let tab = model.chatTab
             let known = tab == "chat" || tab == "changes" || (tab == "term" && model.terminalTabs.contains(id))
@@ -39,6 +45,13 @@ struct ChatView: View {
             if !known { model.chatTab = "chat" }
             await model.loadCommands(for: id)
         }
+    }
+
+    var inspectorCatcher: some View {
+        let target = model.panes.indices.contains(model.focusedPane) ? model.panes[model.focusedPane].id : ""
+        return DropCatcher(split: false, fixed: .trailing,
+                           update: { edge in model.hintDrop(target, edge) },
+                           perform: { raw, _ in model.landDrop(raw, at: target, edge: .trailing) })
     }
 
     var header: some View {
@@ -62,7 +75,7 @@ struct ChatView: View {
             }
             if let s = session {
                 if s.isOrchestrator { Image(systemName: "sparkles").foregroundStyle(T.purple) } else { SessionIcon(session: s, size: 14) }
-                if !s.issueKey.isEmpty { Text(s.issueKey).font(T.mono(12.5)).foregroundStyle(T.text3) }
+                if !s.issueKey.isEmpty && !s.title.hasPrefix(s.issueKey) { Text(s.issueKey).font(T.mono(12.5)).foregroundStyle(T.text3) }
                 Text(s.isOrchestrator ? "Orchestrator" : s.title).font(T.ui(14, .semibold)).foregroundStyle(T.text).lineLimit(1)
                 if model.isLive(s) && !model.isAwaiting(s) { LiveBadge().transition(.scale.combined(with: .opacity)) }
             } else {
@@ -76,22 +89,12 @@ struct ChatView: View {
                         .transition(.scale.combined(with: .opacity))
                 }
                 IconButton(icon: s.pinned ? "star.fill" : "star", help: s.pinned ? "Unpin" : "Pin to the sidebar") { Task { await model.setPinned(s.id, !s.pinned) } }
-                IconButton(icon: "terminal", help: "Continue this session in a Terminal tab (⌃`)") { model.openTerminalTab(id) }
                 Menu {
-                    if !s.isOrchestrator {
-                        Menu("Second Opinion") {
-                            ForEach(AgentKind.allCases.filter { model.installed($0) }) { a in
-                                Button("Ask \(a.label)") { Task { await model.secondOpinion(id, agent: a) } }
-                            }
-                        }
-                        Divider()
-                    }
                     Button("Split Right") { model.splitRight() }.keyboardShortcut("\\")
                     if model.isSplit { Button("Close Pane") { model.closeFocusedPane() } }
-                    Button("Open in External Terminal (\(model.terminalName))") { Task { await model.terminal(id) } }
                     Divider()
                     if !s.permalink.isEmpty { Button("Read the Slack Thread") { model.openThread(s.permalink) } }
-                    SessionMenu(session: s)
+                    SessionMenu(session: s, inChat: true)
                 } label: { Image(systemName: "ellipsis").font(.system(size: 13.5)).foregroundStyle(T.text2).frame(width: 28, height: 28) }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).frame(width: 32)
             }
@@ -196,12 +199,8 @@ struct SessionTabs: View {
                 Button { model.openBrowser(runId, url: "") } label: { Label("New Browser Tab", systemImage: "globe") }
             }
             Section {
-                Button { withAnimation(M.snappy) { model.showTab("changes", of: runId) } } label: { Label("Changes", systemImage: "plusminus") }
                 Button { model.openTerminalTab(runId) } label: { Label("Terminal", systemImage: "terminal") }
                 Button { model.splitRight() } label: { Label("Split Right", systemImage: "rectangle.split.2x1") }
-            }
-            Section {
-                Button { Task { await model.terminal(runId) } } label: { Label("Open in External Terminal (\(model.terminalName))", systemImage: "arrow.up.forward.app") }
             }
         } label: {
             Image(systemName: "plus").font(.system(size: 11.5, weight: .semibold)).foregroundStyle(T.text2)
@@ -433,9 +432,8 @@ struct AssistantMessage: View {
         } else if state == "error" || state == "failed" {
             Label(m["error"].nonEmpty ?? "The session ended with an error", systemImage: "exclamationmark.triangle.fill")
                 .font(T.ui(12)).foregroundStyle(T.red)
-        } else if m["cost"].double > 0 || m["durationMs"].double > 0 {
+        } else if m["durationMs"].double > 0 || m["turns"].int > 0 {
             HStack(spacing: 10) {
-                if m["cost"].double > 0 { Text(Fmt.money(m["cost"].double)) }
                 if m["durationMs"].double > 0 { Text(duration(m["durationMs"].double)) }
                 if m["usage"]["output"].int > 0 { Text(verbatim: "\(Fmt.tokens(m["usage"]["output"].int)) out") }
                 if m["turns"].int > 0 { Text(verbatim: "\(m["turns"].int) turns") }
@@ -794,6 +792,7 @@ struct Composer: View {
     @StateObject private var hasFocus = Box(false)
     @StateObject private var monitor = Box<Any?>(nil)
     @StateObject private var dropping = Box(false)
+    @StateObject private var barWidth = Box<CGFloat>(800)
     @FocusState private var focused: Bool
 
     var items: [Attachment] { model.attachments[runId] ?? [] }
@@ -859,13 +858,16 @@ struct Composer: View {
             // Scrolls rather than overflowing in a narrow split pane.
             ScrollView(.horizontal, showsIndicators: false) { toolbarChips(agent) }
                 .scrollBounceBehavior(.basedOnSize)
+                // Fades out under the trailing controls instead of a hard cut.
+                .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.9), .init(color: .clear, location: 1)], startPoint: .leading, endPoint: .trailing))
             Spacer(minLength: 0)
             ContextButton(runId: runId, run: model.runData(runId), agent: agent, live: live)
             if live && !trimmedEmpty { stopAndSendButton }
-            Text("⌘↩").font(T.ui(11)).foregroundStyle(T.text3)
+            if barWidth.v > 620 { Text("⌘↩").font(T.ui(11)).foregroundStyle(T.text3).transition(.opacity) }
             sendButton
         }
         .padding(10)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { barWidth.v = $0 }
     }
 
     func toolbarChips(_ agent: AgentKind) -> some View {
@@ -1016,171 +1018,6 @@ struct ComposerChip: View {
 }
 
 // MARK: - Properties
-
-struct PropertiesPanel: View {
-    @Environment(AppModel.self) var model
-    let id: String
-
-    var body: some View {
-        let s = model.sessions.first { $0.id == id }
-        let task = model.openTask
-        let parsed = task["parsed"]
-        ScrollView {
-            VStack(alignment: .leading, spacing: 26) {
-                if let s, !s.isOrchestrator {
-                    PropSection(title: "Properties") {
-                        PropRow(label: "Status") {
-                            SessionIcon(session: s, size: 13)
-                            Menu {
-                                ForEach(Column.allCases) { c in Button(c.label) { Task { await model.move(id, to: c) } } }
-                                Divider()
-                                Button("Automatic") { Task { await model.move(id, to: nil) } }
-                            } label: {
-                                Text(model.column(of: s).label + (s.boardPin.isEmpty ? "" : " · pinned")).font(T.ui(12.5)).foregroundStyle(T.text)
-                            }
-                            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-                        }
-                        if let st = statusLabels[s.taskStatus] { PropRow(label: "Worker") { Text(st).font(T.ui(12.5)) } }
-                        PropRow(label: "Source") { Text(s.isTask ? "Task" : "Slack thread").font(T.ui(12.5)) }
-                        PropRow(label: "Project") {
-                            Menu {
-                                ForEach(model.projects) { p in Button(p.name) { Task { await model.setProject(id, p.id) } } }
-                            } label: { Text(model.project(s.project)?.name ?? "—").font(T.ui(12.5)).foregroundStyle(T.text) }
-                            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-                        }
-                        if !s.channel.isEmpty { PropRow(label: "Channel") { Text(s.channel).font(T.ui(12.5)) } }
-                        if !s.branch.isEmpty {
-                            PropRow(label: "Branch") {
-                                Button { copyToPasteboard(s.branch); model.say("Branch name copied") } label: {
-                                    Text(s.branch).font(T.mono(11.5)).foregroundStyle(T.text2).lineLimit(1).truncationMode(.middle)
-                                }
-                                .buttonStyle(.plain).help("Copy")
-                            }
-                        }
-                        if let wt = task["meta"]["worktree"].nonEmpty {
-                            PropRow(label: "Worktree") {
-                                Button { NSWorkspace.shared.open(URL(fileURLWithPath: wt)) } label: {
-                                    Text(URL(fileURLWithPath: wt).lastPathComponent).font(T.mono(11.5)).foregroundStyle(T.text2).lineLimit(1).truncationMode(.middle)
-                                }
-                                .buttonStyle(.plain).help(wt)
-                            }
-                            let w = task["worktree"]
-                            if !w.isNull && (w["dirty"].bool || w["unpushed"].int > 0) {
-                                PropRow(label: "Changes") {
-                                    Text([w["dirty"].bool ? "\(w["dirtyFiles"].int) uncommitted" : "", w["unpushed"].int > 0 ? "\(w["unpushed"].int) unpushed" : ""].filter { !$0.isEmpty }.joined(separator: ", "))
-                                        .font(T.ui(12.5)).foregroundStyle(T.orange)
-                                }
-                            }
-                        }
-                        PropRow(label: "Updated") { Text(Fmt.ago(s.updatedAt) + " ago").font(T.ui(12.5)) }
-                        if s.cost > 0 { PropRow(label: "Cost") { Text(Fmt.money(s.cost)).font(T.ui(12.5)).monospacedDigit() } }
-                    }
-
-                    PropSection(title: "Links") {
-                        if !s.prUrl.isEmpty {
-                            let pr = model.pr(for: s.prUrl)
-                            LinkRow(icon: "arrow.triangle.pull", text: pr?.title ?? "Pull request #\(s.prNumber)", url: s.prUrl) {
-                                if let pr { ChecksIcon(pr: pr).font(.system(size: 11)) }
-                            }
-                        }
-                        if !s.linearUrl.isEmpty || !s.issueKey.isEmpty {
-                            let issue = model.issues.first { $0.key == s.issueKey }
-                            LinkRow(icon: "circle.lefthalf.filled", text: issue.map { "\($0.key) \($0.title)" } ?? s.issueKey, url: s.linearUrl.isEmpty ? (issue?.url ?? "") : s.linearUrl) {
-                                if let issue { StatusIcon(kind: issue.status, color: hexColor(issue.stateColor), size: 11) }
-                            }
-                        }
-                        if !s.permalink.isEmpty { LinkRow(icon: "number", text: "Slack thread", url: s.permalink) { EmptyView() } }
-                        ForEach(model.servers(for: s)) { sv in
-                            ForEach(sv.ports, id: \.self) { p in
-                                LinkRow(icon: "play.circle", text: "localhost:\(p) · \(sv.command)", url: "http://localhost:\(p)") { EmptyView() }
-                            }
-                        }
-                        if s.prUrl.isEmpty && s.linearUrl.isEmpty && s.permalink.isEmpty && s.issueKey.isEmpty {
-                            Text("No PR, issue or thread yet").font(T.ui(12)).foregroundStyle(T.text3)
-                        }
-                    }
-                }
-
-                if !parsed.isNull {
-                    PropSection(title: "Report") {
-                        if !parsed["tldr"].string.isEmpty { MarkdownText(text: parsed["tldr"].string, size: 12.5, color: T.text2) }
-                        ForEach(Array(parsed["questions"].array.enumerated()), id: \.offset) { _, q in
-                            Label { Text(q.string).font(T.ui(12)) } icon: { Image(systemName: "questionmark.circle").foregroundStyle(T.orange) }
-                        }
-                        ForEach(Array(parsed["actions"].array.enumerated()), id: \.offset) { _, a in
-                            Label { Text(a.string).font(T.ui(12)) } icon: { Image(systemName: "hand.raised").foregroundStyle(T.orange) }
-                        }
-                    }
-                }
-
-                // What the header can't do. Terminal, stop, pin and the rest
-                // live in the header; this is only the session's next step.
-                if let s, (!s.isTask && !s.worked && !s.isOrchestrator) || (s.isTask && !model.isLive(s) && s.taskStatus != "cleaned") {
-                    PropSection(title: "Next step") {
-                        VStack(alignment: .leading, spacing: 6) {
-                            if !s.isTask && !s.worked && !s.isOrchestrator {
-                                Button { Task { await model.start(id) } } label: { Label("Run the pipeline", systemImage: "play.fill").frame(maxWidth: .infinity) }.buttonStyle(LButton(primary: true))
-                            }
-                            if s.isTask && !model.isLive(s) && s.taskStatus != "cleaned" {
-                                Button { Task { await model.relaunch(id) } } label: { Label("Relaunch worker", systemImage: "arrow.clockwise").frame(maxWidth: .infinity) }.buttonStyle(LButton())
-                                Button { Task { await model.cleanup(id) } } label: { Label("Clean up worktree", systemImage: "trash").frame(maxWidth: .infinity) }.buttonStyle(LButton())
-                            }
-                        }
-                    }
-                }
-            }
-            .padding(20)
-        }
-        .background(T.panel)
-    }
-}
-
-struct PropSection<Content: View>: View {
-    let title: String
-    @ViewBuilder let content: () -> Content
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(title).font(T.ui(11.5, .semibold)).foregroundStyle(T.text3)
-            content()
-        }
-    }
-}
-
-struct PropRow<Content: View>: View {
-    let label: String
-    @ViewBuilder let content: () -> Content
-    var body: some View {
-        HStack(alignment: .center, spacing: 6) {
-            Text(label).font(T.ui(12.5)).foregroundStyle(T.text3).frame(width: 78, alignment: .leading)
-            content().foregroundStyle(T.text)
-            Spacer(minLength: 0)
-        }
-        .frame(minHeight: 26)
-    }
-}
-
-struct LinkRow<Trailing: View>: View {
-    let icon: String
-    let text: String
-    let url: String
-    @ViewBuilder let trailing: () -> Trailing
-    @StateObject private var hover = Box(false)
-    var body: some View {
-        Button { openURL(url) } label: {
-            HStack(spacing: 8) {
-                Image(systemName: icon).font(.system(size: 11)).foregroundStyle(T.text3).frame(width: 14)
-                Text(text).font(T.ui(12.5)).foregroundStyle(hover.v ? T.text : T.text2).lineLimit(1)
-                Spacer(minLength: 4)
-                trailing()
-            }
-            .padding(.horizontal, 10).frame(height: 32)
-            .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(hover.v ? T.hover : T.raised.opacity(0.5)))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .hoverBox(hover)
-    }
-}
 
 // MARK: - Markdown
 
