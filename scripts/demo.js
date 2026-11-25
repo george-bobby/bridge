@@ -12,7 +12,8 @@
 const os = require("os");
 const path = require("path");
 
-const dataDir = process.env.SB_DATA_DIR || path.join(os.tmpdir(), "bridge-demo");
+// Its own folder, never SB_DATA_DIR: seeding wipes it.
+const dataDir = process.env.BRIDGE_DEMO_DIR || path.join(os.tmpdir(), "bridge-demo");
 Object.assign(process.env, {
   BRIDGE_DEMO: "1",
   SB_DATA_DIR: dataDir,

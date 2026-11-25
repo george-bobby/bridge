@@ -61,10 +61,12 @@ struct SessionRow: View {
                 Text(session.isTask ? "TASK" : "SLACK").font(T.mono(10, .semibold)).foregroundStyle(session.isTask ? T.accent : T.slack).frame(width: 38, alignment: .leading)
                 if !session.issueKey.isEmpty { Text(session.issueKey).font(T.mono(11.5)).foregroundStyle(T.text3) }
                 Text(session.title).font(T.ui(13, .medium)).foregroundStyle(T.text).lineLimit(1)
+                if session.pinned { Image(systemName: "star.fill").font(.system(size: 9)).foregroundStyle(T.yellow) }
                 Text(model.isAwaiting(session) ? session.askedFor : session.statusLine.isEmpty ? session.snippet : session.statusLine)
                     .font(T.ui(12.5)).foregroundStyle(model.isAwaiting(session) ? T.orange : T.text3).lineLimit(1)
                 Spacer(minLength: 8)
                 PortChips(servers: model.servers(for: session))
+                ProjectChip(session: session)
                 if !session.prUrl.isEmpty {
                     Chip(text: "#\(session.prNumber)", icon: "arrow.triangle.pull", mono: true)
                 }
@@ -73,6 +75,7 @@ struct SessionRow: View {
             }
         }
         .onTapGesture { model.open(session.id) }
+        .draggable(session.id)
         .contextMenu { SessionMenu(session: session) }
     }
 }
@@ -82,7 +85,15 @@ struct SessionMenu: View {
     let session: Session
     var body: some View {
         Button("Open") { model.open(session.id) }
-        Menu("Move to") {
+        Button(session.pinned ? "Unpin" : "Pin to Sidebar") { Task { await model.setPinned(session.id, !session.pinned) } }
+        if model.projects.count > 1 {
+            Menu("Move to Project") {
+                ForEach(model.projects) { p in
+                    Button(p.name) { Task { await model.setProject(session.id, p.id) } }.disabled(p.id == session.project)
+                }
+            }
+        }
+        Menu("Set Status") {
             ForEach(Column.allCases) { c in Button(c.label) { Task { await model.move(session.id, to: c) } } }
             Divider()
             Button("Automatic") { Task { await model.move(session.id, to: nil) } }
@@ -385,8 +396,9 @@ struct BoardView: View {
     var body: some View {
         VStack(spacing: 0) {
             PageHeader(title: "Board", subtitle: "Cards follow their session until you drag them", icon: "rectangle.split.3x1") {
+                ProjectFilterMenu()
                 LField(placeholder: "Filter", text: $query.v).frame(width: 200)
-                IconButton(icon: "plus", help: "New task (⌘N)") { model.composeOpen = true }
+                IconButton(icon: "plus", help: "New task (⌘N)") { model.compose(in: model.projectFilter) }
             }
             GeometryReader { g in
                 // Columns share the width, down to 210pt each; below that the board scrolls.
@@ -405,7 +417,7 @@ struct BoardView: View {
     func sessions(in c: Column) -> [Session] {
         let q = query.v.lowercased()
         return model.boardSessions
-            .filter { model.column(of: $0) == c }
+            .filter { model.column(of: $0) == c && model.inFilter($0) }
             .filter { q.isEmpty || "\($0.title) \($0.text) \($0.channel) \($0.issueKey)".lowercased().contains(q) }
             .sorted { $0.updatedAt > $1.updatedAt }
     }
@@ -425,7 +437,7 @@ struct BoardColumn: View {
                 Text(column.label).font(T.ui(12.5, .medium)).foregroundStyle(T.text)
                 Text(verbatim: "\(sessions.count)").font(T.ui(12)).foregroundStyle(T.text3)
                 Spacer()
-                if column == .backlog { IconButton(icon: "plus", help: "New task") { model.composeOpen = true } }
+                if column == .backlog { IconButton(icon: "plus", help: "New task") { model.compose(in: model.projectFilter) } }
             }
             .padding(.horizontal, 8).frame(height: 34)
             ScrollView {
@@ -467,8 +479,10 @@ struct BoardCard: View {
             HStack(spacing: 6) {
                 Text(session.isTask ? "TASK" : "SLACK").font(T.mono(10, .semibold)).foregroundStyle(session.isTask ? T.accent : T.slack)
                 if !session.issueKey.isEmpty { Text(session.issueKey).font(T.mono(11)).foregroundStyle(T.text3) }
+                ProjectChip(session: session)
                 Spacer()
-                if !session.pinned.isEmpty {
+                if session.pinned { Image(systemName: "star.fill").font(.system(size: 9)).foregroundStyle(T.yellow) }
+                if !session.boardPin.isEmpty {
                     Button { Task { await model.move(session.id, to: nil) } } label: {
                         Image(systemName: "pin.fill").font(.system(size: 9)).foregroundStyle(T.text3)
                     }
@@ -525,13 +539,14 @@ struct SessionsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PageHeader(title: "Sessions", subtitle: "\(model.boardSessions.count)", icon: "bubble.left.and.text.bubble.right") {
+            PageHeader(title: "Sessions", subtitle: "\(filtered.count)", icon: "bubble.left.and.text.bubble.right") {
+                ProjectFilterMenu()
                 LField(placeholder: "Filter", text: $query.v).frame(width: 220)
-                IconButton(icon: "plus", help: "New task (⌘N)") { model.composeOpen = true }
+                IconButton(icon: "plus", help: "New task (⌘N)") { model.compose(in: model.projectFilter) }
             }
             ScrollView {
                 LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
-                    if let o = model.orchestrator {
+                    if let o = model.sessions.first(where: { $0.id == model.orchestratorId(model.projectFilter) }) ?? model.orchestrator {
                         HoverRow(height: 40) {
                             HStack(spacing: 10) {
                                 Image(systemName: "sparkles").foregroundStyle(T.purple).frame(width: 14)
@@ -541,7 +556,7 @@ struct SessionsView: View {
                                 if model.isLive(o) { LiveIcon(size: 12) }
                             }
                         }
-                        .onTapGesture { model.open("orchestrator") }
+                        .onTapGesture { model.open(o.id) }
                         Hairline()
                     }
                     ForEach([Column.needs, .doing, .review, .backlog, .done]) { c in
@@ -564,7 +579,7 @@ struct SessionsView: View {
 
     var filtered: [Session] {
         let q = query.v.lowercased()
-        return model.boardSessions.filter { q.isEmpty || "\($0.title) \($0.text) \($0.channel) \($0.issueKey) \($0.branch)".lowercased().contains(q) }
+        return model.boardSessions.filter { model.inFilter($0) && (q.isEmpty || "\($0.title) \($0.text) \($0.channel) \($0.issueKey) \($0.branch)".lowercased().contains(q)) }
             .sorted { $0.updatedAt > $1.updatedAt }
     }
 }
@@ -669,8 +684,9 @@ struct LinearView: View {
     /// Issues grouped by workflow state, in Linear's order. A sub-issue whose
     /// parent is also yours is shown under that parent rather than twice.
     var groups: [(String, StatusKind, [Issue])] {
-        let mine = Set(model.issues.map(\.key))
-        let visible = model.issues.filter { (showDone || $0.active) && !(showSubs && mine.contains($0.parentKey)) }
+        // A sub-issue moves under its parent only when that parent is shown.
+        let shownParents = Set(model.issues.filter { showDone || $0.active }.map(\.key))
+        let visible = model.issues.filter { (showDone || $0.active) && !(showSubs && shownParents.contains($0.parentKey)) }
         var byState: [String: [Issue]] = [:]
         for i in visible { byState[i.state, default: []].append(i) }
         return byState.map { ($0.key, $0.value.first!.status, $0.value.sorted { ($0.priority == 0 ? 9 : $0.priority, -$0.updatedAt) < ($1.priority == 0 ? 9 : $1.priority, -$1.updatedAt) }) }

@@ -196,11 +196,12 @@ struct MemoryView: View {
     @StateObject private var selected = Box("")
     @StateObject private var text = Box("")
     @StateObject private var saved = Box("")
+    @StateObject private var loading = Box(false)
 
     var body: some View {
         VStack(spacing: 0) {
             PageHeader(title: "Memory", subtitle: list.v["project"].nonEmpty.map { "what Claude Code remembers about \($0)" } ?? "", icon: "book.closed") {
-                if text.v != saved.v && !selected.v.isEmpty {
+                if text.v != saved.v && !selected.v.isEmpty && !loading.v {
                     Button("Revert") { text.v = saved.v }.buttonStyle(LButton())
                     Button("Save") { save() }.buttonStyle(LButton(primary: true)).keyboardShortcut("s")
                 }
@@ -234,28 +235,44 @@ struct MemoryView: View {
                         .font(T.mono(12.5))
                         .scrollContentBackground(.hidden)
                         .padding(18)
+                        .disabled(loading.v)
+                        .opacity(loading.v ? 0.5 : 1)
                 }
             }
         }
         .onAppear { Task { list.v = (try? await API.get("/api/memory")) ?? .null } }
     }
 
+    /// The buffer always belongs to the file it was read from: a read is
+    /// applied only if that file is still selected, and editing waits for it.
     func open(_ name: String) {
+        guard name != selected.v else { return }
+        if text.v != saved.v && !selected.v.isEmpty {
+            let a = NSAlert()
+            a.messageText = "Discard your changes to \(selected.v)?"
+            a.addButton(withTitle: "Discard")
+            a.addButton(withTitle: "Keep Editing")
+            if a.runModal() != .alertFirstButtonReturn { return }
+        }
         selected.v = name
+        loading.v = true
         Task {
-            let f = (try? await API.get("/api/memory/file?name=\(API.q(name))")) ?? .null
+            guard let f = try? await API.get("/api/memory/file?name=\(API.q(name))"), selected.v == name else { return }
             text.v = f["text"].string
             saved.v = text.v
+            loading.v = false
         }
     }
 
     func save() {
         let name = selected.v
         let body = text.v
+        guard !loading.v, !name.isEmpty else { return }
         Task {
             await model.act {
                 try await API.post("/api/memory/file", ["name": name, "text": body])
-                self.saved.v = body
+                // Only this file's baseline moves, and only if you're still on it.
+                if self.selected.v == name { self.saved.v = body }
                 self.model.say("Saved \(name)")
             }
         }
@@ -319,8 +336,14 @@ struct SettingsView: View {
             }
             .formStyle(.grouped)
             .tabItem { Label("Harness", systemImage: "gearshape.2") }
+
+            EnvironmentSettings()
+                .tabItem { Label("Environment", systemImage: "key") }
+
+            DevelopSettings()
+                .tabItem { Label("Develop", systemImage: "hammer") }
         }
-        .frame(width: 520, height: 400)
+        .frame(width: 640, height: 560)
     }
 
     func toggle(_ label: String, _ key: String, hint: String = "") -> some View {
@@ -435,9 +458,14 @@ struct CommandPalette: View {
             PaletteItem(id: "pulls", icon: sym("arrow.triangle.pull"), title: "Go to Pull requests", hint: "⌘5") { model.route = .pulls },
             PaletteItem(id: "linear", icon: sym("circle.lefthalf.filled"), title: "Go to Linear", hint: "⌘6") { model.route = .linear },
             PaletteItem(id: "memory", icon: sym("book.closed"), title: "Go to Memory", hint: "⌘7") { model.route = .memory },
-            PaletteItem(id: "orch", icon: sym("sparkles", T.purple), title: "Open the orchestrator", hint: "⌘O") { model.open("orchestrator") },
+            PaletteItem(id: "slack", icon: sym("number"), title: "Go to Slack", hint: "⌘8") { model.route = .slack },
+            PaletteItem(id: "project", icon: sym("folder.badge.plus"), title: "Add a project…", hint: "⇧⌘P") { model.addProject() },
             PaletteItem(id: "refresh", icon: sym("arrow.clockwise"), title: "Refresh GitHub and Linear", hint: "⌘R") { Task { await model.loadSources(refresh: true) } },
         ]
+        for p in model.projects {
+            all.append(PaletteItem(id: "o-\(p.id)", icon: sym("sparkles", T.purple), title: "Orchestrator · \(p.name)") { model.openOrchestrator(p.id) })
+            all.append(PaletteItem(id: "n-\(p.id)", icon: sym("square.and.pencil"), title: "New task in \(p.name)") { model.compose(in: p.id) })
+        }
         for s in model.boardSessions {
             all.append(PaletteItem(id: "s-\(s.id)", icon: AnyView(SessionIcon(session: s, size: 13)), title: s.title, detail: [s.issueKey, s.snippet].filter { !$0.isEmpty }.joined(separator: " · ")) { model.open(s.id) })
         }
@@ -462,7 +490,7 @@ struct ComposeSheet: View {
     @Environment(AppModel.self) var model
     @StateObject private var text = Box("")
     @StateObject private var direct = Box(false)
-    @StateObject private var repo = Box("")
+    @StateObject private var project = Box("")
     @StateObject private var busy = Box(false)
     @FocusState private var focused: Bool
 
@@ -474,7 +502,7 @@ struct ComposeSheet: View {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 8) {
                     Logo(size: 16)
-                    Text("New task").font(T.ui(13, .medium))
+                    Text(verbatim: "New task" + (model.project(project.v).map { " in \($0.name)" } ?? "")).font(T.ui(13, .medium))
                     Spacer()
                     IconButton(icon: "xmark", help: "Close (Esc)") { model.composeOpen = false }
                 }
@@ -489,6 +517,16 @@ struct ComposeSheet: View {
                 .padding(.horizontal, 12).padding(.top, 12)
                 Hairline()
                 HStack(spacing: 8) {
+                    if model.projects.count > 0 {
+                        Menu {
+                            ForEach(model.projects) { p in Button(p.name) { project.v = p.id } }
+                            Divider()
+                            Button("Add Project…") { model.addProject() }
+                        } label: {
+                            ComposerChip(icon: "folder", text: model.project(project.v)?.name ?? "Project")
+                        }
+                        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                    }
                     if isSlack {
                         Chip(text: "Slack thread: runs the pipeline", icon: "number", tint: T.slack)
                     } else {
@@ -497,23 +535,12 @@ struct ComposeSheet: View {
                             Text("Start a worker now").tag(true)
                         }
                         .pickerStyle(.segmented).controlSize(.small).fixedSize()
-                        if direct.v {
-                            Button {
-                                let p = NSOpenPanel()
-                                p.canChooseDirectories = true
-                                p.canChooseFiles = false
-                                if p.runModal() == .OK, let u = p.url { repo.v = u.path }
-                            } label: {
-                                ComposerChip(icon: "folder", text: URL(fileURLWithPath: repo.v.isEmpty ? model.defaultWorkdir : repo.v).lastPathComponent)
-                            }
-                            .buttonStyle(.plain)
-                        }
                     }
                     Spacer()
                     Button {
                         busy.v = true
                         Task {
-                            if await model.create(text.v, direct: direct.v, repo: repo.v) { model.composeOpen = false }
+                            if await model.create(text.v, direct: direct.v, project: project.v.isEmpty ? nil : project.v) { model.composeOpen = false }
                             busy.v = false
                         }
                     } label: {
@@ -535,7 +562,12 @@ struct ComposeSheet: View {
             .shadow(color: .black.opacity(0.5), radius: 40, y: 18)
             .padding(.top, 110)
         }
-        .onAppear { focused = true; text.v = model.composeText; model.composeText = "" }
+        .onAppear {
+            focused = true
+            text.v = model.composeText
+            model.composeText = ""
+            project.v = model.composeProject ?? model.projectFilter ?? model.defaultProject?.id ?? ""
+        }
         .onKeyPress(.escape) { model.composeOpen = false; return .handled }
     }
 }

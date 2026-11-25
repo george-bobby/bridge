@@ -17,7 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// Dev aid: render every page of the window to PNGs, for checking the UI
     /// without screen-recording permission. `BRIDGE_SNAPSHOT_DIR=/tmp/x Bridge`.
     private func snapshots(to dir: String) {
-        let routes: [(String, Route)] = [("home", .home), ("board", .board), ("sessions", .sessions), ("pulls", .pulls), ("linear", .linear), ("inbox", .inbox), ("memory", .memory)]
+        let routes: [(String, Route)] = [("home", .home), ("board", .board), ("sessions", .sessions), ("pulls", .pulls), ("linear", .linear), ("inbox", .inbox), ("memory", .memory), ("slack", .slack)]
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 8_000_000_000)
             var pages = routes
@@ -27,6 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             for (name, route) in pages {
                 model.paletteOpen = name == "palette"
                 if case .session(let id) = route { model.open(id) } else { model.route = route }
+                if name == "slack", let m = model.mentions.first { model.openThread(m.permalink) }
                 try? await Task.sleep(nanoseconds: 2_500_000_000)
                 guard let view = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil && $0.frame.width > 800 })?.contentView,
                       let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(view.bounds.width * 2), pixelsHigh: Int(view.bounds.height * 2), bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { continue }
@@ -90,7 +91,7 @@ struct BridgeCommands: Commands {
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
-            Button("New Task…") { model.composeOpen = true }.keyboardShortcut("n")
+            Button("New Task…") { model.compose(in: model.projectFilter) }.keyboardShortcut("n")
         }
         CommandMenu("Go") {
             Button("Command Menu…") { model.paletteOpen = true }.keyboardShortcut("k")
@@ -102,8 +103,10 @@ struct BridgeCommands: Commands {
             Button("Pull Requests") { model.route = .pulls }.keyboardShortcut("5")
             Button("Linear") { model.route = .linear }.keyboardShortcut("6")
             Button("Memory") { model.route = .memory }.keyboardShortcut("7")
+            Button("Slack") { model.route = .slack }.keyboardShortcut("8")
             Divider()
-            Button("Orchestrator") { model.open("orchestrator") }.keyboardShortcut("o")
+            Button("Orchestrator") { model.openOrchestrator(model.projectFilter) }.keyboardShortcut("o")
+            Button("Add Project…") { model.addProject() }.keyboardShortcut("p", modifiers: [.command, .shift])
             Button("Refresh") { Task { await model.loadSources(refresh: true); await model.loadAll() } }.keyboardShortcut("r")
             Divider()
             Button("Open Legacy Web UI") { openURL(API.base.absoluteString) }
@@ -140,6 +143,7 @@ struct RootView: View {
         switch model.route {
         case .home: HomeView()
         case .inbox: InboxView()
+        case .slack: SlackView()
         case .board: BoardView()
         case .sessions: SessionsView()
         case .pulls: PullsView()
@@ -151,6 +155,7 @@ struct RootView: View {
 }
 
 struct ConnectingView: View {
+    @Environment(AppModel.self) var model
     var body: some View {
         ZStack {
             T.bg
@@ -158,6 +163,9 @@ struct ConnectingView: View {
                 Logo(size: 40)
                 Text("Starting Bridge…").font(T.ui(13, .medium)).foregroundStyle(T.text2)
                 ProgressView().controlSize(.small)
+                if !model.serverError.isEmpty {
+                    Text(model.serverError).font(T.ui(12)).foregroundStyle(T.orange).multilineTextAlignment(.center).frame(maxWidth: 420).textSelection(.enabled)
+                }
             }
         }
         .ignoresSafeArea()
@@ -184,66 +192,6 @@ struct Logo: View {
 }
 
 // MARK: - Sidebar
-
-struct Sidebar: View {
-    @Environment(AppModel.self) var model
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Color.clear.frame(height: 34) // traffic lights
-            HStack(spacing: 8) {
-                Logo(size: 20)
-                Text("Bridge").font(T.ui(13, .semibold)).foregroundStyle(T.text)
-                Spacer()
-                IconButton(icon: "magnifyingglass", help: "Command menu (⌘K)") { model.paletteOpen = true }
-                IconButton(icon: "square.and.pencil", help: "New task (⌘N)") { model.composeOpen = true }
-            }
-            .padding(.horizontal, 12)
-            .padding(.bottom, 10)
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 1) {
-                    NavItem(icon: "house", label: "Home", route: .home)
-                    NavItem(icon: "tray", label: "Inbox", route: .inbox, badge: model.decisions.count + model.todos.count, hot: !model.decisions.isEmpty)
-
-                    SideLabel("Workspace")
-                    NavItem(icon: "rectangle.split.3x1", label: "Board", route: .board, count: model.boardSessions.filter { model.column(of: $0) != .done }.count)
-                    NavItem(icon: "bubble.left.and.text.bubble.right", label: "Sessions", route: .sessions)
-                    NavItem(icon: "arrow.triangle.pull", label: "Pull requests", route: .pulls, count: model.openPulls.count, hot: model.openPulls.contains(where: \.needsAttention))
-                    NavItem(icon: "circle.lefthalf.filled", label: "Linear", route: .linear, count: model.issues.filter(\.active).count)
-                    NavItem(icon: "book.closed", label: "Memory", route: .memory)
-
-                    SideLabel("Sessions")
-                    if let o = model.orchestrator { SessionNavItem(session: o) }
-                    ForEach(recent) { s in SessionNavItem(session: s) }
-                }
-                .padding(.horizontal, 8)
-            }
-
-            Spacer(minLength: 0)
-            Hairline()
-            HStack(spacing: 8) {
-                Circle().fill(model.connected ? T.green : T.red).frame(width: 7, height: 7)
-                Text(model.connected ? "\(model.liveCount) running" : "Offline").font(T.ui(11.5)).foregroundStyle(T.text3)
-                Text("·").foregroundStyle(T.text3)
-                Text(Fmt.money(model.cost["today"].double) + " today").font(T.ui(11.5)).foregroundStyle(T.text3)
-                Spacer()
-                SettingsLink {
-                    Image(systemName: "gearshape").font(.system(size: 12.5)).foregroundStyle(T.text2).frame(width: 26, height: 26)
-                }
-                .buttonStyle(.plain)
-                .help("Settings (⌘,)")
-            }
-            .padding(.horizontal, 12)
-            .frame(height: 40)
-        }
-        .background(T.bg)
-    }
-
-    var recent: [Session] {
-        model.boardSessions.filter { model.column(of: $0) != .done }.sorted { $0.updatedAt > $1.updatedAt }.prefix(12).map { $0 }
-    }
-}
 
 struct SideLabel: View {
     let text: String
