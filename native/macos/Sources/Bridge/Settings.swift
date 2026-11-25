@@ -87,7 +87,7 @@ enum Prefs {
     static let linearKeys = ["LINEAR_API_KEY", "LINEAR_WORKSPACE", "LINEAR_TEAM", "LINEAR_ISSUE_PREFIX", "LINEAR_PROJECT"]
     static let repoKeys = ["TARGET_REPO", "TARGET_SCOPE", "WORKTREE_ROOT", "BRANCH_PREFIX"]
     static let productKeys = ["PRODUCT_NAME", "PRODUCT_URL"]
-    static let agentKeys = ["PIPELINE_MODEL", "EXTRA_PATH"]
+    static let agentKeys = ["WORKER_SKILL", "PIPELINE_MODEL", "EXTRA_PATH"]
     /// Keys with a home in a friendlier section; Advanced lists the rest.
     static var placed: Set<String> { Set(slackKeys + githubKeys + linearKeys + repoKeys + productKeys + agentKeys) }
 }
@@ -409,7 +409,7 @@ struct EnvField: View {
         "TARGET_REPO": "Default repository", "TARGET_SCOPE": "Subdirectory scope", "WORKTREE_ROOT": "Worktree folder", "BRANCH_PREFIX": "Branch prefix",
         "PRODUCT_NAME": "Product name", "PRODUCT_URL": "Product URL",
         "BRIDGE_PORT": "Server port", "LAUNCHD_LABEL": "launchd label", "PIPELINE_MODEL": "Pipeline model",
-        "EXTRA_PATH": "Extra PATH", "MCP_READ_PREFIXES": "Read-only MCP prefixes",
+        "EXTRA_PATH": "Extra PATH", "MCP_READ_PREFIXES": "Read-only MCP prefixes", "WORKER_SKILL": "Worker skill",
     ]
     static let details: [String: String] = [
         "SLACK_PRODUCT_TEAM": "Ticket hints, as Name:MemberID,Name:MemberID",
