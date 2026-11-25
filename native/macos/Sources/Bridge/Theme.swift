@@ -310,19 +310,22 @@ struct IconButton: View {
     let icon: String
     var help: String = ""
     var spinning = false
+    var size: CGFloat = 28
+    var on = false
+    var tint: Color? = nil
     let action: () -> Void
     @StateObject private var hover = Box(false)
 
     var body: some View {
         Button(action: action) {
             Image(systemName: icon)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(hover.v ? T.text : T.text2)
+                .font(.system(size: size * 13 / 28, weight: .medium))
+                .foregroundStyle(tint ?? (hover.v || on ? T.text : T.text2))
                 .rotationEffect(.degrees(spinning ? 360 : 0))
                 // Stop dead rather than unwinding the spin backwards.
                 .animation(spinning ? .linear(duration: 0.9).repeatForever(autoreverses: false) : nil, value: spinning)
-                .frame(width: 28, height: 28)
-                .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(hover.v ? T.hover : .clear))
+                .frame(width: size, height: size)
+                .background(RoundedRectangle(cornerRadius: size / 4, style: .continuous).fill(hover.v ? T.hover : on ? T.selected : .clear))
                 .contentShape(Rectangle())
         }
         .buttonStyle(Pressable(scale: 0.9))
