@@ -55,8 +55,8 @@ struct SessionRow: View {
     let session: Session
 
     var body: some View {
-        HoverRow(height: 38) {
-            HStack(spacing: 10) {
+        HoverRow(height: 46) {
+            HStack(spacing: 12) {
                 SessionIcon(session: session)
                 Text(session.isTask ? "TASK" : "SLACK").font(T.mono(10, .semibold)).foregroundStyle(session.isTask ? T.accent : T.slack).frame(width: 38, alignment: .leading)
                 if !session.issueKey.isEmpty { Text(session.issueKey).font(T.mono(11.5)).foregroundStyle(T.text3) }
@@ -114,8 +114,8 @@ struct PRRow: View {
     var mine = true
 
     var body: some View {
-        HoverRow(height: 40) {
-            HStack(spacing: 10) {
+        HoverRow(height: 46) {
+            HStack(spacing: 12) {
                 PRStateIcon(pr: pr)
                 Text(verbatim: "\(pr.repoName)#\(pr.number)").font(T.mono(11.5)).foregroundStyle(T.text3).frame(width: 108, alignment: .leading)
                 Text(pr.title).font(T.ui(13, .medium)).foregroundStyle(T.text).lineLimit(1)
@@ -180,9 +180,9 @@ struct HomeView: View {
                 IconButton(icon: "arrow.clockwise", help: "Refresh (⌘R)", spinning: !model.loading.isEmpty) { Task { await model.loadSources(refresh: true) } }
             }
             ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    Text(greeting).font(T.ui(22, .semibold)).foregroundStyle(T.text).padding(.top, 6)
-                    stats
+                VStack(alignment: .leading, spacing: 28) {
+                    Text(greeting).font(T.ui(22, .semibold)).foregroundStyle(T.text).padding(.top, 6).rise(0)
+                    stats.rise(1)
                     let needs = model.boardSessions.filter { model.column(of: $0) == .needs }
                     let live = model.boardSessions.filter { model.isLive($0) && model.column(of: $0) != .needs }
                     Card(title: "Needs you", count: needs.count + model.decisions.count, icon: AnyView(StatusIcon(kind: .attention, size: 13))) {
@@ -200,8 +200,10 @@ struct HomeView: View {
                         }
                         ForEach(needs.prefix(6)) { SessionRow(session: $0) }
                     }
+                    .rise(2)
                     if !live.isEmpty {
                         Card(title: "Running", count: live.count, icon: AnyView(LiveIcon(size: 13))) { ForEach(live) { SessionRow(session: $0) } }
+                            .rise(3)
                     }
                     HStack(alignment: .top, spacing: 18) {
                         let prs = model.openPulls.filter(\.needsAttention) + model.reviewPulls
@@ -215,6 +217,7 @@ struct HomeView: View {
                             ForEach(issues.prefix(7)) { CompactIssue(issue: $0) }
                         }
                     }
+                    .rise(4)
                     HStack(alignment: .top, spacing: 18) {
                         Card(title: "Dev servers", count: model.servers.count, icon: AnyView(Image(systemName: "server.rack").font(.system(size: 11)).foregroundStyle(T.text2))) {
                             if model.servers.isEmpty { CardEmpty(text: "No dev server is listening in your folders.") }
@@ -230,12 +233,14 @@ struct HomeView: View {
                             }
                         }
                         Card(title: "Spend", count: nil, icon: AnyView(Image(systemName: "chart.bar").font(.system(size: 11)).foregroundStyle(T.text2))) {
-                            SpendChart().frame(height: 130).padding(14)
+                            SpendChart().frame(height: 140).padding(20)
                         }
                     }
+                    .rise(5)
                 }
-                .padding(.horizontal, 28)
-                .padding(.bottom, 30)
+                .padding(.horizontal, 36)
+                .padding(.top, 10)
+                .padding(.bottom, 40)
                 .frame(maxWidth: 1240, alignment: .leading)
                 .frame(maxWidth: .infinity)
             }
@@ -249,15 +254,16 @@ struct HomeView: View {
 
     var stats: some View {
         HStack(spacing: 0) {
-            Stat(value: "\(model.liveCount)", label: "Running", tint: model.liveCount == 0 ? nil : T.yellow) { model.route = .board }
+            Stat(value: "\(model.liveCount)", label: "Running", tint: model.liveCount == 0 ? nil : T.yellow) { model.navigate(.sessions) }
             Stat(value: "\(model.needsCount)", label: "Need you", tint: model.needsCount > 0 ? T.orange : nil) { model.route = .inbox }
             Stat(value: model.pulls.isNull ? "–" : "\(model.openPulls.count)", label: "Open PRs", sub: "\(model.openPulls.filter(\.needsAttention).count) need attention") { model.route = .pulls }
             Stat(value: model.pulls.isNull ? "–" : "\(model.reviewPulls.count)", label: "Reviews for you") { model.route = .pulls }
             Stat(value: model.linear.isNull ? "–" : "\(model.issues.filter { $0.stateType == "started" }.count)", label: "Issues in progress") { model.route = .linear }
             Stat(value: Fmt.money(model.cost["today"].double), label: "Spent today", last: true) {}
         }
-        .background(RoundedRectangle(cornerRadius: 10).fill(T.raised.opacity(0.5)))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(T.line, lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(T.raised.opacity(0.5)))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(T.line, lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
 
@@ -274,17 +280,18 @@ struct Stat: View {
         Button(action: action) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(value).font(.system(size: 22, weight: .semibold)).monospacedDigit().foregroundStyle(tint ?? T.text)
+                    .contentTransition(.numericText())
                 Text(label).font(T.ui(12)).foregroundStyle(T.text2)
                 if !sub.isEmpty { Text(sub).font(T.ui(11)).foregroundStyle(T.text3) }
             }
-            .padding(.horizontal, 16).padding(.vertical, 13)
+            .padding(.horizontal, 20).padding(.vertical, 18)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(hover.v ? T.hover.opacity(0.6) : .clear)
             .overlay(alignment: .trailing) { if !last { Rectangle().fill(T.line).frame(width: 1) } }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .onHover { hover.v = $0 }
+        .hoverBox(hover)
     }
 }
 
@@ -304,28 +311,28 @@ struct Card<Content: View>: View {
                 Spacer()
                 if let more { Button(more.0, action: more.1).buttonStyle(.plain).font(T.ui(12)).foregroundStyle(T.text3) }
             }
-            .padding(.horizontal, 14).frame(height: 38)
+            .padding(.horizontal, 20).frame(height: 46)
             Hairline()
-            VStack(spacing: 0) { content() }.padding(.vertical, 4)
+            VStack(spacing: 0) { content() }.padding(.vertical, 6)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 10).fill(T.raised.opacity(0.35)))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(T.line, lineWidth: 1))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(T.raised.opacity(0.35)))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(T.line, lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
 
 struct CardEmpty: View {
     let text: String
-    var body: some View { Text(text).font(T.ui(12.5)).foregroundStyle(T.text3).padding(.horizontal, 14).padding(.vertical, 10) }
+    var body: some View { Text(text).font(T.ui(12.5)).foregroundStyle(T.text3).padding(.horizontal, 20).padding(.vertical, 14) }
 }
 
 struct CompactPR: View {
     @Environment(AppModel.self) var model
     let pr: PullRequest
     var body: some View {
-        HoverRow(height: 34) {
-            HStack(spacing: 9) {
+        HoverRow(height: 40) {
+            HStack(spacing: 10) {
                 PRStateIcon(pr: pr)
                 Text(verbatim: "#\(pr.number)").font(T.mono(11.5)).foregroundStyle(T.text3)
                 Text(pr.title).font(T.ui(12.5)).foregroundStyle(T.text).lineLimit(1)
@@ -344,8 +351,8 @@ struct CompactIssue: View {
     @Environment(AppModel.self) var model
     let issue: Issue
     var body: some View {
-        HoverRow(height: 34) {
-            HStack(spacing: 9) {
+        HoverRow(height: 40) {
+            HStack(spacing: 10) {
                 PriorityIcon(priority: issue.priority)
                 StatusIcon(kind: issue.status, color: hexColor(issue.stateColor, fallback: issue.status.color), size: 13)
                 Text(issue.key).font(T.mono(11.5)).foregroundStyle(T.text3)
@@ -363,6 +370,7 @@ struct CompactIssue: View {
 
 struct SpendChart: View {
     @Environment(AppModel.self) var model
+    @StateObject private var grown = Box(false)
     var body: some View {
         let series = model.cost["series"].array
         let maxV = max(series.map { $0["work"].double + $0["poll"].double }.max() ?? 0, 0.01)
@@ -373,17 +381,19 @@ struct SpendChart: View {
             }
             GeometryReader { g in
                 HStack(alignment: .bottom, spacing: 4) {
-                    ForEach(Array(series.enumerated()), id: \.offset) { _, d in
+                    ForEach(Array(series.enumerated()), id: \.offset) { i, d in
                         let v = d["work"].double + d["poll"].double
                         RoundedRectangle(cornerRadius: 2)
                             .fill(v > 0 ? T.accent : T.line)
-                            .frame(height: max(2, g.size.height * v / maxV))
+                            .frame(height: max(2, g.size.height * (grown.v ? v / maxV : 0)))
+                            .animation(M.snappy.delay(0.2 + Double(i) * 0.02), value: grown.v)
                             .help("\(Fmt.clock(d["day"].double)): \(Fmt.money(v))")
                     }
                 }
                 .frame(maxHeight: .infinity, alignment: .bottom)
             }
         }
+        .onAppear { grown.v = true }
     }
 }
 
@@ -392,27 +402,32 @@ struct SpendChart: View {
 struct BoardView: View {
     @Environment(AppModel.self) var model
     @StateObject private var query = Box("")
+    @Namespace private var cards
 
     var body: some View {
         VStack(spacing: 0) {
-            PageHeader(title: "Board", subtitle: "Cards follow their session until you drag them", icon: "rectangle.split.3x1") {
+            PageHeader(title: "Sessions", subtitle: "Cards follow their session until you drag them", icon: "rectangle.stack") {
+                LayoutPicker()
                 ProjectFilterMenu()
-                LField(placeholder: "Filter", text: $query.v).frame(width: 200)
+                SearchField(text: $query.v).frame(width: 200)
                 IconButton(icon: "plus", help: "New task (⌘N)") { model.compose(in: model.projectFilter) }
             }
             GeometryReader { g in
                 // Columns share the width, down to 210pt each; below that the board scrolls.
-                let width = max(210, (g.size.width - 24 - 40) / 5)
+                let width = max(220, (g.size.width - 40 - 48) / 5)
                 ScrollView(.horizontal) {
-                    HStack(alignment: .top, spacing: 10) {
-                        ForEach(Column.allCases) { c in BoardColumn(column: c, sessions: sessions(in: c)).frame(width: width) }
+                    HStack(alignment: .top, spacing: 12) {
+                        ForEach(Column.allCases) { c in BoardColumn(column: c, sessions: sessions(in: c), ns: cards).frame(width: width) }
                     }
-                    .padding(12)
+                    .animation(M.snappy, value: layout)
+                    .padding(20)
                     .frame(height: g.size.height, alignment: .top)
                 }
             }
         }
     }
+
+    var layout: [String] { Column.allCases.flatMap { c in sessions(in: c).map { "\(c.rawValue):\($0.id)" } } }
 
     func sessions(in c: Column) -> [Session] {
         let q = query.v.lowercased()
@@ -427,6 +442,7 @@ struct BoardColumn: View {
     @Environment(AppModel.self) var model
     let column: Column
     let sessions: [Session]
+    let ns: Namespace.ID
     @StateObject private var targeted = Box(false)
     @StateObject private var showAll = Box(false)
 
@@ -435,30 +451,37 @@ struct BoardColumn: View {
             HStack(spacing: 8) {
                 StatusIcon(kind: column.status, size: 13)
                 Text(column.label).font(T.ui(12.5, .medium)).foregroundStyle(T.text)
-                Text(verbatim: "\(sessions.count)").font(T.ui(12)).foregroundStyle(T.text3)
+                Text(verbatim: "\(sessions.count)").font(T.ui(12)).foregroundStyle(T.text3).monospacedDigit()
+                    .contentTransition(.numericText())
                 Spacer()
                 if column == .backlog { IconButton(icon: "plus", help: "New task") { model.compose(in: model.projectFilter) } }
             }
-            .padding(.horizontal, 8).frame(height: 34)
+            .padding(.horizontal, 12).frame(height: 42)
             ScrollView {
-                LazyVStack(spacing: 6) {
+                LazyVStack(spacing: 8) {
                     let shown = column == .done && !showAll.v ? Array(sessions.prefix(30)) : sessions
-                    ForEach(shown) { BoardCard(session: $0) }
+                    ForEach(shown) { s in
+                        BoardCard(session: s)
+                            .matchedGeometryEffect(id: s.id, in: ns)
+                            .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                    }
                     if shown.count < sessions.count {
                         Button("Show \(sessions.count - shown.count) more") { showAll.v = true }.buttonStyle(.plain).font(T.ui(12)).foregroundStyle(T.text3).padding(6)
                     }
                     if sessions.isEmpty {
-                        RoundedRectangle(cornerRadius: 8).stroke(T.line, style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                        RoundedRectangle(cornerRadius: 8).stroke(targeted.v ? T.accent.opacity(0.7) : T.line, style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
                             .frame(height: 64)
-                            .overlay(Text("Drop here").font(T.ui(12)).foregroundStyle(T.text3))
+                            .overlay(Text("Drop here").font(T.ui(12)).foregroundStyle(targeted.v ? T.accent : T.text3))
+                            .transition(.opacity)
                     }
                 }
-                .padding(.horizontal, 4).padding(.bottom, 12)
+                .padding(.horizontal, 6).padding(.bottom, 14)
             }
         }
         .frame(maxHeight: .infinity, alignment: .top)
-        .background(RoundedRectangle(cornerRadius: 10).fill(targeted.v ? T.accentSoft : T.raised.opacity(0.28)))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(targeted.v ? T.accent.opacity(0.6) : Color.clear, lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(targeted.v ? T.accentSoft : T.raised.opacity(0.28)))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(targeted.v ? T.accent.opacity(0.6) : Color.clear, lineWidth: 1))
+        .animation(M.hover, value: targeted.v)
         .dropDestination(for: String.self) { ids, _ in
             guard let id = ids.first, let s = model.sessions.first(where: { $0.id == id }) else { return false }
             // Dropping where it would land on its own unpins it.
@@ -475,12 +498,12 @@ struct BoardCard: View {
 
     var body: some View {
         let pr = model.pr(for: session.prUrl)
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: 9) {
             HStack(spacing: 6) {
                 Text(session.isTask ? "TASK" : "SLACK").font(T.mono(10, .semibold)).foregroundStyle(session.isTask ? T.accent : T.slack)
-                if !session.issueKey.isEmpty { Text(session.issueKey).font(T.mono(11)).foregroundStyle(T.text3) }
-                ProjectChip(session: session)
-                Spacer()
+                if !session.issueKey.isEmpty { Text(session.issueKey).font(T.mono(11)).foregroundStyle(T.text3).fixedSize() }
+                ProjectChip(session: session).lineLimit(1)
+                Spacer(minLength: 4)
                 if session.pinned { Image(systemName: "star.fill").font(.system(size: 9)).foregroundStyle(T.yellow) }
                 if !session.boardPin.isEmpty {
                     Button { Task { await model.move(session.id, to: nil) } } label: {
@@ -488,7 +511,7 @@ struct BoardCard: View {
                     }
                     .buttonStyle(.plain).help("You placed this card. Click to let it follow its session again.")
                 }
-                Text(Fmt.ago(session.updatedAt)).font(T.ui(11)).foregroundStyle(T.text3)
+                Text(Fmt.ago(session.updatedAt)).font(T.ui(11)).foregroundStyle(T.text3).fixedSize()
             }
             HStack(alignment: .top, spacing: 8) {
                 SessionIcon(session: session, size: 13).padding(.top, 1.5)
@@ -512,22 +535,35 @@ struct BoardCard: View {
                     if let pr { ChecksIcon(pr: pr).font(.system(size: 11.5)) }
                     PortChips(servers: ports)
                     Spacer()
-                    if session.cost > 0 { Text(Fmt.money(session.cost)).font(T.ui(11)).foregroundStyle(T.text3).monospacedDigit() }
+                    if session.cost > 0 { Text(Fmt.money(session.cost)).font(T.ui(11)).foregroundStyle(T.text3).monospacedDigit().fixedSize() }
                 }
             }
         }
-        .padding(11)
-        .background(RoundedRectangle(cornerRadius: 8).fill(hover.v ? T.hover : T.raised))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(model.isAwaiting(session) ? T.orange.opacity(0.45) : T.line, lineWidth: 1))
-        .shadow(color: .black.opacity(0.18), radius: 2, y: 1)
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(hover.v ? T.hover : T.raised))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(model.isAwaiting(session) ? T.orange.opacity(0.45) : hover.v ? T.text3.opacity(0.5) : T.line, lineWidth: 1))
+        .shadow(color: .black.opacity(hover.v ? 0.35 : 0.18), radius: hover.v ? 10 : 2, y: hover.v ? 4 : 1)
+        .offset(y: hover.v ? -1 : 0)
         .contentShape(Rectangle())
-        .onHover { hover.v = $0 }
+        .hoverBox(hover)
         .onTapGesture { model.open(session.id) }
         .draggable(session.id) {
             Text(session.title).font(T.ui(12.5, .medium)).padding(8)
                 .background(RoundedRectangle(cornerRadius: 7).fill(T.raised))
         }
         .contextMenu { SessionMenu(session: session) }
+    }
+}
+
+struct LayoutPicker: View {
+    @Environment(AppModel.self) var model
+    var body: some View {
+        Picker("", selection: Binding(get: { model.route == .sessions ? "list" : "board" }, set: { model.route = $0 == "list" ? .sessions : .board })) {
+            Image(systemName: "rectangle.split.3x1").help("Board").tag("board")
+            Image(systemName: "list.bullet").help("List").tag("list")
+        }
+        .pickerStyle(.segmented).labelsHidden().fixedSize()
+        .help("Board or list")
     }
 }
 
@@ -539,9 +575,10 @@ struct SessionsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PageHeader(title: "Sessions", subtitle: "\(filtered.count)", icon: "bubble.left.and.text.bubble.right") {
+            PageHeader(title: "Sessions", subtitle: "\(filtered.count)", icon: "rectangle.stack") {
+                LayoutPicker()
                 ProjectFilterMenu()
-                LField(placeholder: "Filter", text: $query.v).frame(width: 220)
+                SearchField(text: $query.v).frame(width: 220)
                 IconButton(icon: "plus", help: "New task (⌘N)") { model.compose(in: model.projectFilter) }
             }
             ScrollView {
@@ -563,7 +600,7 @@ struct SessionsView: View {
                         let rows = filtered.filter { model.column(of: $0) == c }
                         if !rows.isEmpty {
                             Section {
-                                ForEach(rows) { SessionRow(session: $0) }
+                                ForEach(rows) { SessionRow(session: $0).transition(.opacity.combined(with: .move(edge: .top))) }
                             } header: {
                                 GroupHeader(title: c.label, count: rows.count, icon: AnyView(StatusIcon(kind: c.status, size: 13)))
                             }
@@ -573,6 +610,7 @@ struct SessionsView: View {
                         EmptyState(icon: "bubble.left.and.text.bubble.right", title: "No sessions yet", detail: "Press ⌘N to start a task, or paste a Slack thread link.")
                     }
                 }
+                .animation(M.snappy, value: filtered.map(\.id))
             }
         }
     }
@@ -648,8 +686,8 @@ struct LinearView: View {
     var body: some View {
         VStack(spacing: 0) {
             PageHeader(title: "My issues", subtitle: model.linear["viewer"].nonEmpty ?? "", icon: "circle.lefthalf.filled") {
-                Toggle("Sub-issues", isOn: $showSubs).toggleStyle(.switch).controlSize(.mini).font(T.ui(12))
-                Toggle("Done", isOn: $showDone).toggleStyle(.switch).controlSize(.mini).font(T.ui(12))
+                Toggle("Sub-issues", isOn: Binding(get: { showSubs }, set: { v in withAnimation(M.snappy) { showSubs = v } })).toggleStyle(.switch).controlSize(.mini).font(T.ui(12))
+                Toggle("Done", isOn: Binding(get: { showDone }, set: { v in withAnimation(M.snappy) { showDone = v } })).toggleStyle(.switch).controlSize(.mini).font(T.ui(12))
                 IconButton(icon: "arrow.clockwise", help: "Refresh", spinning: model.loading.contains("linear")) { Task { await model.load("linear", refresh: true) } }
             }
             if let e = model.errors["linear"], !e.isEmpty { ErrorBar(text: e) }
@@ -667,11 +705,14 @@ struct LinearView: View {
                                 }
                             } header: {
                                 GroupHeader(title: group.0, count: group.2.count, icon: AnyView(StatusIcon(kind: group.1, color: hexColor(group.2.first?.stateColor ?? "", fallback: group.1.color), size: 13))) {
-                                    Image(systemName: collapsed.v.contains(group.0) ? "chevron.right" : "chevron.down").font(.system(size: 10, weight: .semibold)).foregroundStyle(T.text3)
+                                    Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(T.text3)
+                                        .rotationEffect(.degrees(collapsed.v.contains(group.0) ? 0 : 90))
                                 }
                                 .contentShape(Rectangle())
                                 .onTapGesture {
-                                    if collapsed.v.contains(group.0) { collapsed.v.remove(group.0) } else { collapsed.v.insert(group.0) }
+                                    withAnimation(M.snappy) {
+                                        if collapsed.v.contains(group.0) { collapsed.v.remove(group.0) } else { collapsed.v.insert(group.0) }
+                                    }
                                 }
                             }
                         }
@@ -702,9 +743,12 @@ struct IssueTree: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            IssueRow(issue: issue, expandable: showSubs && !issue.children.isEmpty, expanded: open.v) { open.v.toggle() }
+            IssueRow(issue: issue, expandable: showSubs && !issue.children.isEmpty, expanded: open.v) { withAnimation(M.snappy) { open.v.toggle() } }
             if showSubs && open.v && !issue.children.isEmpty {
-                ForEach(issue.children) { child in SubIssueRow(child: child, mine: model.issues.first { $0.key == child.key }) }
+                ForEach(issue.children) { child in
+                    SubIssueRow(child: child, mine: model.issues.first { $0.key == child.key })
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                }
             }
         }
     }
@@ -723,7 +767,8 @@ struct IssueRow: View {
                 ZStack {
                     if expandable {
                         Button(action: toggle) {
-                            Image(systemName: expanded ? "chevron.down" : "chevron.right").font(.system(size: 9, weight: .bold)).foregroundStyle(T.text3).frame(width: 12, height: 20)
+                            Image(systemName: "chevron.right").font(.system(size: 9, weight: .bold)).foregroundStyle(T.text3).frame(width: 12, height: 20)
+                                .rotationEffect(.degrees(expanded ? 90 : 0))
                         }
                         .buttonStyle(.plain)
                     }

@@ -28,29 +28,33 @@ struct InboxView: View {
                 }
                 .buttonStyle(LButton())
             }
-            HStack(spacing: 2) {
-                TabButton(label: "Needs you", count: model.decisions.count, hot: true, on: tab.v == "decisions") { tab.v = "decisions" }
-                TabButton(label: "To-dos", count: model.todos.count, on: tab.v == "todos") { tab.v = "todos" }
-                TabButton(label: "Workers", count: tasks.v["tasks"].array.filter { $0["status"].string != "cleaned" }.count, on: tab.v == "tasks") { tab.v = "tasks"; load() }
-                TabButton(label: "Activity", count: 0, on: tab.v == "activity") { tab.v = "activity"; load() }
+            HStack(spacing: 8) {
+                SlidingTabs(tabs: [
+                    .init(id: "decisions", label: "Needs you", count: model.decisions.count, hot: true),
+                    .init(id: "todos", label: "To-dos", count: model.todos.count),
+                    .init(id: "tasks", label: "Workers", count: tasks.v["tasks"].array.filter { $0["status"].string != "cleaned" }.count),
+                    .init(id: "activity", label: "Activity"),
+                ], selection: $tab.v)
                 Spacer()
                 if tab.v == "activity" {
                     Picker("", selection: $since.v) { ForEach(["3h", "8h", "24h", "3d"], id: \.self) { Text($0).tag($0) } }
                         .pickerStyle(.segmented).frame(width: 170).controlSize(.small)
                         .onChange(of: since.v) { load() }
+                        .transition(.opacity.combined(with: .move(edge: .trailing)))
                 }
             }
-            .padding(.horizontal, 12).frame(height: 40)
+            .animation(M.snappy, value: tab.v)
+            .padding(.horizontal, 20).frame(height: 50)
             Hairline()
             ScrollView {
                 LazyVStack(spacing: 0) {
                     switch tab.v {
                     case "decisions":
                         if model.decisions.isEmpty { EmptyState(icon: "checkmark.circle", title: "You're all caught up", detail: "Questions and requests from workers land here.") }
-                        ForEach(model.decisions, id: \.self) { DecisionRow(d: $0) }
+                        ForEach(model.decisions, id: \.self) { DecisionRow(d: $0).transition(.opacity.combined(with: .move(edge: .trailing))) }
                     case "todos":
                         if model.todos.isEmpty { EmptyState(icon: "checklist", title: "No to-dos", detail: "Things only you can do, like merging a PR, show up here.") }
-                        ForEach(model.todos, id: \.self) { TodoRow(t: $0) }
+                        ForEach(model.todos, id: \.self) { TodoRow(t: $0).transition(.opacity.combined(with: .move(edge: .trailing))) }
                     case "tasks":
                         let list = tasks.v["tasks"].array
                         if list.isEmpty { EmptyState(icon: "person.2", title: "No workers", detail: "Workers the orchestrator spawns are listed here.") }
@@ -74,6 +78,7 @@ struct InboxView: View {
             }
         }
         .onAppear(perform: load)
+        .onChange(of: tab.v) { if tab.v == "tasks" || tab.v == "activity" { load() } }
     }
 
     func load() {
@@ -81,30 +86,6 @@ struct InboxView: View {
             if let t = try? await API.get("/api/tasks") { tasks.v = t }
             if let a = try? await API.get("/api/catchup?since=\(since.v)") { activity.v = a }
         }
-    }
-}
-
-struct TabButton: View {
-    let label: String
-    let count: Int
-    var hot = false
-    let on: Bool
-    let action: () -> Void
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 6) {
-                Text(label).font(T.ui(12.5, on ? .medium : .regular)).foregroundStyle(on ? T.text : T.text2)
-                if count > 0 {
-                    Text(verbatim: "\(count)").font(T.ui(11, .semibold)).foregroundStyle(hot ? .white : T.text2)
-                        .padding(.horizontal, 5).frame(minHeight: 16)
-                        .background(Capsule().fill(hot ? T.orange : T.raised))
-                }
-            }
-            .padding(.horizontal, 10).frame(height: 28)
-            .background(RoundedRectangle(cornerRadius: 6).fill(on ? T.selected : .clear))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
     }
 }
 
@@ -133,8 +114,10 @@ struct DecisionRow: View {
                 Button { model.open(d["taskId"].string) } label: { Image(systemName: "arrow.up.right") }.buttonStyle(LButton()).help("Open the chat")
             }
         }
-        .padding(16)
-        .overlay(alignment: .bottom) { Hairline() }
+        .padding(18)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(T.raised.opacity(0.45)))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(T.line, lineWidth: 1))
+        .padding(.horizontal, 20).padding(.top, 14)
     }
 
     func tomorrow() -> String {
@@ -153,8 +136,8 @@ struct TodoRow: View {
     @Environment(AppModel.self) var model
     let t: JSON
     var body: some View {
-        HoverRow(height: 40) {
-            HStack(spacing: 10) {
+        HoverRow(height: 46) {
+            HStack(spacing: 12) {
                 Button { Task { await model.todoDone(t["key"].string) } } label: {
                     Image(systemName: "circle").font(.system(size: 14)).foregroundStyle(T.text3)
                 }
@@ -174,8 +157,8 @@ struct TaskRow: View {
     let t: JSON
     var body: some View {
         let st = t["status"].string
-        HoverRow(height: 40) {
-            HStack(spacing: 10) {
+        HoverRow(height: 46) {
+            HStack(spacing: 12) {
                 StatusIcon(kind: needsStatuses.contains(st) ? .attention : st == "working" ? .progress : st == "ready-for-review" ? .review : st == "cleaned" ? .done : .todo, size: 13)
                 Text(t["title"].nonEmpty ?? t["id"].string).font(T.ui(13, .medium)).lineLimit(1)
                 Text(t["branch"].string).font(T.mono(11.5)).foregroundStyle(T.text3).lineLimit(1)
@@ -210,6 +193,9 @@ struct MemoryView: View {
             HStack(spacing: 0) {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
+                        if !list.v.isNull && list.v["files"].array.isEmpty {
+                            Text("No memories yet. Claude Code writes them as it learns this project.").font(T.ui(12)).foregroundStyle(T.text3).padding(16)
+                        }
                         ForEach(list.v["files"].array, id: \.self) { f in
                             let name = f["name"].string
                             HoverRow(selected: selected.v == name, height: 46) {
@@ -378,11 +364,11 @@ struct CommandPalette: View {
     @StateObject private var sel = Box(0)
     @StateObject private var hits = Box([JSON]())
     @FocusState private var focused: Bool
+    @Namespace private var ns
 
     var body: some View {
         let items = results
-        ZStack(alignment: .top) {
-            Color.black.opacity(0.35).ignoresSafeArea().onTapGesture { close() }
+        VStack(spacing: 0) {
             VStack(spacing: 0) {
                 HStack(spacing: 10) {
                     Image(systemName: "magnifyingglass").foregroundStyle(T.text3)
@@ -404,9 +390,16 @@ struct CommandPalette: View {
                                     if !it.hint.isEmpty { Kbd(keys: it.hint) }
                                 }
                                 .padding(.horizontal, 14).frame(height: 36)
-                                .background(RoundedRectangle(cornerRadius: 6).fill(i == sel.v ? T.selected : .clear))
+                                .background {
+                                    if i == sel.v {
+                                        RoundedRectangle(cornerRadius: 7, style: .continuous).fill(T.accent.opacity(0.22))
+                                            .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).stroke(T.accent.opacity(0.35), lineWidth: 1))
+                                            .matchedGeometryEffect(id: "palette-sel", in: ns)
+                                    }
+                                }
                                 .contentShape(Rectangle())
                                 .onTapGesture { sel.v = i; pick(items) }
+                                .onHover { if $0 { sel.v = i } }
                                 .id(i)
                             }
                             if items.isEmpty { Text("No results").font(T.ui(12.5)).foregroundStyle(T.text3).padding(20) }
@@ -414,15 +407,15 @@ struct CommandPalette: View {
                         .padding(6)
                     }
                     .frame(maxHeight: 400)
+                    .animation(M.snappy, value: sel.v)
                     .onChange(of: sel.v) { proxy.scrollTo(sel.v) }
                 }
             }
             .frame(width: 640)
-            .background(RoundedRectangle(cornerRadius: 12).fill(T.raised))
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(T.line, lineWidth: 1))
-            .shadow(color: .black.opacity(0.5), radius: 40, y: 18)
+            .floatingPanel()
             .padding(.top, 110)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onAppear { focused = true }
         .onKeyPress(.downArrow) { sel.v = min(sel.v + 1, max(items.count - 1, 0)); return .handled }
         .onKeyPress(.upArrow) { sel.v = max(sel.v - 1, 0); return .handled }
@@ -454,18 +447,19 @@ struct CommandPalette: View {
         func sym(_ s: String, _ c: Color = T.text2) -> AnyView { AnyView(Image(systemName: s).font(.system(size: 12)).foregroundStyle(c)) }
         var all: [PaletteItem] = [
             PaletteItem(id: "new", icon: sym("square.and.pencil"), title: "New task", hint: "⌘N") { model.composeOpen = true },
-            PaletteItem(id: "home", icon: sym("house"), title: "Go to Home", hint: "⌘1") { model.route = .home },
-            PaletteItem(id: "inbox", icon: sym("tray"), title: "Go to Inbox", hint: "⌘2") { model.route = .inbox },
-            PaletteItem(id: "board", icon: sym("rectangle.split.3x1"), title: "Go to Board", hint: "⌘3") { model.route = .board },
-            PaletteItem(id: "sessions", icon: sym("bubble.left.and.text.bubble.right"), title: "Go to Sessions", hint: "⌘4") { model.route = .sessions },
-            PaletteItem(id: "pulls", icon: sym("arrow.triangle.pull"), title: "Go to Pull requests", hint: "⌘5") { model.route = .pulls },
-            PaletteItem(id: "linear", icon: sym("circle.lefthalf.filled"), title: "Go to Linear", hint: "⌘6") { model.route = .linear },
-            PaletteItem(id: "memory", icon: sym("book.closed"), title: "Go to Memory", hint: "⌘7") { model.route = .memory },
-            PaletteItem(id: "slack", icon: sym("number"), title: "Go to Slack", hint: "⌘8") { model.route = .slack },
-            PaletteItem(id: "usage", icon: sym("gauge.with.dots.needle.50percent"), title: "Go to Usage", hint: "⌘9") { model.route = .usage },
             PaletteItem(id: "project", icon: sym("folder.badge.plus"), title: "Add a project…", hint: "⇧⌘P") { model.addProject() },
             PaletteItem(id: "refresh", icon: sym("arrow.clockwise"), title: "Refresh GitHub and Linear", hint: "⌘R") { Task { await model.loadSources(refresh: true) } },
         ]
+        for (i, n) in navOrder.enumerated() {
+            all.insert(PaletteItem(id: "go-\(n.label)", icon: sym(n.icon), title: "Go to \(n.label)", hint: "⌘\(i + 1)") { model.navigate(n.route) }, at: 1 + i)
+        }
+        all.append(PaletteItem(id: "board-view", icon: sym("rectangle.split.3x1"), title: "Sessions as a board") { model.route = .board })
+        all.append(PaletteItem(id: "list-view", icon: sym("list.bullet"), title: "Sessions as a list") { model.route = .sessions })
+        if case .session(let id) = model.route {
+            all.append(PaletteItem(id: "web", icon: sym("globe"), title: "New browser tab", hint: "⌘T") { model.openBrowser(id, url: "") })
+            all.append(PaletteItem(id: "prev", icon: sym("chevron.up"), title: "Previous chat", hint: "⌥⌘↑") { model.stepChat(-1) })
+            all.append(PaletteItem(id: "next", icon: sym("chevron.down"), title: "Next chat", hint: "⌥⌘↓") { model.stepChat(1) })
+        }
         for p in model.projects {
             all.append(PaletteItem(id: "o-\(p.id)", icon: sym("sparkles", T.purple), title: "Orchestrator · \(p.name)") { model.openOrchestrator(p.id) })
             all.append(PaletteItem(id: "n-\(p.id)", icon: sym("square.and.pencil"), title: "New task in \(p.name)") { model.compose(in: p.id) })
@@ -501,8 +495,7 @@ struct ComposeSheet: View {
     var isSlack: Bool { text.v.trimmingCharacters(in: .whitespaces).range(of: #"^https://[^/]*slack\.com/archives/"#, options: .regularExpression) != nil }
 
     var body: some View {
-        ZStack(alignment: .top) {
-            Color.black.opacity(0.35).ignoresSafeArea().onTapGesture { model.composeOpen = false }
+        VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 8) {
                     Logo(size: 16)
@@ -539,6 +532,7 @@ struct ComposeSheet: View {
                             Text("Start a worker now").tag(true)
                         }
                         .pickerStyle(.segmented).controlSize(.small).fixedSize()
+                        .transition(.opacity)
                     }
                     Spacer()
                     Button {
@@ -561,11 +555,10 @@ struct ComposeSheet: View {
                 .padding(12)
             }
             .frame(width: 680)
-            .background(RoundedRectangle(cornerRadius: 12).fill(T.raised))
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(T.line, lineWidth: 1))
-            .shadow(color: .black.opacity(0.5), radius: 40, y: 18)
+            .floatingPanel()
             .padding(.top, 110)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onAppear {
             focused = true
             text.v = model.composeText
