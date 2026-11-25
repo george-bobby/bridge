@@ -4,8 +4,9 @@ import SwiftUI
 // MARK: - Details panel
 //
 // The session's properties, links, PR activity and report. One pane: a
-// trailing column. Panes side by side: a drawer docked under the focused pane
-// (`DetailsDrawer`), so no pane loses its width to it.
+// trailing column. Panes side by side: each pane toggles its own, as a column
+// when the pane is wide and a drawer docked under it (`DetailsDrawer`)
+// otherwise.
 
 extension AppModel {
     /// The Linear issue this session is about, when the feed has it: its
@@ -65,7 +66,7 @@ struct PropertiesPanel: View {
             PropSection(title: "Links") { LinkRows(session: s) }
             if !s.prUrl.isEmpty { PRActivitySection(runId: id, url: s.prUrl) }
         }
-        let parsed = model.openTask["parsed"]
+        let parsed = model.taskData(id)["parsed"]
         if !parsed.isNull && (!parsed["tldr"].string.isEmpty || !parsed["questions"].array.isEmpty || !parsed["actions"].array.isEmpty) {
             PropSection(title: "Report") { ReportView(parsed: parsed) }
         }
@@ -81,7 +82,7 @@ struct PropertyRows: View {
 
     var body: some View {
         let s = session
-        let task = model.openTask
+        let task = model.taskData(session.id)
         VStack(alignment: .leading, spacing: 2) {
             PropRow(label: "Status") { StatusMenu(session: s) }
             PropRow(label: "Project") {
@@ -680,17 +681,19 @@ struct PropRow<Content: View>: View {
 
 // MARK: - Drawer
 
-/// The details under the focused pane while panes are side by side: a strip
-/// with the essentials that unfolds into the full panel.
+/// A split pane's details when it's too narrow for the column: docked
+/// under the pane, a strip with the essentials that unfolds into the panel.
 struct DetailsDrawer: View {
     @Environment(AppModel.self) var model
     let id: String
+    let open: Bool
+    let toggle: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
             Rectangle().fill(T.line).frame(height: 1)
-            DrawerStrip(id: id)
-            if model.drawerOpen {
+            DrawerStrip(id: id, open: open, toggle: toggle)
+            if open {
                 Rectangle().fill(T.lineSoft).frame(height: 1)
                 PropertiesPanel(id: id, compact: true)
                     .frame(height: 248)
@@ -699,15 +702,16 @@ struct DetailsDrawer: View {
         }
         .background(T.panel)
         .clipped()
-        .animation(M.snappy, value: model.drawerOpen)
+        .animation(M.snappy, value: open)
     }
 }
 
 struct DrawerStrip: View {
     @Environment(AppModel.self) var model
     let id: String
+    let open: Bool
+    let toggle: () -> Void
     @StateObject private var hover = Box(false)
-
     var body: some View {
         let s = model.sessions.first { $0.id == id }
         HStack(spacing: 10) {
@@ -729,13 +733,13 @@ struct DrawerStrip: View {
             }
             Spacer(minLength: 4)
             Image(systemName: "chevron.up").font(.system(size: 9.5, weight: .bold)).foregroundStyle(hover.v ? T.text : T.text3)
-                .rotationEffect(.degrees(model.drawerOpen ? 180 : 0))
+                .rotationEffect(.degrees(open ? 180 : 0))
         }
         .padding(.horizontal, 14).frame(height: 32)
         .background(hover.v ? T.hover.opacity(0.6) : Color.clear)
         .contentShape(Rectangle())
-        .onTapGesture { withAnimation(M.snappy) { model.drawerOpen.toggle() } }
+        .onTapGesture(perform: toggle)
         .hoverBox(hover)
-        .help(model.drawerOpen ? "Fold the details" : "Unfold the details")
+        .help(open ? "Fold the details" : "Unfold the details")
     }
 }

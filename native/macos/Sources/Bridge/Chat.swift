@@ -16,14 +16,19 @@ struct ChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
-            SessionTabs(runId: id, session: session)
+            // Side by side, each pane carries its own header and tabs; the
+            // page keeps the chat stepper and the layout controls.
+            if model.isSplit {
+                splitHeader.transition(.opacity)
+            } else {
+                header.transition(.opacity)
+                SessionTabs(runId: id, session: session)
+            }
             HStack(spacing: 0) {
                 PaneArea()
                     .frame(maxWidth: .infinity)
-                // One pane: a trailing column. Side by side, the details dock
-                // under the focused pane instead (PaneView), so no pane
-                // gives up its width.
+                // One pane: a trailing column. Side by side, each pane has
+                // its own (PaneView).
                 if showsInspector && !model.isSplit {
                     HStack(spacing: 0) {
                         Rectangle().fill(T.line).frame(width: 1)
@@ -54,7 +59,7 @@ struct ChatView: View {
                            perform: { raw, _ in model.landDrop(raw, at: target, edge: .trailing) })
     }
 
-    var header: some View {
+    var stepper: some View {
         let order = model.chatOrder
         let index = order.firstIndex(of: id)
         let prev = index.flatMap { $0 > 0 ? order[$0 - 1] : nil }
@@ -68,6 +73,45 @@ struct ChatView: View {
             .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(T.raised.opacity(0.7)))
             .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(T.lineSoft, lineWidth: 1))
             if let index { Text(verbatim: "\(index + 1) of \(order.count)").font(T.ui(11.5)).foregroundStyle(T.text3).monospacedDigit().contentTransition(.numericText()) }
+        }
+    }
+
+    /// Panes side by side: every pane has its own header, so the page only
+    /// steps through chats (in the focused pane) and arranges the panes.
+    var splitHeader: some View {
+        let n = model.panes.count
+        let even = Set(model.panes.filter { !$0.collapsed }.map(\.weight)).count <= 1
+        return HStack(spacing: 10) {
+            stepper
+            Rectangle().fill(T.line).frame(width: 1, height: 18).padding(.horizontal, 2)
+            HStack(spacing: 6) {
+                Image(systemName: n >= 3 ? "rectangle.split.3x1" : "rectangle.split.2x1").font(.system(size: 12, weight: .medium))
+                Text(verbatim: "\(n) panes").font(T.ui(13, .medium)).contentTransition(.numericText())
+            }
+            .foregroundStyle(T.text2)
+            Text("Drag a session or tab onto a pane's edge to add one").font(T.ui(12)).foregroundStyle(T.text3).lineLimit(1)
+            Spacer(minLength: 12)
+            if !even {
+                Button { model.evenOutPanes() } label: { Label("Even Out", systemImage: "equal") }
+                    .buttonStyle(LButton())
+                    .transition(.scale.combined(with: .opacity))
+            }
+            if n < AppModel.maxPanes {
+                IconButton(icon: "rectangle.split.2x1", help: "Split right (⌘\\)") { model.splitRight() }
+            }
+            IconButton(icon: "rectangle", help: "Close other panes: back to one chat") { model.closeOtherPanes() }
+        }
+        .padding(.horizontal, 20)
+        .padding(.leading, model.sidebarHidden ? T.lightsInset : 0)
+        .frame(height: T.headerHeight)
+        .overlay(alignment: .bottom) { Rectangle().fill(T.line).frame(height: 1) }
+        .animation(M.snappy, value: even)
+        .animation(M.snappy, value: n)
+    }
+
+    var header: some View {
+        HStack(spacing: 10) {
+            stepper
             Rectangle().fill(T.line).frame(width: 1, height: 18).padding(.horizontal, 2)
             if let s = session, !s.isOrchestrator, let p = model.project(s.project), model.projects.count > 1 {
                 Button { model.projectFilter = p.id; model.navigate(.sessions) } label: { Text(p.name).font(T.ui(13.5)).foregroundStyle(T.text2) }.buttonStyle(.plain)
@@ -91,7 +135,6 @@ struct ChatView: View {
                 IconButton(icon: s.pinned ? "star.fill" : "star", help: s.pinned ? "Unpin" : "Pin to the sidebar") { Task { await model.setPinned(s.id, !s.pinned) } }
                 Menu {
                     Button("Split Right") { model.splitRight() }.keyboardShortcut("\\")
-                    if model.isSplit { Button("Close Pane") { model.closeFocusedPane() } }
                     Divider()
                     if !s.permalink.isEmpty { Button("Read the Slack Thread") { model.openThread(s.permalink) } }
                     SessionMenu(session: s, inChat: true)
@@ -99,7 +142,7 @@ struct ChatView: View {
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).frame(width: 32)
             }
             IconButton(icon: "sidebar.right", help: model.inspectorShown ? "Hide details (⌥⌘I)" : "Show details (⌥⌘I)") {
-                withAnimation(M.snappy) { model.inspectorShown.toggle() }
+                model.toggleDetails()
             }
         }
         .padding(.horizontal, 20)
@@ -139,11 +182,17 @@ struct SessionTabs: View {
     @Environment(AppModel.self) var model
     let runId: String
     let session: Session?
+    /// A split pane's own strip: its tab, not the page's, and compact.
+    var pane: Pane? = nil
+    /// Too narrow for labels: tabs other than the current one are icons.
+    var narrow = false
     @Namespace private var ns
+
+    var current: String { pane?.tab ?? model.chatTab }
 
     var body: some View {
         let webTabs = model.browserTabs[runId] ?? []
-        HStack(spacing: 4) {
+        HStack(spacing: pane == nil ? 4 : 2) {
             tab("chat", icon: "bubble.left", label: "Chat")
             tab("changes", icon: "plusminus", label: "Changes")
             if model.terminalTabs.contains(runId) {
@@ -151,19 +200,19 @@ struct SessionTabs: View {
                     .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .leading)))
             }
             ForEach(webTabs) { t in
-                WebSessionTab(page: model.web.page(for: t), on: model.chatTab == "web-\(t.id)", ns: ns,
-                              elsewhere: elsewhere("web-\(t.id)"),
+                WebSessionTab(page: model.web.page(for: t), on: current == "web-\(t.id)", ns: ns,
+                              elsewhere: elsewhere("web-\(t.id)"), compact: pane != nil, iconOnly: narrow && current != "web-\(t.id)",
                               close: { model.closeBrowser(runId, t.id) },
-                              action: { withAnimation(M.snappy) { model.showTab("web-\(t.id)", of: runId) } })
+                              action: { withAnimation(M.snappy) { model.showTab("web-\(t.id)", of: runId, in: pane?.id) } })
                     .onDrag { NSItemProvider(object: PanePayload.tab(runId, "web-\(t.id)") as NSString) }
                     .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .leading)))
             }
             newTabMenu
             Spacer()
         }
-        .padding(.horizontal, 16)
-        .padding(.leading, model.sidebarHidden ? T.lightsInset : 0)
-        .frame(height: 42)
+        .padding(.horizontal, pane == nil ? 16 : 8)
+        .padding(.leading, pane == nil && model.sidebarHidden ? T.lightsInset : 0)
+        .frame(height: pane == nil ? 42 : 34)
         .overlay(alignment: .bottom) { Rectangle().fill(T.line).frame(height: 1) }
         .animation(M.snappy, value: webTabs.map(\.id))
         .animation(M.snappy, value: model.terminalTabs.contains(runId))
@@ -172,13 +221,13 @@ struct SessionTabs: View {
     /// Shown in another pane: the tab says so with a dot, and clicking it
     /// focuses that pane.
     func elsewhere(_ key: String) -> Bool {
-        model.isSplit && model.chatTab != key && model.panes.contains { $0.run == runId && $0.tab == key }
+        model.isSplit && current != key && model.panes.contains { $0.run == runId && $0.tab == key && $0.id != pane?.id }
     }
 
     func tab(_ key: String, icon: String, label: String, close: (() -> Void)? = nil) -> some View {
-        let on = model.chatTab == key
-        return SessionTab(icon: icon, label: label, on: on, ns: ns, elsewhere: elsewhere(key), close: close) {
-            withAnimation(M.snappy) { model.showTab(key, of: runId) }
+        let on = current == key
+        return SessionTab(icon: icon, label: label, on: on, ns: ns, elsewhere: elsewhere(key), compact: pane != nil, iconOnly: narrow && !on, close: close) {
+            withAnimation(M.snappy) { model.showTab(key, of: runId, in: pane?.id) }
         }
         .onDrag { NSItemProvider(object: PanePayload.tab(runId, key) as NSString) }
         .help("Drag to the edge of the chat to open it side by side")
@@ -203,10 +252,10 @@ struct SessionTabs: View {
                 Button { model.splitRight() } label: { Label("Split Right", systemImage: "rectangle.split.2x1") }
             }
         } label: {
-            Image(systemName: "plus").font(.system(size: 11.5, weight: .semibold)).foregroundStyle(T.text2)
-                .frame(width: 28, height: 28)
+            Image(systemName: "plus").font(.system(size: pane == nil ? 11.5 : 10.5, weight: .semibold)).foregroundStyle(T.text2)
+                .frame(width: pane == nil ? 28 : 24, height: pane == nil ? 28 : 24)
         }
-        .menuStyle(.borderlessButton).menuIndicator(.hidden).frame(width: 32)
+        .menuStyle(.borderlessButton).menuIndicator(.hidden).frame(width: pane == nil ? 32 : 28)
         .help("Open a tab: a browser on this session's dev server, its PR or any page")
     }
 }
@@ -216,10 +265,12 @@ struct WebSessionTab: View {
     let on: Bool
     let ns: Namespace.ID
     var elsewhere = false
+    var compact = false
+    var iconOnly = false
     let close: () -> Void
     let action: () -> Void
     var body: some View {
-        SessionTab(icon: page.loading ? "arrow.triangle.2.circlepath" : "globe", label: page.label, on: on, ns: ns, elsewhere: elsewhere, close: close, action: action)
+        SessionTab(icon: page.loading ? "arrow.triangle.2.circlepath" : "globe", label: page.label, on: on, ns: ns, elsewhere: elsewhere, compact: compact, iconOnly: iconOnly, close: close, action: action)
     }
 }
 
@@ -229,18 +280,25 @@ struct SessionTab: View {
     let on: Bool
     let ns: Namespace.ID
     var elsewhere = false
+    /// A split pane's strip: shorter tabs and labels.
+    var compact = false
+    var iconOnly = false
     var close: (() -> Void)? = nil
     let action: () -> Void
     @StateObject private var hover = Box(false)
 
     var body: some View {
-        HStack(spacing: 7) {
-            Image(systemName: icon).font(.system(size: 11, weight: .medium))
+        let limit = compact ? 18 : 26
+        HStack(spacing: compact ? 6 : 7) {
+            Image(systemName: icon).font(.system(size: compact ? 10.5 : 11, weight: .medium))
                 .overlay(alignment: .topTrailing) {
                     if elsewhere { Circle().fill(T.accent).frame(width: 5, height: 5).offset(x: 3, y: -2).transition(.scale) }
                 }
-            Text(label.count > 26 ? label.prefix(25) + "…" : label).font(T.ui(12.5, on ? .medium : .regular)).lineLimit(1).fixedSize()
-            if let close {
+            if !iconOnly {
+                Text(label.count > limit ? label.prefix(limit - 1) + "…" : label).font(T.ui(compact ? 12 : 12.5, on ? .medium : .regular)).lineLimit(1).fixedSize()
+                    .transition(.opacity)
+            }
+            if let close, !iconOnly {
                 Button(action: close) {
                     Image(systemName: "xmark").font(.system(size: 8.5, weight: .bold)).foregroundStyle(T.text2)
                         .frame(width: 16, height: 16)
@@ -252,8 +310,8 @@ struct SessionTab: View {
             }
         }
         .foregroundStyle(on ? T.text : T.text2)
-        .padding(.leading, 12).padding(.trailing, close == nil ? 12 : 7)
-        .frame(height: 30)
+        .padding(.leading, compact ? (iconOnly ? 9 : 10) : 12).padding(.trailing, close == nil || iconOnly ? (compact ? (iconOnly ? 9 : 10) : 12) : (compact ? 5 : 7))
+        .frame(height: compact ? 26 : 30)
         .background {
             if on {
                 RoundedRectangle(cornerRadius: 8, style: .continuous).fill(T.selected)
