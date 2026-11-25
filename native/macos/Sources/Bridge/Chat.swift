@@ -15,12 +15,20 @@ struct ChatView: View {
             header
             HStack(spacing: 0) {
                 VStack(spacing: 0) {
-                    Transcript(run: run, runId: id)
-                    Composer(runId: id)
+                    if model.chatTab == "changes" {
+                        ChangesView(runId: id)
+                    } else {
+                        Transcript(run: run, runId: id)
+                        Composer(runId: id)
+                    }
                 }
                 Rectangle().fill(T.line).frame(width: 1)
                 PropertiesPanel(id: id).frame(width: 284)
             }
+        }
+        .onAppear {
+            model.chatTab = "chat"
+            Task { await model.loadCommands(for: id) }
         }
     }
 
@@ -36,6 +44,20 @@ struct ChatView: View {
                 Text(run["who"].nonEmpty ?? id).font(T.ui(13, .medium))
             }
             Spacer()
+            Picker("", selection: Binding(get: { model.chatTab }, set: { model.chatTab = $0 })) {
+                Text("Chat").tag("chat")
+                Text("Changes").tag("changes")
+            }
+            .pickerStyle(.segmented).frame(width: 150).controlSize(.small)
+            if let s = session, !s.isOrchestrator {
+                Menu {
+                    ForEach(AgentKind.allCases.filter { model.installed($0) }) { a in
+                        Button("Ask \(a.label)") { Task { await model.secondOpinion(id, agent: a) } }
+                    }
+                } label: { Image(systemName: "person.2.wave.2").font(.system(size: 12.5)).foregroundStyle(T.text2).frame(width: 26, height: 26) }
+                .menuStyle(.borderlessButton).menuIndicator(.hidden).frame(width: 30)
+                .help("Second opinion: another agent reviews this session, read-only, in its own worktree")
+            }
             if let s = session {
                 if !s.permalink.isEmpty { IconButton(icon: "number", help: "Read the Slack thread") { model.openThread(s.permalink) } }
                 IconButton(icon: s.pinned ? "star.fill" : "star", help: s.pinned ? "Unpin" : "Pin to the sidebar") { Task { await model.setPinned(s.id, !s.pinned) } }
@@ -241,6 +263,10 @@ struct ToolView: View {
         let name = step["name"].string
         let result = step["result"].string
         let failed = step["ok"] == .bool(false)
+        let raw = (try? JSONDecoder().decode(JSON.self, from: Data(step["raw"].string.utf8))) ?? .null
+        if name == "TodoWrite" || name == "update_plan", !raw.isNull {
+            TodoList(raw: raw)
+        } else {
         VStack(alignment: .leading, spacing: 0) {
             Button { if !result.isEmpty { open.v.toggle() } } label: {
                 HStack(spacing: 8) {
@@ -261,6 +287,9 @@ struct ToolView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            if ["Edit", "MultiEdit", "Write"].contains(name), !raw.isNull {
+                EditPreview(raw: raw).padding(.horizontal, 8).padding(.bottom, 8)
+            }
             if open.v {
                 Hairline()
                 ScrollView {
@@ -273,6 +302,7 @@ struct ToolView: View {
         .background(RoundedRectangle(cornerRadius: 7).fill(hover.v ? T.hover.opacity(0.5) : T.raised.opacity(0.45)))
         .overlay(RoundedRectangle(cornerRadius: 7).stroke(T.lineSoft, lineWidth: 1))
         .onHover { hover.v = $0 }
+        }
     }
 
     static func display(_ name: String) -> String {
@@ -512,6 +542,10 @@ struct Composer: View {
     var body: some View {
         let live = model.sessions.first { $0.id == runId }.map(model.isLive) ?? false
         VStack(alignment: .leading, spacing: 0) {
+            if text.v.hasPrefix("/") && !text.v.contains(" ") && !text.v.contains("\n") {
+                SlashMenu(query: String(text.v.dropFirst())) { name in text.v = "/\(name) " }
+                    .padding(.horizontal, 8).padding(.top, 8)
+            }
             ZStack(alignment: .topLeading) {
                 if text.v.isEmpty {
                     Text(live ? "Queue a follow-up for when this turn ends…" : "Reply to continue this session…")
@@ -527,11 +561,25 @@ struct Composer: View {
             }
             .padding(.horizontal, 10).padding(.top, 10)
             HStack(spacing: 4) {
-                AgentPicker(runId: runId, current: AgentKind.of(value("agent").string))
-                ForEach(JobOption.all.filter { $0.key != "model" || AgentKind.of(value("agent").string) == .claude }, id: \.key) { opt in optionMenu(opt) }
+                let agent = AgentKind.of(value("agent").string)
+                AgentPicker(runId: runId, current: agent)
+                ModelPicker(runId: runId, agent: agent, current: value(agent == .claude ? "model" : "agentModel").string)
+                ForEach(JobOption.all.filter { $0.key != "model" && ($0.key != "effort" || agent == .claude || agent == .codex) }, id: \.key) { opt in optionMenu(opt) }
                 contextToggle
                 repoButton
                 Spacer()
+                ContextMeter(run: model.openRun)
+                if live && !text.v.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Button {
+                        let t = text.v
+                        sending.v = true
+                        Task {
+                            if await model.stopAndSend(t, to: runId), text.v == t { text.v = "" }
+                            sending.v = false
+                        }
+                    } label: { Label("Stop & send", systemImage: "bolt.fill").font(T.ui(11.5, .medium)) }
+                    .buttonStyle(LButton()).help("Interrupt the running turn and send this now (⌘↩ queues it instead)")
+                }
                 Text("⌘↩").font(T.ui(11)).foregroundStyle(T.text3)
                 Button {
                     send()

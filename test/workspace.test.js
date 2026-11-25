@@ -197,3 +197,29 @@ test("a handoff briefs only what happened since the agent last worked, ignoring 
   assert.match(brief, /Branch: alex\/csv/);
   assert.strictEqual(handoff({ ...run, messages: run.messages.slice(0, 4) }, "codex"), "", "no handoff to the agent that spoke last");
 });
+
+test("changes: list, diff and commit a session's working folder; slash commands are discoverable", async () => {
+  const repo = path.join(tmp, "changes-repo");
+  fs.mkdirSync(repo);
+  const g = (...a) => execFileSync("git", a, { cwd: repo, stdio: "ignore" });
+  g("init", "-q", "-b", "main");
+  fs.writeFileSync(path.join(repo, "a.txt"), "one\n");
+  g("add", ".");
+  g("-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-qm", "init");
+  g("config", "user.email", "t@t");
+  g("config", "user.name", "t");
+  g("config", "commit.gpgsign", "false");
+  fs.writeFileSync(path.join(repo, "a.txt"), "one\ntwo\n");
+  fs.writeFileSync(path.join(repo, "new.txt"), "fresh\n");
+  await post(`/api/runs/${RUN_ID}/opts`, { opts: { workdir: repo } });
+  const st = await get(`/api/runs/${RUN_ID}/changes`);
+  assert.deepStrictEqual(st.files.map((f) => `${f.kind}:${f.path}`).sort(), ["added:new.txt", "modified:a.txt"]);
+  assert.match((await get(`/api/runs/${RUN_ID}/diff?file=a.txt`)).diff, /^\+two$/m);
+  assert.match((await get(`/api/runs/${RUN_ID}/diff?file=new.txt`)).diff, /^\+fresh$/m);
+  assert.strictEqual((await get(`/api/runs/${RUN_ID}/diff?file=${encodeURIComponent("../../etc/passwd")}`)).status, 400);
+  const after = await post(`/api/runs/${RUN_ID}/commit`, { message: "two lines" });
+  assert.deepStrictEqual(after.files, []);
+  assert.strictEqual(after.commits[0].subject, "two lines");
+  const { commands } = await get(`/api/commands?runId=${RUN_ID}`);
+  assert.ok(commands.some((c) => c.name === "compact"));
+});

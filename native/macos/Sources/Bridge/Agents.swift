@@ -63,7 +63,7 @@ struct AgentPicker: View {
 
     var body: some View {
         Menu {
-            ForEach(AgentKind.allCases) { a in
+            ForEach(AgentKind.allCases.filter { model.installed($0) || $0 == current }) { a in
                 Button {
                     Task { await model.setOpts(runId, ["agent": a.rawValue]) }
                     if a != current && model.openRun["messages"].array.contains(where: { $0["role"].string == "assistant" }) {
@@ -334,5 +334,84 @@ struct LocalStat: View {
             .font(T.ui(12, .medium)).foregroundStyle(T.text2).monospacedDigit()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+
+// MARK: - Model picker
+
+extension AppModel {
+    func models(for agent: AgentKind) -> [JSON] {
+        agentCatalog["agents"].array.first { $0["id"].string == agent.rawValue }?["models"].array ?? []
+    }
+    func installed(_ agent: AgentKind) -> Bool {
+        let a = agentCatalog["agents"].array.first { $0["id"].string == agent.rawValue }
+        return a.map { $0["installed"].bool } ?? (agent == .claude)
+    }
+}
+
+/// The model chip: every model the session's agent offers, searchable (Cursor
+/// and Devin list hundreds). Claude's goes in `model`, the others' in `agentModel`.
+struct ModelPicker: View {
+    @Environment(AppModel.self) var model
+    let runId: String
+    let agent: AgentKind
+    let current: String
+    @StateObject private var open = Box(false)
+    @StateObject private var query = Box("")
+
+    var key: String { agent == .claude ? "model" : "agentModel" }
+
+    var body: some View {
+        let all = model.models(for: agent)
+        let name = all.first { $0["id"].string == current }?["label"].string ?? (current.isEmpty ? "Default" : current)
+        Button { open.v.toggle() } label: { ComposerChip(icon: "cpu", text: name) }
+            .buttonStyle(.plain)
+            .help("\(agent.label) model")
+            .popover(isPresented: $open.v, arrowEdge: .top) {
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "magnifyingglass").foregroundStyle(T.text3)
+                        TextField("Search \(all.count) \(agent.label) models", text: $query.v).textFieldStyle(.plain).font(T.ui(12.5))
+                    }
+                    .padding(10)
+                    Hairline()
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            if agent != .claude { row(id: "", label: "Default", hint: "Whatever \(agent.label) is set to") }
+                            ForEach(filtered(all), id: \.self) { m in row(id: m["id"].string, label: m["label"].string, hint: m["hint"].string.isEmpty ? m["id"].string : m["hint"].string) }
+                        }
+                        .padding(4)
+                    }
+                    .frame(height: min(360, CGFloat(filtered(all).count + 1) * 40 + 8))
+                }
+                .frame(width: 340)
+                .background(T.raised)
+            }
+    }
+
+    func filtered(_ all: [JSON]) -> [JSON] {
+        let q = query.v.lowercased()
+        let hits = q.isEmpty ? all : all.filter { "\($0["id"].string) \($0["label"].string)".lowercased().contains(q) }
+        return Array(hits.prefix(200))
+    }
+
+    func row(id: String, label: String, hint: String) -> some View {
+        Button {
+            open.v = false
+            Task { await model.setOpts(runId, [key: id]) }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "checkmark").font(.system(size: 10, weight: .bold)).foregroundStyle(T.accent).opacity(id == current ? 1 : 0)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(label).font(T.ui(12.5)).foregroundStyle(T.text).lineLimit(1)
+                    Text(hint).font(T.ui(10.5)).foregroundStyle(T.text3).lineLimit(1)
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 8).frame(height: 38)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
