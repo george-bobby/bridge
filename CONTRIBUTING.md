@@ -28,9 +28,12 @@ To check UI changes without screen-recording permission, `BRIDGE_SNAPSHOT_DIR=/t
 
 ## Before a pull request
 
+- `npm run lint` passes (syntax, JSON, no npm dependencies)
 - `npm test` passes (it uses a scratch data dir and the stub agent, so it is free and touches nothing of yours)
 - `cd native/macos && swift build -c release` builds cleanly
 - UI changes: include a before/after from the snapshot hook, taken against the demo
+
+CI (`.github/workflows/ci.yml`) runs the same checks on every pull request, plus shellcheck, actionlint and the tests on several Node versions.
 
 ## Conventions
 
