@@ -19,7 +19,8 @@
  *
  * Follow-up turns: an "[harness] <name> answered" message writes a
  * ready-for-review report; anything else repeats the brief's directives.
- * Every argv is appended to $STUB_LOG, so tests can check the flags.
+ * Every argv and every prompt is appended to $STUB_LOG, so tests can check
+ * the flags and what each turn was told.
  */
 
 const fs = require("fs");
@@ -33,8 +34,10 @@ let waitingAnswer = null;
 function directives(text) {
   const d = {};
   for (const m of String(text).matchAll(/stub:([a-z-]+)(?:=([^\n]*))?/g)) {
-    if (d[m[1]] === undefined) d[m[1]] = m[2] === undefined ? true : m[2].trim();
-    else d[m[1]] = [].concat(d[m[1]], m[2] === undefined ? true : m[2].trim());
+    const v = m[2] === undefined ? true : m[2].trim();
+    if (d[m[1]] === undefined) d[m[1]] = v;
+    // A brief inlined into the prompt repeats its directives: count each once.
+    else if (![].concat(d[m[1]]).includes(v)) d[m[1]] = [].concat(d[m[1]], v);
   }
   return d;
 }
@@ -152,6 +155,7 @@ process.stdin.on("data", (c) => {
       r(m.response.response);
     } else if (m.type === "user") {
       const content = typeof m.message.content === "string" ? m.message.content : JSON.stringify(m.message.content);
+      if (process.env.STUB_LOG) fs.appendFileSync(process.env.STUB_LOG, JSON.stringify({ prompt: content, env: { SB_ROLE: process.env.SB_ROLE, SB_TASK_ID: process.env.SB_TASK_ID } }) + "\n");
       busy = busy.then(() => turn(content));
     }
   }

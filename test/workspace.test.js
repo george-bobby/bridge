@@ -25,6 +25,7 @@ const ENV = {
   TARGET_REPO: tmp,
   LINEAR_API_KEY: "",
   CODEX_BIN: path.join(tmp, "fake-codex"),
+  CLAUDE_CONFIG_DIR: path.join(tmp, "claude-home"),
 };
 
 const RUN_ID = "1700000001.000100";
