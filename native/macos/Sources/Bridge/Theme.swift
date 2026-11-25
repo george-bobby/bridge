@@ -319,7 +319,8 @@ struct IconButton: View {
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(hover.v ? T.text : T.text2)
                 .rotationEffect(.degrees(spinning ? 360 : 0))
-                .animation(spinning ? .linear(duration: 0.9).repeatForever(autoreverses: false) : .default, value: spinning)
+                // Stop dead rather than unwinding the spin backwards.
+                .animation(spinning ? .linear(duration: 0.9).repeatForever(autoreverses: false) : nil, value: spinning)
                 .frame(width: 28, height: 28)
                 .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(hover.v ? T.hover : .clear))
                 .contentShape(Rectangle())
@@ -360,7 +361,7 @@ private struct LButtonBody<Label: View>: View {
             .opacity(enabled ? (pressed ? 0.85 : 1) : 0.45)
             .contentShape(Rectangle())
             .hoverBox(hover)
-            .animation(M.pop, value: pressed)
+            .animation(pressed ? .easeOut(duration: 0.08) : M.pop, value: pressed)
     }
 }
 
@@ -408,28 +409,45 @@ struct Hairline: View {
 
 // MARK: - Motion
 
+//
+// Springs throughout, so an animation interrupted mid-flight (hover out before
+// hover in finished, a second click on a tab) carries its velocity instead of
+// restarting along a fixed curve.
+
 enum M {
-    static let hover = Animation.easeOut(duration: 0.14)
-    static let snappy = Animation.snappy(duration: 0.3, extraBounce: 0.02)
-    static let page = Animation.smooth(duration: 0.24)
-    static let pop = Animation.spring(response: 0.3, dampingFraction: 0.84)
+    /// Hover tints: quick and critically damped, no overshoot.
+    static let hover = Animation.spring(response: 0.18, dampingFraction: 1)
+    /// Layout changes (rows, tabs, panels, sidebar): settles in ~0.35s, a hint of give.
+    static let snappy = Animation.spring(response: 0.34, dampingFraction: 0.86)
+    /// Page and tab cross-fades: no bounce, slightly slower than layout.
+    static let page = Animation.spring(response: 0.3, dampingFraction: 1)
+    /// Small pops (press, badges, toasts, popovers): lively with a touch of overshoot.
+    static let pop = Animation.spring(response: 0.28, dampingFraction: 0.78)
+    /// Leaving content gets out of the way faster than new content arrives.
+    static let exit = Animation.easeOut(duration: 0.12)
 }
 
 extension AnyTransition {
+    /// Route changes: the new page eases up a few points as it fades in; the
+    /// old one fades out quickly so two heavy pages overlap only briefly.
     static var page: AnyTransition {
-        .asymmetric(insertion: .opacity.combined(with: .offset(y: 6)), removal: .opacity)
+        .asymmetric(insertion: .opacity.combined(with: .offset(y: 4)),
+                    removal: .opacity.animation(M.exit))
     }
+    /// Popovers and sheets: grow from just under full size at the top edge.
     static var panel: AnyTransition {
-        .opacity.combined(with: .scale(scale: 0.96, anchor: .top))
+        .asymmetric(insertion: .opacity.combined(with: .scale(scale: 0.97, anchor: .top)).combined(with: .offset(y: -6)),
+                    removal: .opacity.combined(with: .scale(scale: 0.98, anchor: .top)).animation(M.exit))
     }
 }
 
 extension View {
     func hoverBox(_ box: Box<Bool>) -> some View {
-        onHover { h in withAnimation(M.hover) { box.v = h } }
+        onHover { h in if box.v != h { withAnimation(M.hover) { box.v = h } } }
     }
 
-    func rise(_ index: Int) -> some View { modifier(Rise(delay: Double(index) * 0.04)) }
+    /// Staggered entrance; the stagger caps out so long lists don't trickle in for seconds.
+    func rise(_ index: Int) -> some View { modifier(Rise(delay: Double(min(max(index, 0), 10)) * 0.035)) }
 
     func shimmer(_ on: Bool = true) -> some View { modifier(Shimmer(on: on)) }
 
@@ -450,8 +468,8 @@ struct Rise: ViewModifier {
     func body(content: Content) -> some View {
         content
             .opacity(shown.v ? 1 : 0)
-            .offset(y: shown.v ? 0 : 10)
-            .onAppear { withAnimation(M.snappy.delay(delay)) { shown.v = true } }
+            .offset(y: shown.v ? 0 : 8)
+            .onAppear { if !shown.v { withAnimation(M.snappy.delay(delay)) { shown.v = true } } }
     }
 }
 
@@ -471,7 +489,7 @@ struct Shimmer: ViewModifier {
                     .allowsHitTesting(false)
                 }
             }
-            .onAppear { withAnimation(.linear(duration: 1.5).repeatForever(autoreverses: false)) { phase.v = true } }
+            .onAppear { if !phase.v { withAnimation(.linear(duration: 1.5).repeatForever(autoreverses: false)) { phase.v = true } } }
     }
 }
 
@@ -582,6 +600,7 @@ struct Pressable: ButtonStyle {
         configuration.label
             .scaleEffect(configuration.isPressed ? scale : 1)
             .opacity(configuration.isPressed ? 0.85 : 1)
-            .animation(M.pop, value: configuration.isPressed)
+            // Press down immediately, spring back on release.
+            .animation(configuration.isPressed ? .easeOut(duration: 0.08) : M.pop, value: configuration.isPressed)
     }
 }

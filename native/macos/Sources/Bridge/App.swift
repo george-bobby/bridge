@@ -282,7 +282,7 @@ struct ConnectingView: View {
         ZStack {
             T.bg
             VStack(spacing: 14) {
-                Logo(size: 40).modifier(Breathe())
+                Logo(size: 56).modifier(Breathe()).padding(.bottom, 4)
                 Text("Starting Bridge…").font(T.ui(13, .medium)).foregroundStyle(T.text2)
                 ProgressView().controlSize(.small)
                 if !model.serverError.isEmpty {
@@ -298,28 +298,60 @@ struct Breathe: ViewModifier {
     @StateObject private var on = Box(false)
     func body(content: Content) -> some View {
         content
-            .scaleEffect(on.v ? 1.06 : 0.96)
-            .shadow(color: T.accent.opacity(on.v ? 0.55 : 0.15), radius: on.v ? 18 : 6)
-            .onAppear { withAnimation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true)) { on.v = true } }
+            .scaleEffect(on.v ? 1.03 : 0.97)
+            .shadow(color: T.accent.opacity(on.v ? 0.5 : 0.18), radius: on.v ? 20 : 8, y: 4)
+            .onAppear { if !on.v { withAnimation(.easeInOut(duration: 1.4).repeatForever(autoreverses: true)) { on.v = true } } }
     }
 }
 
+/// The app icon's squircle and bridge mark (scripts/make-icon.swift draws the
+/// same geometry into icon.png).
 struct Logo: View {
     var size: CGFloat = 20
     var body: some View {
-        RoundedRectangle(cornerRadius: size * 0.28)
-            .fill(LinearGradient(colors: [T.accent, T.purple], startPoint: .topLeading, endPoint: .bottomTrailing))
-            .overlay(
-                Path { p in
-                    p.move(to: CGPoint(x: size * 0.22, y: size * 0.66))
-                    p.addLine(to: CGPoint(x: size * 0.40, y: size * 0.36))
-                    p.addLine(to: CGPoint(x: size * 0.54, y: size * 0.56))
-                    p.addLine(to: CGPoint(x: size * 0.64, y: size * 0.44))
-                    p.addLine(to: CGPoint(x: size * 0.80, y: size * 0.64))
-                }
-                .stroke(.white, style: StrokeStyle(lineWidth: size * 0.085, lineCap: .round, lineJoin: .round))
-            )
-            .frame(width: size, height: size)
+        let shape = RoundedRectangle(cornerRadius: size * 0.225, style: .continuous)
+        // Heavier strokes and no hangers at sidebar sizes, as the icon does at 16/32px.
+        let small = size < 24
+        ZStack {
+            shape.fill(LinearGradient(stops: [.init(color: Color(red: 0.54, green: 0.56, blue: 0.97), location: 0),
+                                              .init(color: T.accent, location: 0.38),
+                                              .init(color: Color(red: 0.23, green: 0.17, blue: 0.61), location: 0.78),
+                                              .init(color: Color(red: 0.14, green: 0.09, blue: 0.37), location: 1)],
+                                      startPoint: UnitPoint(x: 0.15, y: 0), endPoint: UnitPoint(x: 0.85, y: 1)))
+            shape.fill(RadialGradient(colors: [.white.opacity(0.26), .clear], center: UnitPoint(x: 0.5, y: -0.1), startRadius: 0, endRadius: size * 0.85))
+            BridgeMark(weight: small ? 1.35 : 1, hangers: !small)
+                .scale(small ? 1.15 : 1, anchor: UnitPoint(x: 0.5, y: 0.55))
+                .fill(LinearGradient(colors: [.white, Color(red: 0.89, green: 0.89, blue: 1)], startPoint: .top, endPoint: .bottom))
+                .shadow(color: Color(red: 0.07, green: 0.04, blue: 0.25).opacity(0.45), radius: size * 0.03, y: size * 0.015)
+        }
+        .overlay(shape.strokeBorder(LinearGradient(colors: [.white.opacity(0.35), .white.opacity(0.04), .black.opacity(0.15)], startPoint: .top, endPoint: .bottom), lineWidth: max(0.5, size * 0.012)))
+        .frame(width: size, height: size)
+    }
+}
+
+/// Arch, deck, piers and hangers in unit space across the icon body.
+struct BridgeMark: Shape {
+    var weight: CGFloat = 1
+    var hangers = true
+    func path(in r: CGRect) -> Path {
+        let w = r.width
+        func U(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: r.minX + x * w, y: r.minY + y * r.height) }
+        let deckY: CGFloat = 0.615, archR: CGFloat = 0.255, stroke = 0.068 * weight * w
+        var out = Path()
+        func add(_ width: CGFloat, _ build: (inout Path) -> Void) {
+            var p = Path(); build(&p)
+            out.addPath(p.strokedPath(StrokeStyle(lineWidth: width, lineCap: .round, lineJoin: .round)))
+        }
+        add(stroke) { $0.addArc(center: U(0.5, deckY), radius: archR * w, startAngle: .degrees(180), endAngle: .degrees(0), clockwise: false) }
+        add(stroke) { $0.move(to: U(0.17, deckY)); $0.addLine(to: U(0.83, deckY)) }
+        for x in [0.5 - archR, 0.5 + archR] { add(stroke) { $0.move(to: U(x, deckY)); $0.addLine(to: U(x, 0.76)) } }
+        if hangers {
+            for dx: CGFloat in [-0.125, 0, 0.125] {
+                let top = deckY - (archR * archR - dx * dx).squareRoot()
+                add(0.03 * weight * w) { $0.move(to: U(0.5 + dx, top)); $0.addLine(to: U(0.5 + dx, deckY)) }
+            }
+        }
+        return out
     }
 }
 
