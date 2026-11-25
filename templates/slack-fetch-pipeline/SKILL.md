@@ -1,6 +1,6 @@
 ---
 name: slack-fetch-pipeline
-description: Turn one Slack thread about {{PRODUCT_NAME}} into shipped work, when {{SLACK_USER_NAME}} hands it over from the slack-bridge dashboard or with "/slack-fetch-pipeline <slack-thread-url>". Reads the thread -> root-causes it to a true/false-positive verdict (code, read-only prod, logs) -> drafts a Linear ticket in team {{LINEAR_TEAM}} -> builds in a fresh worktree (or plans big work) -> verifies -> opens the PR on {{GITHUB_REPO}} -> waits for the review bots -> /resolve -> folds thread follow-ups into the same PR -> drafts the Slack reply. Never started by a timer.
+description: Turn one Slack thread about {{PRODUCT_NAME}} into shipped work, when {{SLACK_USER_NAME}} hands it over from the bridge dashboard or with "/slack-fetch-pipeline <slack-thread-url>". Reads the thread -> root-causes it to a true/false-positive verdict (code, read-only prod, logs) -> drafts a Linear ticket in team {{LINEAR_TEAM}} -> builds in a fresh worktree (or plans big work) -> verifies -> opens the PR on {{GITHUB_REPO}} -> waits for the review bots -> /resolve -> folds thread follow-ups into the same PR -> drafts the Slack reply. Never started by a timer.
 argument-hint: <slack-thread-url | {json from the dashboard}>
 ---
 
@@ -16,7 +16,7 @@ it points to. This file is the generic version. For repo-specific commands
 `templates.local/slack-fetch-pipeline/SKILL.md`, which is used instead and never
 committed.
 
-Under the slack-bridge harness (`echo ${SB_GUARD:-0}` prints `1`) your worker
+Under the bridge harness (`echo ${SB_GUARD:-0}` prints `1`) your worker
 instructions also apply: the report contract, safety rails, `bin/sb declare`.
 
 ## Argument

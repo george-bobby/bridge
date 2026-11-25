@@ -1,14 +1,20 @@
-# Slack Bridge
+# Bridge
 
-A local dashboard that runs Claude Code sessions for you: hand it a Slack
-thread or a task, and it does the work in its own git worktree, opens the PR,
-and stops to ask you only where a decision is yours.
+A local command center for Claude Code: a native macOS app (or a browser tab)
+where every session, PR, Linear issue and Slack thread you have in flight sits
+on one screen. Hand it a Slack thread or a task, and a headless Claude worker
+does the work in its own git worktree, opens the PR, and stops to ask you only
+where a decision is yours.
 
 - **Slack threads.** Paste a thread link. A session reads it, root-causes it,
   drafts a Linear ticket, builds, opens a PR, waits for review bots, resolves
   comments, and drafts the reply.
 - **Tasks.** Type what you want. The orchestrator writes a brief and spawns a
   worker for it.
+- **Overview, Board, Chats, Pull requests, Linear.** Five views in the top bar
+  (`1`-`5` or `⌘1`-`⌘5`). The Board is a Kanban of every session; PRs and Linear
+  are live from `gh` and your Linear API key, cross-linked to the sessions
+  working on them.
 - **Nothing runs on its own.** No poller, no timer, no Slack app or token.
   Slack and Linear go through the connectors your Claude session already has.
 
@@ -22,6 +28,11 @@ cp .env.example .env      # fill it in (every key is described there)
 npm start
 open http://localhost:4319
 ```
+
+For the native app, run `npm run app` once. It builds `Bridge.app` with
+`swiftc` (Xcode command line tools, nothing else), copies it to
+`~/Applications` and opens it. Rebuild it after moving the repo, because the
+path is baked in.
 
 `npm start` renders the skill, links it into `~/.claude/skills/`, and runs
 the dashboard in the background under launchd, so it comes back after a login.
@@ -75,6 +86,58 @@ until a slot frees.
 **Restarts.** Workers die with the server. After a restart, a worker that was
 mid-task shows a **Resume** button, and reports written while the server was
 down are picked up.
+
+## Workspace views
+
+**Overview** (`1`). Tiles for running sessions, what needs you, open PRs and how
+many need attention, reviews asked of you, Linear in progress, and today's
+spend. Below them: what needs you, what's running, dev servers, Slack threads,
+your PRs ranked by attention, and your Linear issues.
+
+**Board** (`2`). Every session as a card in **Backlog**, **In progress**,
+**Needs you**, **In review** and **Done**. A card follows its session: running
+means In progress, a question or a stalled worker means Needs you, an open PR
+means In review, and a merged or closed PR means Done. Drag a card to pin it to
+a column; the card shows **pinned**, and clicking that, or dropping the card back
+where it would land on its own, lets it follow the session again. Moving a
+card isn't activity, so it never marks a chat unread. The box at the top of
+Backlog starts a new task directly (`⌘↵`).
+
+**Pull requests** (`4`). Your open PRs (failing checks, changes requested and
+conflicts first), reviews requested of you, and what merged in the last 14
+days, with check and review state, diff size, linked Linear key and any dev
+server running in the PR's worktree. **Fix CI**, **Resolve comments**, **Fix
+conflicts** and **Review** ask the orchestrator to spawn a worker for it.
+
+**Linear** (`5`). Issues assigned to you, grouped by state, with their PRs.
+**Start session** spawns a worker on the issue in a worktree on Linear's branch
+name, with the issue text as its brief. Needs `LINEAR_API_KEY` in `.env`. The
+key stays in the server and is removed from the environment sessions inherit.
+
+**Dev servers.** Ports your processes listen on (node, python, bun and the
+like) are matched to the worktree they run in, and appear as `:3000` chips on
+the session's card and the PR's row.
+
+**Search** (`⌘K`). Commands, views, chats, and full-text search across every
+transcript.
+
+**`.worktreeinclude`.** A file at the target repo's root, in .gitignore
+syntax, listing untracked files a new worktree should get from the main
+checkout (`.env`, local certs). Each worker's worktree gets copies.
+
+## The native app
+
+`Bridge.app` is a WKWebView around the dashboard, plus:
+
+- a hidden title bar, so the top bar is the window chrome and drags it
+- a Dock badge counting sessions waiting on you
+- native notifications for asks and outcomes (click to jump to the chat)
+- a menu bar: `⌘1`-`⌘5` views, `⌘N` new task, `⌘L` paste a Slack thread,
+  `⌘K` search, `⌘O` orchestrator, `⌘⇧I` inbox, `⌘,` settings, `⌘R` reload
+- external links open in your browser
+
+The server stays under launchd, so closing or quitting the app never stops a
+worker. If the dashboard isn't running, the app starts it with `npm start`.
 
 ## Safety
 
@@ -141,12 +204,15 @@ instructions.
 
 ```
 index.js            dashboard server (Node stdlib only)
-lib/                env, store, jobs (sessions), harness (watcher), tasks, policy, memory
+lib/                env, store, jobs (sessions), harness (watcher), tasks, policy, memory,
+                    sources (GitHub PRs, Linear issues, dev-server ports)
+native/macos/       Bridge.swift, the native app (scripts/build-app.sh builds it)
 bin/sb              harness CLI
 harness/            worker.md, orchestrator.md, hooks/guard.js
 templates/          the pipeline skill, rendered with values from .env
-public/             dashboard UI (vendored Milkdown editor in vendor/)
-scripts/            install.sh, emit.sh (run narration), launchd template
+public/             dashboard UI: app.js (chats), harness.js (inbox, tasks), workspace.js
+                    (overview, board, PRs, Linear); vendored Milkdown editor in vendor/
+scripts/            install.sh, build-app.sh, emit.sh (run narration), launchd template
 test/               npm test: policy, report parsing, end-to-end with a stub agent
 data/               runtime state (gitignored)
 ```

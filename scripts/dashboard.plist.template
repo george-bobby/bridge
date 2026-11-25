@@ -36,7 +36,7 @@
        `launchctl print` and stays pinned to whatever install.sh saw. -->
   <key>EnvironmentVariables</key>
   <dict>
-    <key>SLACK_BRIDGE_PORT</key>
+    <key>BRIDGE_PORT</key>
     <string>__PORT__</string>
   </dict>
 
