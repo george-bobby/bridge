@@ -6,16 +6,25 @@ import UniformTypeIdentifiers
 //
 // The chat page is a row of panes. Each pane shows one tab of one session
 // (its chat, Changes, Terminal or a browser tab); one pane is today's single
-// chat. The focused pane is the route's session and `model.chatTab`, so the
-// header, the tab strip and the details panel all follow focus. No two panes
-// show the same (session, tab): a web view or a terminal can only live in one
-// place, and two composers on one chat would only confuse.
+// chat, with the page header, tab strip and details column. Side by side,
+// every pane is self-contained: its own header (title, tabs, details, menu,
+// minimize, close) and its own details (a column when it's wide, a drawer
+// otherwise). The focused pane is the route's session and `model.chatTab`,
+// so shortcuts act on it. No two panes show the same (session, tab): a web
+// view or a terminal can only live in one place, and two composers on one
+// chat would only confuse.
 
 struct Pane: Identifiable, Hashable {
     let id = UUID().uuidString
     var run: String
     var tab = "chat"
     var weight: CGFloat = 1
+    /// Side by side: this pane's details are open (one pane uses
+    /// `inspectorShown`), and whether its drawer is folded to the strip.
+    var details = false
+    var drawerFolded = false
+    /// Minimized to a narrow strip with its icon and title.
+    var collapsed = false
 }
 
 enum PaneEdge { case leading, trailing, center }
@@ -67,6 +76,7 @@ extension AppModel {
 
     func focusPane(_ j: Int) {
         guard panes.indices.contains(j) else { return }
+        if panes[j].collapsed { withAnimation(M.snappy) { panes[j].collapsed = false } }
         if focusedPane != j { withAnimation(M.hover) { focusedPane = j } }
         let run = panes[j].run
         if !run.isEmpty, route != .session(run) || openId != run { open(run) }
@@ -74,7 +84,79 @@ extension AppModel {
 
     func stepPane(_ delta: Int) {
         guard isSplit else { return }
-        focusPane((focusedPane + delta + panes.count) % panes.count)
+        var j = focusedPane
+        for _ in panes.indices {
+            j = (j + delta + panes.count) % panes.count
+            if !panes[j].collapsed { return focusPane(j) }
+        }
+    }
+
+    /// A tab clicked in a pane's own strip: shown in that pane, unless
+    /// another pane already shows it (then that pane takes focus).
+    func showTab(_ key: String, of run: String, in paneId: String?) {
+        guard let paneId, let j = pane(paneId) else { return showTab(key, of: run) }
+        if panes[j].tab == key { return focusPane(j) }
+        if let k = panes.firstIndex(where: { $0.run == run && $0.tab == key }) { return focusPane(k) }
+        panes[j].tab = key
+        focusPane(j)
+    }
+
+    /// The details are for the chat and its changes; a browser or terminal
+    /// wants the room. One pane follows ⌥⌘I; side by side, each pane its own.
+    func paneShowsDetails(_ p: Pane) -> Bool {
+        !p.run.isEmpty && (isSplit ? p.details : inspectorShown) && (p.tab == "chat" || p.tab == "changes")
+    }
+
+    func toggleDetails(_ paneId: String? = nil) {
+        withAnimation(M.snappy) {
+            guard isSplit, let j = paneId.flatMap(pane) ?? (panes.indices.contains(focusedPane) ? focusedPane : nil) else {
+                return inspectorShown.toggle()
+            }
+            panes[j].details.toggle()
+            if panes[j].details { panes[j].drawerFolded = false }
+        }
+        if let j = paneId.flatMap(pane) ?? (panes.indices.contains(focusedPane) ? focusedPane : nil), panes[j].details {
+            let run = panes[j].run
+            Task { await loadTask(run) }
+        }
+    }
+
+    func toggleDrawer(_ paneId: String) {
+        guard let j = pane(paneId) else { return }
+        withAnimation(M.snappy) { panes[j].drawerFolded.toggle() }
+    }
+
+    /// Minimize a pane to a strip; the last expanded pane stays put.
+    func collapsePane(_ id: String) {
+        guard isSplit, let j = pane(id), panes.filter({ !$0.collapsed }).count > 1 else { return }
+        withAnimation(M.snappy) { panes[j].collapsed = true }
+        if j == focusedPane {
+            let order = Array(panes.indices[j...]) + panes.indices[..<j].reversed()
+            if let k = order.first(where: { !panes[$0].collapsed }) { focusPane(k) }
+        }
+    }
+
+    func evenOutPanes() {
+        withAnimation(M.snappy) { for i in panes.indices { panes[i].weight = 1 } }
+    }
+
+    /// Back to one chat: the focused pane stays.
+    func closeOtherPanes() {
+        guard isSplit, panes.indices.contains(focusedPane) else { return }
+        withAnimation(M.snappy) {
+            var keep = panes[focusedPane]
+            keep.weight = 1
+            keep.collapsed = false
+            panes = [keep]
+            focusedPane = 0
+        }
+    }
+
+    func loadTask(_ run: String) async {
+        guard !run.isEmpty, run != openId else { return }
+        let kind = runData(run)["kind"].string
+        guard kind == "task" || kind == "slack" || kind.isEmpty else { return }
+        if let t = try? await API.get("/api/tasks/\(API.q(run))") { taskCache[run] = t }
     }
 
     /// Switch to a tab of a session: focus the pane already showing it,
@@ -107,6 +189,8 @@ extension AppModel {
             panes.remove(at: j)
             panes[max(0, j - 1)].weight += w
             if focusedPane > j || focusedPane >= panes.count { focusedPane = max(0, focusedPane - 1) }
+            // Never leave only strips behind.
+            if panes.count == 1 || !panes.contains(where: { !$0.collapsed }) { panes[focusedPane].collapsed = false }
         }
         if wasFocused { focusPane(min(max(0, j - 1), panes.count - 1)) }
     }
@@ -132,6 +216,7 @@ extension AppModel {
                 }
                 panes[t].run = run
                 panes[t].tab = tab
+                panes[t].collapsed = false
                 focusedPane = t
                 return
             }
@@ -201,6 +286,7 @@ extension AppModel {
         for run in paneRuns {
             if let r = try? await API.get("/api/runs/\(API.q(run))") { runs[run] = r["run"] }
         }
+        for p in panes where p.details && isSplit && paneRuns.contains(p.run) { await loadTask(p.run) }
     }
 
     // MARK: terminal tabs
@@ -269,7 +355,8 @@ extension AppModel {
         watchDrag()
         guard case .session = model.route, model.isSplit, !model.paletteOpen, !model.composeOpen else { return }
         let p = CGPoint(x: e.locationInWindow.x, y: view.bounds.height - e.locationInWindow.y)
-        if let hit = frames.first(where: { $0.value.contains(p) })?.key, let j = model.pane(hit), j != model.focusedPane {
+        // A minimized strip expands from its own controls, not any click.
+        if let hit = frames.first(where: { $0.value.contains(p) })?.key, let j = model.pane(hit), j != model.focusedPane, !model.panes[j].collapsed {
             model.focusPane(j)
         }
     }
@@ -301,19 +388,25 @@ extension AppModel {
 struct PaneArea: View {
     @Environment(AppModel.self) var model
 
+    static let stripWidth: CGFloat = 40
+
     var body: some View {
         GeometryReader { g in
             let panes = model.panes
-            let total = max(panes.reduce(0) { $0 + $1.weight }, 0.001)
+            let open = panes.filter { !$0.collapsed }
+            let total = max(open.reduce(0) { $0 + $1.weight }, 0.001)
             let gaps = CGFloat(max(panes.count - 1, 0))
-            let usable = max(g.size.width - gaps, 1)
+            let strips = CGFloat(panes.count - open.count) * Self.stripWidth
+            let usable = max(g.size.width - gaps - strips, 1)
             HStack(spacing: 0) {
                 ForEach(Array(panes.enumerated()), id: \.element.id) { i, p in
                     if i > 0 {
-                        PaneDivider(left: panes[i - 1].id, right: p.id, usable: usable, total: total)
+                        PaneDivider(left: panes[i - 1].id, right: p.id, usable: usable, total: total,
+                                    fixed: p.collapsed || panes[i - 1].collapsed)
                     }
-                    PaneView(pane: p, index: i)
-                        .frame(width: usable * p.weight / total)
+                    let w = p.collapsed ? Self.stripWidth : usable * p.weight / total
+                    PaneView(pane: p, index: i, width: w)
+                        .frame(width: w)
                         .clipped()
                         .transition(.opacity.combined(with: .scale(scale: 0.98)))
                 }
@@ -329,10 +422,20 @@ struct PaneDivider: View {
     let right: String
     let usable: CGFloat
     let total: CGFloat
+    /// Next to a minimized strip: a plain hairline, nothing to resize.
+    var fixed = false
     @StateObject private var hover = Box(false)
     @StateObject private var start = Box<(CGFloat, CGFloat)?>(nil)
 
     var body: some View {
+        if fixed {
+            Rectangle().fill(T.line).frame(width: 1)
+        } else {
+            handle
+        }
+    }
+
+    var handle: some View {
         Rectangle().fill(hover.v || start.v != nil ? T.accent.opacity(0.7) : T.line)
             .frame(width: 1)
             .overlay {
@@ -370,21 +473,26 @@ struct PaneView: View {
     @Environment(AppModel.self) var model
     let pane: Pane
     let index: Int
+    let width: CGFloat
+
+    /// Wide enough to keep the details beside the content; narrower panes
+    /// dock them underneath.
+    static let columnMin: CGFloat = 800
 
     var focused: Bool { model.focusedPane == index }
+    var details: Bool { model.isSplit && model.paneShowsDetails(pane) }
+    var column: Bool { width >= Self.columnMin }
 
     var body: some View {
-        VStack(spacing: 0) {
-            if model.isSplit { PaneHeader(pane: pane, focused: focused).transition(.opacity) }
-            ZStack { PaneContent(run: pane.run, tab: pane.tab).id(pane.run + "|" + pane.tab).transition(.opacity) }
-                .animation(M.page, value: pane.run + "|" + pane.tab)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            if model.isSplit && focused && model.showsDetails && !pane.run.isEmpty {
-                DetailsDrawer(id: pane.run)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+        ZStack {
+            if pane.collapsed {
+                CollapsedPane(pane: pane, focused: focused)
+                    .transition(.opacity)
+            } else {
+                full.transition(.opacity)
             }
         }
-        .animation(M.snappy, value: model.isSplit && focused && model.showsDetails)
+        .animation(M.snappy, value: pane.collapsed)
         .background(T.panel)
         .clipped()
         .contentShape(Rectangle())
@@ -402,45 +510,170 @@ struct PaneView: View {
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { PaneFrames.shared.frames[pane.id] = $0 }
         .onDisappear { PaneFrames.shared.frames[pane.id] = nil }
     }
+
+    var full: some View {
+        VStack(spacing: 0) {
+            if model.isSplit { PaneHeader(pane: pane, focused: focused, width: width).transition(.opacity) }
+            HStack(spacing: 0) {
+                ZStack { PaneContent(run: pane.run, tab: pane.tab).id(pane.run + "|" + pane.tab).transition(.opacity) }
+                    .animation(M.page, value: pane.run + "|" + pane.tab)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                if details && column {
+                    HStack(spacing: 0) {
+                        Rectangle().fill(T.line).frame(width: 1)
+                        PropertiesPanel(id: pane.run).frame(width: 288)
+                    }
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                }
+            }
+            .clipped()
+            if details && !column {
+                DetailsDrawer(id: pane.run, open: !pane.drawerFolded) { model.toggleDrawer(pane.id) }
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(M.snappy, value: details)
+        .animation(M.snappy, value: column)
+        .task(id: details ? pane.run : "") { if details { await model.loadTask(pane.run) } }
+    }
 }
 
+/// A split pane's own header: what it shows, its tabs and its controls, so
+/// each pane reads (and works) as a chat of its own.
 struct PaneHeader: View {
+    @Environment(AppModel.self) var model
+    let pane: Pane
+    let focused: Bool
+    let width: CGFloat
+
+    var narrow: Bool { width < 430 }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            titleRow
+            SessionTabs(runId: pane.run, session: model.sessions.first { $0.id == pane.run }, pane: pane, narrow: narrow)
+        }
+        .overlay(alignment: .top) {
+            Rectangle().fill(T.accent).frame(height: 2).opacity(focused ? 1 : 0)
+        }
+        .animation(M.hover, value: focused)
+    }
+
+    var titleRow: some View {
+        let s = model.sessions.first { $0.id == pane.run }
+        let live = s.map { model.isLive($0) && !model.isAwaiting($0) } ?? false
+        return HStack(spacing: 8) {
+            HStack(spacing: 8) {
+                if let s {
+                    if s.isOrchestrator { Image(systemName: "sparkles").font(.system(size: 12)).foregroundStyle(T.purple) } else { SessionIcon(session: s, size: 13) }
+                    if !narrow && !s.issueKey.isEmpty && !s.title.hasPrefix(s.issueKey) {
+                        Text(s.issueKey).font(T.mono(11.5)).foregroundStyle(T.text3).fixedSize()
+                    }
+                }
+                Text(model.sessionTitle(pane.run))
+                    .font(T.ui(13, .semibold)).foregroundStyle(focused ? T.text : T.text2)
+                    .lineLimit(1).truncationMode(.tail)
+                if live {
+                    Group { if narrow { LiveIcon(size: 10) } else { LiveBadge() } }
+                        .fixedSize()
+                        .transition(.scale.combined(with: .opacity))
+                }
+                Spacer(minLength: 6)
+            }
+            .frame(maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .onTapGesture { if let j = model.pane(pane.id) { model.focusPane(j) } }
+            .onDrag { NSItemProvider(object: PanePayload.tab(pane.run, pane.tab) as NSString) }
+            .help("Drag onto another pane's edge to move it")
+            controls(s, live: live)
+        }
+        .padding(.leading, 14).padding(.trailing, 8)
+        .frame(height: 40)
+        .animation(M.snappy, value: live)
+    }
+
+    @ViewBuilder func controls(_ s: Session?, live: Bool) -> some View {
+        HStack(spacing: 1) {
+            if let s, model.isLive(s) {
+                IconButton(icon: "stop.fill", help: "Stop the running turn", size: 24, tint: T.red) { Task { await model.stop(s.id) } }
+                    .transition(.scale.combined(with: .opacity))
+            }
+            if pane.tab == "chat" || pane.tab == "changes" {
+                IconButton(icon: "sidebar.right", help: pane.details ? "Hide details (⌥⌘I)" : "Show details (⌥⌘I)", size: 24, on: pane.details) {
+                    model.toggleDetails(pane.id)
+                }
+            }
+            Menu {
+                if let s {
+                    Button { Task { await model.setPinned(s.id, !s.pinned) } } label: { Label(s.pinned ? "Unpin" : "Pin to the Sidebar", systemImage: s.pinned ? "star.slash" : "star") }
+                }
+                Button { model.splitRight() } label: { Label("Split Right", systemImage: "rectangle.split.2x1") }
+                Button { model.collapsePane(pane.id) } label: { Label("Minimize Pane", systemImage: "arrow.right.and.line.vertical.and.arrow.left") }
+                    .disabled(model.panes.filter { !$0.collapsed }.count < 2)
+                Button { model.closeOtherPanes() } label: { Label("Close Other Panes", systemImage: "rectangle") }
+                if let s {
+                    Divider()
+                    if !s.permalink.isEmpty { Button("Read the Slack Thread") { model.openThread(s.permalink) } }
+                    SessionMenu(session: s, inChat: true)
+                }
+            } label: {
+                Image(systemName: "ellipsis").font(.system(size: 12, weight: .medium)).foregroundStyle(T.text2).frame(width: 24, height: 24)
+            }
+            .menuStyle(.borderlessButton).menuIndicator(.hidden).frame(width: 26)
+            .help("More")
+            if !narrow {
+                IconButton(icon: "minus", help: "Minimize pane", size: 24) { model.collapsePane(pane.id) }
+                    .disabled(model.panes.filter { !$0.collapsed }.count < 2)
+            }
+            IconButton(icon: "xmark", help: "Close pane (⌘⇧W): the session stays in the sidebar", size: 24) { model.closePane(pane.id) }
+        }
+    }
+}
+
+/// A minimized pane: a narrow strip with the session's icon and title.
+/// Clicking it (or its expand button) brings the pane back.
+struct CollapsedPane: View {
     @Environment(AppModel.self) var model
     let pane: Pane
     let focused: Bool
     @StateObject private var hover = Box(false)
 
     var body: some View {
-        let t = model.tabLabel(pane.tab, of: pane.run)
         let s = model.sessions.first { $0.id == pane.run }
-        HStack(spacing: 7) {
-            if let s { if s.isOrchestrator { Image(systemName: "sparkles").font(.system(size: 10.5)).foregroundStyle(T.purple) } else { SessionIcon(session: s, size: 11) } }
-            Text(model.sessionTitle(pane.run)).font(T.ui(12, focused ? .medium : .regular)).foregroundStyle(focused ? T.text : T.text2).lineLimit(1)
-            if let s, model.isLive(s) { LiveIcon(size: 9) }
-            Image(systemName: t.icon).font(.system(size: 9.5, weight: .medium)).foregroundStyle(T.text3)
-            Text(t.label).font(T.ui(11.5)).foregroundStyle(T.text3).lineLimit(1)
-            Spacer(minLength: 4)
-            Button { model.closePane(pane.id) } label: {
-                Image(systemName: "xmark").font(.system(size: 8.5, weight: .bold)).foregroundStyle(T.text2)
-                    .frame(width: 18, height: 18)
-                    .background(Circle().fill(hover.v ? T.hover : .clear))
+        let t = model.tabLabel(pane.tab, of: pane.run)
+        VStack(spacing: 10) {
+            IconButton(icon: "arrow.left.and.right", help: "Expand pane", size: 24) { expand() }
+                .padding(.top, 8)
+            if let s {
+                if s.isOrchestrator { Image(systemName: "sparkles").font(.system(size: 12)).foregroundStyle(T.purple) } else { SessionIcon(session: s, size: 13) }
+                if model.isLive(s) && !model.isAwaiting(s) { LiveIcon(size: 10) }
             }
-            .buttonStyle(Pressable(scale: 0.85))
-            .opacity(focused || hover.v ? 1 : 0.5)
-            .help("Close pane (⌘⇧W)")
+            Image(systemName: t.icon).font(.system(size: 10.5, weight: .medium)).foregroundStyle(T.text3)
+            GeometryReader { g in
+                Text(model.sessionTitle(pane.run))
+                    .font(T.ui(12.5, .medium)).foregroundStyle(hover.v ? T.text : T.text2)
+                    .lineLimit(1).truncationMode(.tail)
+                    .frame(width: g.size.height, height: 20, alignment: .leading)
+                    .rotationEffect(.degrees(90))
+                    .frame(width: g.size.width, height: g.size.height)
+            }
+            IconButton(icon: "xmark", help: "Close pane", size: 24) { model.closePane(pane.id) }
+                .padding(.bottom, 8)
         }
-        .padding(.horizontal, 12)
-        .frame(height: 30)
-        .background(focused ? T.raised.opacity(0.55) : Color.clear)
-        .overlay(alignment: .bottom) { Rectangle().fill(T.line).frame(height: 1) }
-        .overlay(alignment: .top) { Rectangle().fill(T.accent).frame(height: 2).opacity(focused ? 1 : 0) }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(hover.v ? T.hover.opacity(0.5) : T.bg.opacity(0.35))
         .contentShape(Rectangle())
-        .onTapGesture { if let j = model.pane(pane.id) { model.focusPane(j) } }
+        .onTapGesture { expand() }
         .onDrag { NSItemProvider(object: PanePayload.tab(pane.run, pane.tab) as NSString) }
         .hoverBox(hover)
-        .animation(M.hover, value: focused)
+        .help("Expand \(model.sessionTitle(pane.run))")
+    }
+
+    func expand() {
+        if let j = model.pane(pane.id) { model.focusPane(j) }
     }
 }
+
 
 /// One pane's content: the same views the single chat always showed.
 struct PaneContent: View {
@@ -603,8 +836,6 @@ extension AppModel {
         return true
     }
 
-    /// The details are for the chat and its changes; a browser or terminal
-    /// wants the room.
-    var showsDetails: Bool { inspectorShown && (chatTab == "chat" || chatTab == "changes") }
+    var showsDetails: Bool { panes.indices.contains(focusedPane) ? paneShowsDetails(panes[focusedPane]) : false }
     var isChatRoute: Bool { if case .session = route { return true }; return false }
 }

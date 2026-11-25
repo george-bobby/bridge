@@ -312,18 +312,16 @@ final class AppModel {
     /// Every loaded run by id: the open one and the ones shown in other panes.
     var runs: [String: JSON] = [:]
     func runData(_ id: String) -> JSON { id == openId ? openRun : runs[id] ?? .null }
-    @ObservationIgnored private var taskCache: [String: JSON] = [:]
+    /// Loaded task records (report, worktree) by id: the open one and the
+    /// ones whose pane shows its details.
+    var taskCache: [String: JSON] = [:]
+    func taskData(_ id: String) -> JSON { id == openId ? openTask : taskCache[id] ?? .null }
 
     var sidebarHidden = UserDefaults.standard.bool(forKey: "sidebar.hidden") {
         didSet { UserDefaults.standard.set(sidebarHidden, forKey: "sidebar.hidden") }
     }
     var inspectorShown = !UserDefaults.standard.bool(forKey: "inspector.hidden") {
         didSet { UserDefaults.standard.set(!inspectorShown, forKey: "inspector.hidden") }
-    }
-    /// With panes side by side the details dock under the focused pane as a
-    /// drawer; this is whether that drawer is open or folded to its strip.
-    var drawerOpen = !UserDefaults.standard.bool(forKey: "drawer.closed") {
-        didSet { UserDefaults.standard.set(!drawerOpen, forKey: "drawer.closed") }
     }
     /// GET /api/runs/:id/pr, by PR URL: review state, checks, comments.
     var prActivity: [String: JSON] = [:]

@@ -28,7 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             if let last = pages.first(where: { $0.0 == "chat" }) {
                 pages.append(("collapsed", last.1))
                 if browser != nil { pages.append(("browser", last.1)) }
-                pages += [("split", last.1), ("drop", last.1), ("terminal", last.1)]
+                pages += [("split", last.1), ("split-details", last.1), ("split-wide", last.1), ("split4", last.1), ("drop", last.1), ("terminal", last.1)]
             }
             let hidden = model.sidebarHidden
             if let only = ProcessInfo.processInfo.environment["BRIDGE_SNAPSHOT_PAGES"]?.split(separator: ",").map(String.init) {
@@ -39,8 +39,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 model.sidebarHidden = name == "collapsed"
                 if route == .settings { model.settingsPane = name.hasPrefix("settings-") ? String(name.dropFirst(9)) : "general" }
                 if name == "browser", case .session(let id) = route, let browser { model.open(id); model.openBrowser(id, url: browser) }
+                if name.hasPrefix("split"), case .session(let id) = route { model.panes = [Pane(run: id)]; model.focusedPane = 0 }
                 if case .session(let id) = route { model.open(id) } else { model.route = route }
                 if name == "split" { model.splitRight(); model.splitRight() }
+                if name == "split4" { for _ in 0..<3 { model.splitRight() } }
+                // Two sessions side by side, the first with its details drawer.
+                if name == "split-details", case .session(let id) = route {
+                    let order = model.chatOrder
+                    if let i = order.firstIndex(of: id), i + 1 < order.count { model.openToSide(order[i + 1]) }
+                    model.toggleDetails(model.panes[0].id)
+                }
+                // A wide pane with its details column, a minimized one, and a third.
+                if name == "split-wide" {
+                    model.splitRight(); model.splitRight()
+                    model.panes[0].weight = 2
+                    model.collapsePane(model.panes[1].id)
+                    model.toggleDetails(model.panes[0].id)
+                    model.focusPane(2)
+                }
                 // A drag in flight over the last pane's middle, to check the drop highlight.
                 if name == "drop" { model.paneDragActive = true; model.dropZone = model.panes.last.map { DropZone(pane: $0.id, edge: model.isSplit ? .center : .trailing) } }
                 else if model.paneDragActive { model.paneDragActive = false; model.dropZone = nil }
@@ -150,7 +166,7 @@ struct BridgeCommands: Commands {
         }
         CommandGroup(before: .sidebar) {
             Button("Toggle Sidebar") { model.toggleSidebar() }.keyboardShortcut("s", modifiers: [.command, .control])
-            Button("Toggle Details") { withAnimation(M.snappy) { model.inspectorShown.toggle() } }.keyboardShortcut("i", modifiers: [.command, .option])
+            Button("Toggle Details") { model.toggleDetails() }.keyboardShortcut("i", modifiers: [.command, .option])
             Divider()
         }
         CommandMenu("Go") {
