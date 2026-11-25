@@ -223,3 +223,71 @@ test("changes: list, diff and commit a session's working folder; slash commands 
   const { commands } = await get(`/api/commands?runId=${RUN_ID}`);
   assert.ok(commands.some((c) => c.name === "compact"));
 });
+
+test("compact: /compact for Claude, a self-handoff for the other agents; files and session references for the composer", async () => {
+  const last = async () => (await get(`/api/runs/${RUN_ID}`)).run;
+  const settled = () =>
+    waitFor(async () => {
+      const r = await last();
+      return r.messages.some((m) => m.role === "assistant" && m.state === "running") ? null : r;
+    });
+  await settled();
+  await post(`/api/runs/${RUN_ID}/opts`, { opts: { agent: "claude" } });
+  const out = await post(`/api/runs/${RUN_ID}/compact`, {});
+  assert.strictEqual(out.ok, true, out.error);
+  assert.strictEqual(out.native, true);
+  const run = await waitFor(async () => {
+    const r = await last();
+    const m = r.messages.filter((x) => x.role === "assistant").pop();
+    return m && m.kind === "compact" && m.state === "done" ? r : null;
+  });
+  const m = run.messages.filter((x) => x.role === "assistant").pop();
+  assert.deepStrictEqual(m.compact, { pre: 42000, post: 6000 });
+  assert.strictEqual(m.usage.input, 6000, "the context meter reads what's left");
+  assert.match(m.text, /42k → 6k/);
+
+  // Codex has no headless /compact: its session is dropped and its next turn is briefed.
+  await post(`/api/runs/${RUN_ID}/opts`, { opts: { agent: "codex" } });
+  const typed = await post(`/api/runs/${RUN_ID}/followup`, { text: "/compact keep the CSV bits" });
+  assert.strictEqual(typed.compacted, true);
+  assert.strictEqual(typed.native, false);
+  const after = await last();
+  assert.strictEqual(after.agentSessions.codex, "");
+  assert.strictEqual(after.compactBrief.agent, "codex");
+  assert.match(after.compactBrief.text, /Focus: keep the CSV bits/);
+  fs.writeFileSync(path.join(tmp, "codex-prompt.txt"), "");
+  await post(`/api/runs/${RUN_ID}/followup`, { text: "Carry on." });
+  await waitFor(async () => {
+    const r = await last();
+    const x = r.messages.filter((y) => y.role === "assistant").pop();
+    return x && x.agent === "codex" && x.state === "done" ? r : null;
+  });
+  const prompt = fs.readFileSync(path.join(tmp, "codex-prompt.txt"), "utf8");
+  assert.match(prompt, /Compacted session/);
+  assert.match(prompt, /Carry on\./);
+  assert.strictEqual((await last()).compactBrief, undefined, "the summary is used once");
+  await post(`/api/runs/${RUN_ID}/opts`, { opts: { agent: "claude" } });
+
+  const repo = path.join(tmp, "changes-repo");
+  fs.mkdirSync(path.join(repo, "src", "api"), { recursive: true });
+  fs.writeFileSync(path.join(repo, "src", "api", "export.js"), "x\n");
+  fs.writeFileSync(path.join(repo, ".gitignore"), "ignored.log\n");
+  fs.writeFileSync(path.join(repo, "ignored.log"), "x\n");
+  const files = await get(`/api/runs/${RUN_ID}/files`);
+  assert.strictEqual(files.git, true);
+  assert.ok(files.files.includes("src/api/export.js"), "untracked but not ignored files are listed");
+  assert.ok(!files.files.includes("ignored.log"));
+  assert.ok(files.dirs.includes("src/api"));
+
+  const ref = await get(`/api/runs/${RUN_ID}/reference`);
+  assert.strictEqual(ref.ok, true);
+  const brief = fs.readFileSync(ref.path, "utf8");
+  assert.match(brief, /Referenced session/);
+  assert.match(brief, new RegExp(RUN_ID.replace(/\./g, "\\.")));
+
+  const { commands } = await get(`/api/commands?runId=${RUN_ID}`);
+  const stub = commands.find((c) => c.name === "stub-skill");
+  assert.ok(stub, "Claude's own command list comes from its initialize handshake");
+  assert.strictEqual(stub.description, "A skill the stub reports");
+  assert.strictEqual(stub.scope, "user");
+});
