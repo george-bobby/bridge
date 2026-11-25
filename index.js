@@ -170,12 +170,21 @@ function listDirs(dir) {
 
 /* ---------------------------------------------------------------- payload */
 
+function workerSkillState() {
+  const name = jobs.workerSkillName(store.readConfig());
+  const found = name ? require("./lib/workerskill").find(name, [jobs.resolveWorkdir(store.readConfig()), ROOT]) : null;
+  return { name, env: env.workerSkill, installed: !!found, file: (found && found.file) || "" };
+}
+
 function snapshot() {
   return {
     config: store.readConfig(),
     cost: store.summariseCost(),
     jobs: { running: jobs.runningIds(), awaiting: jobs.awaitingIds() },
     inbox: harness.inbox().counts,
+    // The skill new workers open with: the effective name ("" = off), what
+    // .env says, and whether it's installed (else the built-in prompt runs).
+    workerSkill: workerSkillState(),
     // Only what the page actually draws: the repo a new chat's job would run
     // in, which the composer's picker opens on.
     meta: { workdir: jobs.resolveWorkdir(store.readConfig()), terminal: env.terminalApp, root: ROOT, projects: projects.list(jobs.resolveWorkdir(store.readConfig())) },
@@ -221,6 +230,18 @@ const server = http.createServer(async (req, res) => {
     );
     res.write(`event: inbox\ndata: ${JSON.stringify(harness.inbox())}\n\n`);
     return;
+  }
+
+  // --- every session an orchestrator can see (`sb sessions`) ---------------
+  // ?orchestrator=<run id> scopes it like that orchestrator's roster;
+  // ?project=<id> to one project; neither = every project.
+  if (req.method === "GET" && p === "/api/sessions") {
+    if (!sameOrigin(req)) return sendJson(res, 403, { ok: false, error: "cross-origin request refused" });
+    const roster = require("./lib/roster");
+    const orch = store.loadRun(store.safeId(url.searchParams.get("orchestrator") || "") || "-");
+    const project = String(url.searchParams.get("project") || "");
+    const view = orch && orch.kind === "orchestrator" ? roster.forOrchestrator(orch, { isRunning: jobs.isRunning }) : { sessions: roster.list({ project, all: !project, isRunning: jobs.isRunning }), scope: project ? `project ${project}` : "all projects" };
+    return sendJson(res, 200, { ok: true, scope: view.scope, sessions: view.sessions, markdown: roster.markdown(view.sessions, { scope: view.scope, sb: path.join(ROOT, "bin", "sb") }) });
   }
 
   // --- the harness ---------------------------------------------------------
