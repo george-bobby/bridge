@@ -198,7 +198,7 @@ let statusLabels: [String: String] = [
 // MARK: - Routes
 
 enum Route: Hashable {
-    case home, inbox, slack, board, sessions, pulls, linear, memory, usage
+    case home, inbox, slack, board, sessions, pulls, linear, memory, usage, settings
     case session(String)
 
     var title: String {
@@ -212,6 +212,7 @@ enum Route: Hashable {
         case .pulls: return "GitHub"
         case .linear: return "Linear"
         case .memory: return "Memory"
+        case .settings: return "Settings"
         case .session: return "Session"
         }
     }
@@ -256,6 +257,18 @@ final class AppModel {
     var composeProject: String? = nil
 
     var usage: JSON = .null
+    /// Settings: the open section, and whether saved .env edits wait on a server restart.
+    var settingsPane = "general"
+    var envNeedsRestart = false
+    var notifyAsks = UserDefaults.standard.object(forKey: "notify.asks") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(notifyAsks, forKey: "notify.asks") }
+    }
+    var notifyOutcomes = UserDefaults.standard.object(forKey: "notify.outcomes") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(notifyOutcomes, forKey: "notify.outcomes") }
+    }
+    var showBadge = UserDefaults.standard.object(forKey: "notify.badge") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(showBadge, forKey: "notify.badge"); updateBadge() }
+    }
     var agentCatalog: JSON = .null
     var commands: [JSON] = []
     /// The chat page's side-by-side panes (Panes.swift). One pane is today's
@@ -573,8 +586,10 @@ final class AppModel {
             try await API.post("/api/env", ["values": values])
             if restart {
                 try? await API.post("/api/restart")
+                self.envNeedsRestart = false
                 self.say("Saved. The server is restarting")
             } else {
+                self.envNeedsRestart = true
                 self.say("Saved to .env. Restart the server to apply it")
             }
             ok = true
@@ -584,6 +599,7 @@ final class AppModel {
 
     func restartServer() async {
         _ = try? await API.post("/api/restart")
+        envNeedsRestart = false
         say("The server is restarting")
     }
 
@@ -773,11 +789,11 @@ final class AppModel {
         case "projects": projects = d["projects"].array.map(Project.init)
         case "message", "delta", "run-updated":
             if d["runId"].string == openId || paneRuns.contains(d["runId"].string) { scheduleRefresh() }
-        case "ask":
+        case "ask" where notifyAsks:
             notify(title: "\(d["who"].nonEmpty ?? "A session") needs you", body: d["summary"].nonEmpty ?? "Claude is waiting on your answer", runId: d["runId"].string)
         case "outcome":
             let st = d["status"].string
-            if ["needs-input", "blocked", "ready-for-review", "worker-gone", "usage-limit", "worker-stalled"].contains(st) || d["name"].string != "report" {
+            if notifyOutcomes, ["needs-input", "blocked", "ready-for-review", "worker-gone", "usage-limit", "worker-stalled"].contains(st) || d["name"].string != "report" {
                 notify(title: d["title"].nonEmpty ?? d["taskId"].string, body: statusLabels[st] ?? d["name"].string.replacingOccurrences(of: "-", with: " "), runId: d["taskId"].string)
             }
             if d["taskId"].string == openId { Task { await refreshOpen() } }
@@ -1006,7 +1022,7 @@ final class AppModel {
     }
 
     func updateBadge() {
-        let n = needsCount
+        let n = showBadge ? needsCount : 0
         NSApp?.dockTile.badgeLabel = n > 0 ? "\(n)" : nil
     }
 }
