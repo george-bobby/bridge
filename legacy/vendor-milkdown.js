@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Vendors the Milkdown (Crepe) editor into public/vendor/.
+ * Vendors the Milkdown (Crepe) editor into legacy/web/vendor/.
  *
  * The dashboard has no npm dependencies and no build step — `node index.js`
  * works with nothing installed — so the memory editor cannot `import` a package
@@ -11,9 +11,9 @@
  * Re-run after bumping VERSION:  node scripts/vendor-milkdown.js
  *
  * What it writes:
- *   public/vendor/milkdown.mjs        the editor, one self-contained ES module
- *   public/vendor/node-process.mjs    a stub for the one Node global it wants
- *   public/vendor/milkdown.css        upstream CSS, both themes folded into one
+ *   legacy/web/vendor/milkdown.mjs        the editor, one self-contained ES module
+ *   legacy/web/vendor/node-process.mjs    a stub for the one Node global it wants
+ *   legacy/web/vendor/milkdown.css        upstream CSS, both themes folded into one
  *
  * The CSS fold is the only non-mechanical step. Upstream ships two files of the
  * same 22 custom properties — crepe/ and crepe-dark/ — meant to be swapped by
@@ -27,7 +27,7 @@ const path = require("path");
 
 const VERSION = "7.21.3";
 const CDN = `https://cdn.jsdelivr.net/npm/@milkdown/crepe@${VERSION}/lib`;
-const OUT = path.join(__dirname, "..", "public", "vendor");
+const OUT = path.join(__dirname, "web", "vendor");
 
 // Upstream's theme/common/style.css is nothing but @import lines, and a plain
 // <link> would make the browser fetch 15 more files. Inlined in its order.

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * slack-bridge dashboard
+ * bridge dashboard
  *
  * A zero-dependency local control panel for the Slack -> Claude Code fetch
  * pipeline. It does NOT talk to Slack and holds no Slack credentials. You paste
@@ -34,12 +34,17 @@ const proposals = require("./lib/proposals");
 const bus = require("./lib/bus");
 const harness = require("./lib/harness");
 const tasks = require("./lib/tasks");
+const sources = require("./lib/sources");
+const projects = require("./lib/projects");
+const envfile = require("./lib/envfile");
+const slack = env.demo ? require("./lib/demo").slack : require("./lib/slack");
 
 const ROOT = __dirname;
-// PORT stays supported for a one-off override; SLACK_BRIDGE_PORT in .env is
+// PORT stays supported for a one-off override; BRIDGE_PORT in .env is
 // the setting emit.sh also reads, so the two agree by default.
 const PORT = Number(process.env.PORT) || env.port;
-const PUBLIC = path.join(ROOT, "public");
+// The web UI, kept as the legacy client. The desktop app (native/macos) is the main one.
+const PUBLIC = path.join(ROOT, "legacy", "web");
 
 /* ------------------------------------------------------------- http utils */
 
@@ -173,7 +178,7 @@ function snapshot() {
     inbox: harness.inbox().counts,
     // Only what the page actually draws: the repo a new chat's job would run
     // in, which the composer's picker opens on.
-    meta: { workdir: jobs.resolveWorkdir(store.readConfig()) },
+    meta: { workdir: jobs.resolveWorkdir(store.readConfig()), terminal: env.terminalApp, root: ROOT, projects: projects.list(jobs.resolveWorkdir(store.readConfig())) },
     now: Date.now(),
   };
 }
@@ -294,6 +299,85 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // --- .env from Settings; a restart applies it ----------------------------
+  if (p === "/api/env" || p === "/api/restart") {
+    if (!sameOrigin(req)) return sendJson(res, 403, { ok: false, error: "cross-origin request refused" });
+    try {
+      if (req.method === "GET" && p === "/api/env") return sendJson(res, 200, { ok: true, ...envfile.describe() });
+      if (req.method === "POST" && p === "/api/env") {
+        const body = JSON.parse((await readBody(req)) || "{}");
+        return sendJson(res, 200, { ok: true, ...envfile.save(body.values) });
+      }
+      if (req.method === "POST" && p === "/api/restart") {
+        // launchd (KeepAlive) starts a fresh server, which rereads .env. The
+        // skill is rendered first so a changed repo or team lands in it too.
+        try {
+          require("child_process").execFileSync(process.execPath, [path.join(ROOT, "lib", "render.js")], { stdio: "ignore", timeout: 20000 });
+        } catch {}
+        sendJson(res, 200, { ok: true, restarting: true });
+        setTimeout(() => process.exit(0), 250);
+        return;
+      }
+    } catch (e) {
+      return sendJson(res, 400, { ok: false, error: String(e.message || e) });
+    }
+  }
+
+  // --- the native Slack connector (a user token; no bot, no channel installs) ---
+  if (p.startsWith("/api/slack/")) {
+    if (!sameOrigin(req)) return sendJson(res, 403, { ok: false, error: "cross-origin request refused" });
+    try {
+      const body = req.method === "POST" ? JSON.parse((await readBody(req)) || "{}") : {};
+      const link = (u) => store.parseSlackLink(u);
+      if (req.method === "GET" && p === "/api/slack/status") return sendJson(res, 200, { ok: true, ...(await slack.status()) });
+      if (req.method === "GET" && p === "/api/slack/mentions") return sendJson(res, 200, { ok: true, mentions: await slack.mentions() });
+      if (req.method === "GET" && p === "/api/slack/thread") return sendJson(res, 200, { ok: true, ...(await slack.thread(link(url.searchParams.get("url")))) });
+      if (req.method === "POST" && p === "/api/slack/reply") return sendJson(res, 200, { ok: true, ...(await slack.reply({ ...link(body.url), text: body.text })) });
+      return sendJson(res, 404, { ok: false, error: `no slack route for ${req.method} ${p}` });
+    } catch (e) {
+      return sendJson(res, 400, { ok: false, error: String(e.message || e) });
+    }
+  }
+
+  // --- projects: the repos in the sidebar, each with its own orchestrator ---
+  if (p === "/api/projects" || p.startsWith("/api/projects/")) {
+    if (!sameOrigin(req)) return sendJson(res, 403, { ok: false, error: "cross-origin request refused" });
+    try {
+      const body = req.method === "POST" ? JSON.parse((await readBody(req)) || "{}") : {};
+      const m = p.match(/^\/api\/projects\/([a-z0-9-]+)(?:\/(orchestrator))?$/);
+      const all = () => projects.list(jobs.resolveWorkdir(store.readConfig()));
+      let out;
+      if (req.method === "GET" && p === "/api/projects") out = { projects: all() };
+      else if (req.method === "POST" && p === "/api/projects") out = { project: projects.add(body) };
+      else if (m && req.method === "POST" && m[2]) out = { runId: harness.ensureOrchestrator(m[1]).runId };
+      else if (m && req.method === "POST") out = { project: projects.update(m[1], body) };
+      else if (m && req.method === "DELETE") out = (projects.remove(m[1]), {});
+      else return sendJson(res, 404, { ok: false, error: `no project route for ${req.method} ${p}` });
+      if (req.method !== "GET") {
+        bus.broadcast("projects", { projects: all() });
+        bus.broadcast("runs", { runs: store.listRunSummaries() });
+      }
+      return sendJson(res, 200, { ok: true, ...out });
+    } catch (e) {
+      return sendJson(res, 400, { ok: false, error: String(e.message || e) });
+    }
+  }
+
+  // --- read-only feeds for the workspace views (GitHub PRs, Linear issues) ---
+  const src = req.method === "GET" && p.match(/^\/api\/sources\/(pulls|linear|ports)$/);
+  if (src) {
+    // Private data on a GET: a page elsewhere can't read the answer, but DNS
+    // rebinding could, so hold it to the same loopback rule as the writes.
+    if (!sameOrigin(req)) return sendJson(res, 403, { ok: false, error: "cross-origin request refused" });
+    try {
+      const data = await sources[src[1]]({ refresh: url.searchParams.get("refresh") === "1" });
+      sendJson(res, 200, { ok: true, ...data });
+    } catch (e) {
+      sendJson(res, 502, { ok: false, error: String(e.message || e) });
+    }
+    return;
+  }
+
   // --- working-directory picker --------------------------------------------
   if (req.method === "GET" && p === "/api/dirs") {
     try {
@@ -404,6 +488,13 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // --- transcript search (the ⌘K palette) -----------------------------------
+  if (req.method === "GET" && p === "/api/search") {
+    if (!sameOrigin(req)) return sendJson(res, 403, { ok: false, error: "cross-origin request refused" });
+    sendJson(res, 200, { ok: true, hits: store.searchRuns(url.searchParams.get("q")) });
+    return;
+  }
+
   // --- sidebar -------------------------------------------------------------
   if (req.method === "GET" && p === "/api/runs") {
     sendJson(res, 200, { runs: store.listRunSummaries() });
@@ -418,6 +509,16 @@ const server = http.createServer(async (req, res) => {
     try {
       const body = JSON.parse((await readBody(req)) || "{}");
       const { run, created } = store.createFromLink(body.url);
+      if (created && body.project) store.setProject(run.runId, String(body.project));
+      // With the Slack connector on, the chat starts knowing who asked and what.
+      if (created && slack.configured()) {
+        const about = await slack.describeThread(store.parseSlackLink(body.url)).catch(() => null);
+        const fresh0 = about && store.loadRun(run.runId);
+        if (fresh0) {
+          Object.assign(fresh0, { who: about.who, channel: about.channel, text: about.text, userId: about.userId || "" });
+          store.saveRun(fresh0);
+        }
+      }
       applyOpts(run.runId, body.opts);
       let started = false;
       const fresh = store.loadRun(run.runId);
@@ -629,6 +730,32 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // Pinned to the top of its project in the sidebar.
+    if (req.method === "POST" && (verb === "pin" || verb === "project")) {
+      try {
+        const body = JSON.parse((await readBody(req)) || "{}");
+        const out = verb === "pin" ? { pinned: store.setPinned(id, !!body.pinned) } : { project: store.setProject(id, String(body.project || "")) };
+        bus.broadcast("runs", { runs: store.listRunSummaries() });
+        sendJson(res, 200, { ok: true, ...out });
+      } catch (e) {
+        sendJson(res, 400, { ok: false, error: String(e.message || e) });
+      }
+      return;
+    }
+
+    // The board column you dragged this chat to ("" = automatic).
+    if (req.method === "POST" && verb === "board") {
+      try {
+        const body = JSON.parse((await readBody(req)) || "{}");
+        const board = store.setBoard(id, body.column);
+        bus.broadcast("runs", { runs: store.listRunSummaries() });
+        sendJson(res, 200, { ok: true, board });
+      } catch (e) {
+        sendJson(res, 400, { ok: false, error: String(e.message || e) });
+      }
+      return;
+    }
+
     // Clears the unread dot. Cheap enough to fire on every chat open.
     if (req.method === "POST" && verb === "seen") {
       const run = store.loadRun(id);
@@ -641,7 +768,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "DELETE" && !verb) {
-      if (id === harness.ORCH) {
+      if (projects.isOrchestrator(id)) {
         sendJson(res, 409, { ok: false, error: "the orchestrator chat can't be deleted" });
         return;
       }
@@ -716,15 +843,16 @@ server.on("error", (err) => {
   if (err.code !== "EADDRINUSE") throw err;
   console.error(`port ${PORT} is already in use — a dashboard is probably already running.`);
   console.error(`  open it:   http://localhost:${PORT}`);
+  console.error(`  stop it:   npm stop   (the background copy npm start runs)`);
   console.error(`  find it:   lsof -nP -iTCP:${PORT} -sTCP:LISTEN`);
   console.error(`  replace:   kill $(lsof -t -iTCP:${PORT} -sTCP:LISTEN) && node index.js`);
-  console.error(`  or move:   SLACK_BRIDGE_PORT=4320 node index.js`);
+  console.error(`  or move:   BRIDGE_PORT=4320 node index.js`);
   process.exit(1);
 });
 
 server.listen(PORT, "127.0.0.1", () => {
   const config = store.readConfig();
-  console.log(`slack-bridge dashboard  ->  http://localhost:${PORT}`);
+  console.log(`bridge dashboard  ->  http://localhost:${PORT}`);
   console.log(`  runs:      ${store.PATHS.runs}`);
   console.log(`  config:    ${store.PATHS.config}`);
   console.log(`  follow-up: ${jobs.resolveWorkdir(config)}  (model: ${config.followup.model})`);

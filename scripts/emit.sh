@@ -40,11 +40,11 @@ shift 3 2>/dev/null || true
 # The dashboard's port lives in .env, so this and index.js agree without
 # either one hard-coding it. Already-set wins, as everywhere else.
 _ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-if [ -z "${SLACK_BRIDGE_PORT:-}" ] && [ -f "$_ROOT/.env" ]; then
-  SLACK_BRIDGE_PORT="$(sed -n 's/^[[:space:]]*SLACK_BRIDGE_PORT[[:space:]]*=[[:space:]]*//p' "$_ROOT/.env" | tail -n 1 | tr -d '"'"'"' \t\r')"
+if [ -z "${BRIDGE_PORT:-}" ] && [ -f "$_ROOT/.env" ]; then
+  BRIDGE_PORT="$(sed -n 's/^[[:space:]]*BRIDGE_PORT[[:space:]]*=[[:space:]]*//p' "$_ROOT/.env" | tail -n 1 | tr -d '"'"'"' \t\r')"
 fi
 
-PORT="${SLACK_BRIDGE_PORT:-4319}" \
+PORT="${BRIDGE_PORT:-4319}" \
 RUN_ID="$RUN_ID" PHASE="$PHASE" TEXT="$TEXT" \
 node -e '
   const http = require("http");

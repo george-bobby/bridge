@@ -30,16 +30,18 @@ if [[ ! -f "$PROJ/.env" ]]; then
   exit 1
 fi
 
-set -a
-# shellcheck disable=SC1091
-. "$PROJ/.env"
-set +a
+# Read .env with the dashboard's own parser rather than sourcing it: a value
+# that's fine for node (parentheses, spaces) is a syntax error to the shell.
+# An exported variable still wins, as it does in lib/env.js.
+envval() { node -e 'const fs=require("fs");const m=fs.readFileSync(process.argv[1],"utf8").match(new RegExp("^\\s*(?:export\\s+)?"+process.argv[2]+"\\s*=\\s*[\"\x27]?([^\"\x27#\\s]*)","m"));process.stdout.write(m?m[1]:"")' "$PROJ/.env" "$1"; }
+: "${LAUNCHD_LABEL:=$(envval LAUNCHD_LABEL)}"
+: "${BRIDGE_PORT:=$(envval BRIDGE_PORT)}"
 
-LABEL="${LAUNCHD_LABEL:-local.slack-bridge}"
+LABEL="${LAUNCHD_LABEL:-local.bridge}"
 DASH_LABEL="$LABEL.dashboard"
 DASH_PLIST_SRC="$SCRIPTS/dashboard.plist.template"
 DASH_PLIST_DST="$HOME/Library/LaunchAgents/$DASH_LABEL.plist"
-PORT="${SLACK_BRIDGE_PORT:-4319}"
+PORT="${BRIDGE_PORT:-4319}"
 
 # Earlier versions installed a launchd poller under the bare label and a
 # /scan-mentions command. Both are gone; clear them out if they're still here.
@@ -114,12 +116,13 @@ dashboard_start() {
   [[ -f "$DASH_PLIST_SRC" ]] || { echo "error: missing $DASH_PLIST_SRC" >&2; exit 1; }
   mkdir -p "$HOME/Library/LaunchAgents" "$PROJ/logs"
 
-  # launchd runs jobs with a near-empty PATH, so resolve node here. Follow the
-  # symlink: version-manager shims can disappear on a switch, and a dead
-  # ProgramArguments[0] just makes launchd fail the job silently.
-  NODE_BIN="$(command -v node || true)"
-  [[ -n "$NODE_BIN" ]] || { echo "error: node not found in PATH" >&2; exit 1; }
-  NODE_BIN="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$NODE_BIN" 2>/dev/null || echo "$NODE_BIN")"
+  # launchd runs jobs with a near-empty PATH, so resolve node here. Ask node
+  # itself for its binary rather than following the symlink: a version-manager
+  # shim (mise, asdf) is a link to the manager, so its realpath is `mise`, and
+  # launchd would run `mise index.js` instead of node.
+  command -v node >/dev/null || { echo "error: node not found in PATH" >&2; exit 1; }
+  NODE_BIN="$(node -p 'process.execPath')"
+  [[ -x "$NODE_BIN" ]] || { echo "error: could not resolve the node binary (got '$NODE_BIN')" >&2; exit 1; }
 
   # Stop the old dashboard job BEFORE freeing the port — under KeepAlive it
   # would just respawn onto the port we're about to clear.
@@ -177,7 +180,7 @@ case "${1:-}" in
       echo "  check:  tail $PROJ/logs/dashboard.err.log"
     fi
     echo "  logs:   $PROJ/logs/dashboard.{out,err}.log"
-    echo "  stop:   ./scripts/install.sh stop"
+    echo "  stop:   npm stop"
     echo "Or from any Claude Code session: /slack-fetch-pipeline <slack-thread-url>"
     ;;
   stop)

@@ -1,0 +1,29 @@
+{
+  "display_information": {
+    "name": "Bridge",
+    "description": "Read the threads you're mentioned in and reply to them from Bridge, as yourself.",
+    "background_color": "#5e6ad2"
+  },
+  "oauth_config": {
+    "scopes": {
+      "user": [
+        "search:read",
+        "channels:history",
+        "groups:history",
+        "im:history",
+        "mpim:history",
+        "channels:read",
+        "groups:read",
+        "im:read",
+        "mpim:read",
+        "users:read",
+        "chat:write"
+      ]
+    }
+  },
+  "settings": {
+    "org_deploy_enabled": false,
+    "socket_mode_enabled": false,
+    "token_rotation_enabled": false
+  }
+}
