@@ -369,6 +369,7 @@ struct CommandPalette: View {
         for (i, n) in navOrder.enumerated() {
             all.insert(PaletteItem(id: "go-\(n.label)", icon: sym(n.icon), title: "Go to \(n.label)", hint: "⌘\(i + 1)") { model.navigate(n.route) }, at: 1 + i)
         }
+        all.insert(PaletteItem(id: "go-settings", icon: sym("gearshape"), title: "Go to Settings", hint: "⌘,") { model.navigate(.settings) }, at: 1 + navOrder.count)
         all.append(PaletteItem(id: "board-view", icon: sym("rectangle.split.3x1"), title: "Sessions as a board") { model.route = .board })
         all.append(PaletteItem(id: "list-view", icon: sym("list.bullet"), title: "Sessions as a list") { model.route = .sessions })
         if case .session(let id) = model.route {
