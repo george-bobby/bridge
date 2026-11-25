@@ -13,19 +13,18 @@ struct InboxView: View {
     var body: some View {
         VStack(spacing: 0) {
             PageHeader(title: "Inbox", icon: "tray") {
-                Picker("", selection: Binding(get: { model.inbox["mode"].nonEmpty ?? "normal" }, set: { m in Task { await model.setMode(m) } })) {
-                    Text("Normal").tag("normal")
-                    Text("Quiet").tag("quiet")
-                    Text("Away").tag("away")
-                }
-                .pickerStyle(.segmented).frame(width: 200).controlSize(.small)
+                SlidingTabs(tabs: [
+                    .init(id: "normal", label: "Normal", icon: "bell"),
+                    .init(id: "quiet", label: "Quiet", icon: "moon"),
+                    .init(id: "away", label: "Away", icon: "airplane"),
+                ], selection: Binding(get: { model.inbox["mode"].nonEmpty ?? "normal" }, set: { m in Task { await model.setMode(m) } }))
                 .help("Normal relays everything to the orchestrator; quiet only what needs you; away holds it all for one catch-up")
-                Button("Brief me") {
+                Button {
                     Task {
                         await model.send("Catch me up on the last \(since.v): what needs me first, then what moved. A few lines.", to: "orchestrator")
                         model.open("orchestrator")
                     }
-                }
+                } label: { Label("Brief me", systemImage: "sparkles") }
                 .buttonStyle(LButton())
             }
             HStack(spacing: 8) {
@@ -37,8 +36,7 @@ struct InboxView: View {
                 ], selection: $tab.v)
                 Spacer()
                 if tab.v == "activity" {
-                    Picker("", selection: $since.v) { ForEach(["3h", "8h", "24h", "3d"], id: \.self) { Text($0).tag($0) } }
-                        .pickerStyle(.segmented).frame(width: 170).controlSize(.small)
+                    SlidingTabs(tabs: ["3h", "8h", "24h", "3d"].map { .init(id: $0, label: $0) }, selection: $since.v)
                         .onChange(of: since.v) { load() }
                         .transition(.opacity.combined(with: .move(edge: .trailing)))
                 }

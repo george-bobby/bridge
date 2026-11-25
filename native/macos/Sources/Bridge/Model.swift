@@ -209,7 +209,7 @@ enum Route: Hashable {
         case .usage: return "Usage"
         case .board: return "Board"
         case .sessions: return "Sessions"
-        case .pulls: return "Pull requests"
+        case .pulls: return "GitHub"
         case .linear: return "Linear"
         case .memory: return "Memory"
         case .session: return "Session"
@@ -911,7 +911,7 @@ final class AppModel {
         }
     }
 
-    func startIssue(_ issue: Issue, branch: String? = nil) async {
+    func startIssue(_ issue: Issue, branch: String? = nil, agent: AgentKind? = nil) async {
         let brief = [
             "Linear issue \(issue.key): \(issue.title)", issue.url, "",
             issue.description.isEmpty ? "(no description)" : issue.description, "",
@@ -920,6 +920,7 @@ final class AppModel {
         var body: [String: Any] = ["title": "\(issue.key) \(issue.title)", "brief": brief]
         let br = branch ?? issue.branch
         if !br.isEmpty { body["branch"] = br }
+        if let agent, agent != .claude { body["opts"] = ["agent": agent.rawValue] }
         do {
             let out = try await API.post("/api/tasks", body)
             say(out["state"].string == "queued" ? "Queued: every worker slot is busy." : "Worker started on \(out["branch"].string)")
@@ -927,7 +928,7 @@ final class AppModel {
         } catch {
             // Linear's branch already exists here: let the server name one.
             if error.localizedDescription.contains("already exists"), branch == nil, !issue.branch.isEmpty {
-                await startIssue(issue, branch: "")
+                await startIssue(issue, branch: "", agent: agent)
             } else {
                 say(error.localizedDescription, bad: true)
             }
