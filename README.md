@@ -325,12 +325,23 @@ for the layout, how to run the app against demo data, and the conventions.
 ## Tests
 
 ```bash
+npm run lint
 npm test
 ```
 
-Runs a real server against a scratch repo using `test/stub-claude.js`, a
-fake agent. It never touches `data/` and costs no usage. The app builds with
+`npm run lint` syntax-checks every server script, parses the committed JSON
+and fails on any `require` outside Node's standard library. `npm test` runs a
+real server against a scratch repo using `test/stub-claude.js`, a fake agent.
+It never touches `data/` and costs no usage. The app builds with
 `cd native/macos && swift build`.
+
+GitHub Actions runs all of this on every pull request and push to `main`
+(`.github/workflows/ci.yml`): lint, shellcheck and actionlint; the tests on
+Node 20, 22 and 24 on Linux and Node 22 on macOS; and a packaged `Bridge.app`
+build on macOS. To cut a release, bump `version` in `package.json`, merge, then
+push a matching tag (`git tag v2.1.0 && git push origin v2.1.0`):
+`.github/workflows/release.yml` reruns CI and publishes a GitHub release with
+generated notes.
 
 ## License
 

@@ -26,6 +26,7 @@
     "render": "node lib/render.js",
     "test": "node --test --test-concurrency=1 test/*.test.js",
     "app": "./scripts/build-app.sh install",
-    "demo": "node scripts/demo.js"
+    "demo": "node scripts/demo.js",
+    "lint": "node scripts/lint.js"
   }
 }

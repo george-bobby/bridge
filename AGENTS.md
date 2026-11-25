@@ -2,6 +2,9 @@
 
 Zero-dependency Node dashboard (no `npm install`) plus a Swift WKWebView shell.
 
+- `npm run lint`: `node --check` on every server script, JSON parse, and fails on any non-builtin `require` (zero-dependency rule)
+- CI (`.github/workflows/ci.yml`): lint + shellcheck + actionlint, `npm test` on Node 20/22/24 Linux and 22 macOS, `scripts/build-app.sh` on macos-15. The runner's Swift type-checker is slower than a local Mac: keep SwiftUI `body`s split into small computed views or it times out there while building fine locally
+- Releases: bump `package.json` version, merge, push tag `v<version>`; `release.yml` reruns CI, checks the tag matches and creates the GitHub release
 - `npm test`: policy, report parsing, end-to-end harness and workspace tests (stub agent, scratch data dir; never touches `data/`)
 - After every change, apply it to the installed app before calling the task done: Swift edits (`native/macos`) → `npm run app`; server edits (`index.js`, `lib/`, `.env`, `templates/`) → `npm restart` (skip if `npm run dev` is running and only `index.js`/`lib/` changed; it reloads those on save)
 - `npm run dev`: server in the foreground, restarting on `index.js`/`lib/` saves (stops the launchd server first; `npm start` to go back). No watcher exists for the Swift app
