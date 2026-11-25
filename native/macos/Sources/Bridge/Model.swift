@@ -222,7 +222,24 @@ enum Route: Hashable {
 @MainActor
 @Observable
 final class AppModel {
-    var route: Route = .home
+    var route: Route = .home {
+        didSet {
+            guard route != oldValue else { return }
+            if !travelling {
+                backStack.append(oldValue)
+                if backStack.count > 60 { backStack.removeFirst() }
+                forwardStack.removeAll()
+            }
+            if route == .board || route == .sessions {
+                sessionsRoute = route
+                UserDefaults.standard.set(route == .board ? "board" : "list", forKey: "sessions.layout")
+            }
+        }
+    }
+    var backStack: [Route] = []
+    var forwardStack: [Route] = []
+    @ObservationIgnored private var travelling = false
+    var sessionsRoute: Route = UserDefaults.standard.string(forKey: "sessions.layout") == "list" ? .sessions : .board
     var connected = false
     var everConnected = false
 
@@ -256,6 +273,97 @@ final class AppModel {
     var errors: [String: String] = [:]
 
     var openRun: JSON = .null
+    @ObservationIgnored private var runCache: [String: JSON] = [:]
+    @ObservationIgnored private var taskCache: [String: JSON] = [:]
+
+    var sidebarHidden = UserDefaults.standard.bool(forKey: "sidebar.hidden") {
+        didSet { UserDefaults.standard.set(sidebarHidden, forKey: "sidebar.hidden") }
+    }
+    var inspectorShown = !UserDefaults.standard.bool(forKey: "inspector.hidden") {
+        didSet { UserDefaults.standard.set(!inspectorShown, forKey: "inspector.hidden") }
+    }
+
+    func toggleSidebar() { withAnimation(M.snappy) { sidebarHidden.toggle() } }
+
+    func navigate(_ r: Route) {
+        if case .session(let id) = r { open(id) } else { route = r == .sessions ? sessionsRoute : r }
+    }
+
+    func back() {
+        guard let r = backStack.popLast() else { return }
+        travelling = true
+        forwardStack.append(route)
+        if case .session(let id) = r { open(id) } else { route = r }
+        travelling = false
+    }
+
+    func forward() {
+        guard let r = forwardStack.popLast() else { return }
+        travelling = true
+        backStack.append(route)
+        if case .session(let id) = r { open(id) } else { route = r }
+        travelling = false
+    }
+
+    // MARK: chat order, drafts, browser tabs
+
+    func sidebarSessions(in projectId: String) -> [Session] {
+        sessions(in: projectId).filter { !$0.pinned && column(of: $0) != .done }.sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    var chatOrder: [String] {
+        var ids = boardSessions.filter(\.pinned).sorted { $0.updatedAt > $1.updatedAt }.map(\.id)
+        for p in projects {
+            let o = orchestratorId(p.id)
+            if sessions.contains(where: { $0.id == o }) { ids.append(o) }
+            ids += sidebarSessions(in: p.id).map(\.id)
+        }
+        let seen = Set(ids)
+        ids += boardSessions.filter { !seen.contains($0.id) }.sorted { $0.updatedAt > $1.updatedAt }.map(\.id)
+        return ids
+    }
+
+    func stepChat(_ delta: Int) {
+        let order = chatOrder
+        guard !order.isEmpty else { return }
+        guard case .session(let id) = route, let i = order.firstIndex(of: id) else { return open(order[0]) }
+        let j = i + delta
+        guard order.indices.contains(j) else { return }
+        open(order[j])
+    }
+
+    var drafts: [String: String] = [:]
+    var attachments: [String: [Attachment]] = [:]
+    var browserTabs: [String: [BrowserTab]] = [:]
+    @ObservationIgnored let web = WebStore()
+
+    func openBrowser(_ runId: String, url: String) {
+        let tab = BrowserTab(url: url)
+        withAnimation(M.snappy) {
+            browserTabs[runId, default: []].append(tab)
+            chatTab = "web-\(tab.id)"
+        }
+    }
+
+    func closeBrowser(_ runId: String, _ tabId: String) {
+        withAnimation(M.snappy) {
+            browserTabs[runId]?.removeAll { $0.id == tabId }
+            if chatTab == "web-\(tabId)" { chatTab = "chat" }
+        }
+        web.drop(tabId)
+    }
+
+    func quoteIntoComposer(_ text: String) {
+        guard case .session(let id) = route else { return }
+        let quoted = text.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: "\n", omittingEmptySubsequences: false).map { "> \($0)" }.joined(separator: "\n")
+        guard !quoted.isEmpty else { return }
+        let cur = drafts[id] ?? ""
+        drafts[id] = (cur.isEmpty ? "" : cur.hasSuffix("\n") ? cur : cur + "\n\n") + quoted + "\n\n"
+        chatTab = "chat"
+        focusComposer += 1
+    }
+
+    var focusComposer = 0
     var openTask: JSON = .null
     var openId = ""
 
@@ -374,7 +482,7 @@ final class AppModel {
         if let i = sessions.firstIndex(where: { $0.id == sessionId }) {
             var o = sessions[i].j.object
             o["project"] = .str(projectId)
-            sessions[i] = Session(j: .obj(o))
+            withAnimation(M.snappy) { sessions[i] = Session(j: .obj(o)) }
         }
         await act { try await API.post("/api/runs/\(API.q(sessionId))/project", ["project": projectId]) }
     }
@@ -383,7 +491,7 @@ final class AppModel {
         if let i = sessions.firstIndex(where: { $0.id == id }) {
             var o = sessions[i].j.object
             o["pinned"] = .bool(on)
-            sessions[i] = Session(j: .obj(o))
+            withAnimation(M.snappy) { sessions[i] = Session(j: .obj(o)) }
         }
         await act { try await API.post("/api/runs/\(API.q(id))/pin", ["pinned": on]) }
     }
@@ -636,11 +744,13 @@ final class AppModel {
     private func handle(_ name: String, _ d: JSON) {
         switch name {
         case "state": applyState(d)
-        case "runs": sessions = d["runs"].array.map(Session.init)
+        case "runs": withAnimation(M.snappy) { sessions = d["runs"].array.map(Session.init) }
         case "jobs":
-            running = Set(d["running"].array.map(\.string))
-            awaiting = Set(d["awaiting"].array.map(\.string))
-        case "inbox": inbox = d
+            withAnimation(M.snappy) {
+                running = Set(d["running"].array.map(\.string))
+                awaiting = Set(d["awaiting"].array.map(\.string))
+            }
+        case "inbox": withAnimation(M.snappy) { inbox = d }
         case "projects": projects = d["projects"].array.map(Project.init)
         case "message", "delta", "run-updated":
             if d["runId"].string == openId { scheduleRefresh() }
@@ -673,8 +783,8 @@ final class AppModel {
         route = .session(id)
         guard openId != id else { return }
         openId = id
-        openRun = .null
-        openTask = .null
+        openRun = runCache[id] ?? .null
+        openTask = taskCache[id] ?? .null
         Task {
             await refreshOpen()
             try? await API.post("/api/runs/\(API.q(id))/seen")
@@ -687,10 +797,11 @@ final class AppModel {
         let id = openId
         guard !id.isEmpty, let r = try? await API.get("/api/runs/\(API.q(id))"), id == openId else { return }
         openRun = r["run"]
+        runCache[id] = openRun
         let kind = r["run"]["kind"].string
         guard kind == "task" || kind == "slack" || kind.isEmpty else { return }
         let task = (try? await API.get("/api/tasks/\(API.q(id))")) ?? .null
-        if id == openId { openTask = task }
+        if id == openId { openTask = task; taskCache[id] = task }
     }
 
     @discardableResult
@@ -724,7 +835,7 @@ final class AppModel {
         if let i = sessions.firstIndex(where: { $0.id == id }) {
             var o = sessions[i].j.object
             o["board"] = .str(column?.rawValue ?? "")
-            sessions[i] = Session(j: .obj(o))
+            withAnimation(M.snappy) { sessions[i] = Session(j: .obj(o)) }
         }
         await act { try await API.post("/api/runs/\(API.q(id))/board", ["column": column?.rawValue ?? ""]) }
     }

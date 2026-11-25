@@ -150,44 +150,32 @@ extension AppModel {
     }
 }
 
-/// Bottom-right: each agent's tightest window, like "✳ 49% 4d 3h". Hover for
-/// every window; click for the Usage page.
-struct UsageStrip: View {
-    @Environment(AppModel.self) var model
-    @StateObject private var hover = Box(false)
+struct UsageGauge: View {
+    let provider: UsageProvider
+    let window: UsageWindow
+    @StateObject private var drawn = Box(false)
 
     var body: some View {
-        let providers = model.usageProviders.filter { $0.ok && $0.tightest != nil }
-        if !providers.isEmpty {
-            VStack(alignment: .trailing, spacing: 8) {
-                if hover.v { UsageCard(providers: model.usageProviders).transition(.opacity.combined(with: .move(edge: .bottom))) }
-                Button { model.route = .usage } label: {
-                    HStack(spacing: 10) {
-                        Text("Used").font(T.ui(11)).foregroundStyle(T.text3)
-                        ForEach(providers) { p in
-                            if let w = p.tightest {
-                                HStack(spacing: 4) {
-                                    Image(systemName: p.agent.symbol).font(.system(size: 9.5, weight: .bold)).foregroundStyle(p.agent.color)
-                                    Text(verbatim: "\(Int((w.used ?? 0).rounded()))%").font(T.ui(11, .semibold)).foregroundStyle(w.tone).monospacedDigit()
-                                    Text(Countdown.until(w.resetsAt)).font(T.ui(11)).foregroundStyle(T.text3).monospacedDigit()
-                                }
-                                .help("\(p.agent.label) · \(w.label)")
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 10).frame(height: 24)
-                    .background(Capsule().fill(T.raised))
-                    .overlay(Capsule().stroke(T.line, lineWidth: 1))
-                }
-                .buttonStyle(.plain)
+        let used = min(max((window.used ?? 0) / 100, 0), 1)
+        HStack(spacing: 5) {
+            ZStack {
+                Circle().stroke(T.line, lineWidth: 2.2)
+                Circle().trim(from: 0, to: drawn.v ? used : 0)
+                    .stroke(window.tone, style: StrokeStyle(lineWidth: 2.2, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                Image(systemName: provider.agent.symbol).font(.system(size: 6.5, weight: .bold)).foregroundStyle(provider.agent.color)
             }
-            .onHover { h in withAnimation(.easeOut(duration: 0.12)) { hover.v = h } }
-            .padding(12)
+            .frame(width: 16, height: 16)
+            Text(verbatim: "\(Int((window.used ?? 0).rounded()))%").font(T.ui(11, .semibold)).foregroundStyle(window.tone).monospacedDigit()
+                .contentTransition(.numericText())
         }
+        .help("\(provider.agent.label) · \(window.label) · resets in \(Countdown.until(window.resetsAt))")
+        .onAppear { withAnimation(M.snappy.delay(0.15)) { drawn.v = true } }
+        .animation(M.snappy, value: used)
     }
 }
 
-/// The hover card: every agent's windows, compactly.
+/// Every agent's windows, compactly: the sidebar's usage popover.
 struct UsageCard: View {
     let providers: [UsageProvider]
     var body: some View {

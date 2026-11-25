@@ -3,6 +3,8 @@
 Zero-dependency Node dashboard (no `npm install`) plus a Swift WKWebView shell.
 
 - `npm test`: policy, report parsing, end-to-end harness and workspace tests (stub agent, scratch data dir; never touches `data/`)
+- After every change, apply it to the installed app before calling the task done: Swift edits (`native/macos`) → `npm run app`; server edits (`index.js`, `lib/`, `.env`, `templates/`) → `npm restart` (skip if `npm run dev` is running and only `index.js`/`lib/` changed; it reloads those on save)
+- `npm run dev`: server in the foreground, restarting on `index.js`/`lib/` saves (stops the launchd server first; `npm start` to go back). No watcher exists for the Swift app
 - `npm restart`: pick up server edits (`index.js`, `lib/`, `.env`). `public/` is read from disk per request, so UI edits need only a reload
 - `npm run app`: rebuild `dist/Bridge.app` and install it to `~/Applications` (rebuild after moving the repo; its path is baked in)
 - Try UI changes against scratch data: `SB_DATA_DIR=/tmp/x PORT=4400 node index.js`
@@ -19,6 +21,13 @@ Zero-dependency Node dashboard (no `npm install`) plus a Swift WKWebView shell.
 - Demo data: `npm run demo` (fictional team on :4420, fixture feeds from lib/demo.js, stub agent), then run the app with `BRIDGE_PORT=4420`
 - README screenshots: `BRIDGE_PORT=4420 BRIDGE_SNAPSHOT_CHAT=1732530001.000100 BRIDGE_SNAPSHOT_DIR=/tmp/shots .build/release/Bridge`, then copy into docs/screenshots (never screenshot real data)
 - Styling lives in `Theme.swift` (Linear palette, StatusIcon, PriorityIcon, Chip, HoverRow); follow it rather than adding ad-hoc colors
+- Motion lives there too: curves in `M` (hover, snappy, page, pop), `.hoverBox(box)` for eased hover, `Pressable`, `SlidingTabs`, `.rise(i)`, `.shimmer()`, `.floatingPanel()`; native pieces `VisualEffect` (vibrancy) and `SearchField` (NSSearchField). Use these instead of bare `onHover`/ad-hoc animations
+- Sidebar order and ⌘1…⌘9 both come from `navOrder` in App.swift; the sidebar's selection pill is a `matchedGeometryEffect` shared through `\.navNS`
+- Don't use SwiftUI `.inspector` in the chat: with the hidden title bar it re-adds the title-bar safe area inconsistently (expanded vs collapsed sidebar). The details panel is a plain animated trailing column
+- Snapshots include a `collapsed` page (sidebar hidden) to check the traffic-light inset; `BRIDGE_SNAPSHOT_PAGES=chat,browser` limits the run to those pages, `BRIDGE_SNAPSHOT_URL=http://localhost:4420` adds a `browser` page (a browser tab in the chat)
+- Keep `.scrollIndicators(.never)` on the chat transcript: with always-visible scroll bars, wrapped text near the fold makes the scroller appear/disappear forever and hangs the main thread in layout
+- Sidebar groups: actions (New task, Search), Overview (Home, Inbox, Sessions), Sources (Slack, PRs, Linear), Pinned, Projects; Memory/Usage/Settings live in the footer. Board and list are one "Sessions" page (`model.sessionsRoute` remembers the layout; use `model.navigate(.sessions)`)
+- Chat container: prev/next chat follows `model.chatOrder` (sidebar order); tabs are Chat, Changes and browser tabs (`Browser.swift`, live `WKWebView`s kept in `model.web`); drafts and attachments are per chat in the model. Pasted images/files and big pastes become attachment chips, saved under `~/Library/Application Support/Bridge/attachments` and sent as paths in the message text
 - The old web UI is kept, untouched, in `legacy/`
 - "Open in cmux" goes through cmux's AppleScript dictionary: its CLI socket only accepts processes started inside cmux
 
