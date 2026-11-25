@@ -56,6 +56,7 @@ struct Session: Identifiable, Hashable {
         var t = s.replacingOccurrences(of: #"<([^|>]+)\|([^>]+)>"#, with: "$2", options: .regularExpression)
         t = t.replacingOccurrences(of: #"<[@#!][^>]+>"#, with: "", options: .regularExpression)
         t = t.replacingOccurrences(of: #"<(https?://[^>]+)>"#, with: "$1", options: .regularExpression)
+        t = t.replacingOccurrences(of: #"(\*\*|__|`)"#, with: "", options: .regularExpression)
         return t.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression).trimmingCharacters(in: .whitespaces)
     }
 }
@@ -244,6 +245,8 @@ final class AppModel {
     var todos: [JSON] { inbox["todos"].array }
     var needsCount: Int { boardSessions.filter { column(of: $0) == .needs }.count + decisions.count }
 
+    var liveCount: Int { boardSessions.filter { isLive($0) }.count }
+
     func isLive(_ s: Session) -> Bool { running.contains(s.id) || s.action == "running" || s.j["live"].bool }
     func isAwaiting(_ s: Session) -> Bool { awaiting.contains(s.id) || s.j["awaiting"].bool }
 
@@ -267,7 +270,7 @@ final class AppModel {
         if !s.prUrl.isEmpty { return (!pulls.isNull && p == nil) ? .done : .review }
         if st == "ready-for-review" || st == "pushed-follow-up" { return .review }
         if ["acted", "skipped", "error"].contains(s.action) { return .done }
-        if !s.worked { return .backlog }
+        if !s.worked || s.j["messages"].int == 0 { return .backlog }
         return .needs
     }
 

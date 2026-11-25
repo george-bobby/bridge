@@ -181,7 +181,7 @@ struct HomeView: View {
                                 HStack(spacing: 10) {
                                     Image(systemName: d["kind"].string == "action" ? "hand.raised" : "questionmark.bubble").foregroundStyle(T.orange).frame(width: 14)
                                     Text(d["title"].nonEmpty ?? d["taskId"].string).font(T.ui(13, .medium)).lineLimit(1)
-                                    Text(d["text"].string.replacingOccurrences(of: "\n", with: " ")).font(T.ui(12.5)).foregroundStyle(T.text3).lineLimit(1)
+                                    Text(inline(d["text"].string.replacingOccurrences(of: "\n", with: " "))).font(T.ui(12.5)).foregroundStyle(T.text3).lineLimit(1)
                                     Spacer()
                                 }
                             }
@@ -238,7 +238,7 @@ struct HomeView: View {
 
     var stats: some View {
         HStack(spacing: 0) {
-            Stat(value: "\(model.running.count)", label: "Running", tint: model.running.isEmpty ? nil : T.yellow) { model.route = .board }
+            Stat(value: "\(model.liveCount)", label: "Running", tint: model.liveCount == 0 ? nil : T.yellow) { model.route = .board }
             Stat(value: "\(model.needsCount)", label: "Need you", tint: model.needsCount > 0 ? T.orange : nil) { model.route = .inbox }
             Stat(value: model.pulls.isNull ? "–" : "\(model.openPulls.count)", label: "Open PRs", sub: "\(model.openPulls.filter(\.needsAttention).count) need attention") { model.route = .pulls }
             Stat(value: model.pulls.isNull ? "–" : "\(model.reviewPulls.count)", label: "Reviews for you") { model.route = .pulls }
@@ -490,9 +490,8 @@ struct BoardCard: View {
                 Text(session.statusLine).font(T.ui(11.5)).foregroundStyle(T.accent).lineLimit(1)
             }
             let ports = model.servers(for: session)
-            if !session.prUrl.isEmpty || !ports.isEmpty || session.cost > 0 || !session.taskStatus.isEmpty {
+            if !session.prUrl.isEmpty || !ports.isEmpty || session.cost > 0 {
                 HStack(spacing: 5) {
-                    if let label = statusLabels[session.taskStatus], !model.isLive(session) { Chip(text: label) }
                     if !session.prUrl.isEmpty {
                         Button { openURL(session.prUrl) } label: { Chip(text: "#\(session.prNumber)", icon: "arrow.triangle.pull", mono: true) }.buttonStyle(.plain)
                     }

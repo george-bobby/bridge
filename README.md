@@ -1,50 +1,101 @@
-# Bridge
+<p align="center">
+  <img src="native/macos/icon.png" width="88" alt="Bridge" />
+</p>
 
-A native macOS command center for Claude Code: every session, PR, Linear
-issue and Slack thread you have in flight, on one screen, in a desktop app
-styled like Linear. Hand it a Slack thread or a task, and a headless Claude worker
-does the work in its own git worktree, opens the PR, and stops to ask you only
-where a decision is yours.
+<h1 align="center">Bridge</h1>
 
-- **Slack threads.** Paste a thread link. A session reads it, root-causes it,
-  drafts a Linear ticket, builds, opens a PR, waits for review bots, resolves
-  comments, and drafts the reply.
-- **Tasks.** Type what you want. The orchestrator writes a brief and spawns a
-  worker for it.
-- **Home, Inbox, Board, Sessions, Pull requests, Linear, Memory.** `⌘1`-`⌘7`.
-  The Board is a Kanban of every session; PRs and Linear (with sub-issues) are
-  live from `gh` and your Linear API key, cross-linked to the sessions working
-  on them.
-- **Nothing runs on its own.** No poller, no timer, no Slack app or token.
-  Slack and Linear go through the connectors your Claude session already has.
+<p align="center">
+  A native macOS command center for Claude Code.<br/>
+  Every session, pull request, Linear issue and Slack thread you have in flight, on one screen.
+</p>
 
-## Setup
+<p align="center">
+  <img src="docs/screenshots/board.png" alt="The Board: every Claude session as a card" />
+</p>
 
-Requires Node 18+, Claude Code with the Slack and Linear connectors, and `gh`.
-No `npm install` needed.
+Bridge runs Claude Code for you. Hand it a Slack thread or a task and a
+headless Claude worker does the work in its own git worktree, opens the PR,
+and stops to ask you only where a decision is yours. The desktop app, styled
+like Linear, is where you watch all of it: a Kanban board of sessions, your PRs
+with their checks, your Linear issues with their sub-issues, and an inbox of
+the questions workers are waiting on.
+
+- **A board of Claude sessions.** Backlog, In Progress, Needs You, In Review, Done.
+  Cards move on their own as sessions run, block, open a PR or merge; drag one
+  to pin it.
+- **GitHub and Linear, cross-linked.** PRs with checks, reviews and conflicts;
+  Linear issues with sub-issues as a tree; each linked to the session working
+  on it. Start a worker on an issue, or ask Claude to fix CI or resolve review
+  comments, in one click.
+- **Slack threads to PRs.** Paste a thread link: a session reads it,
+  root-causes it, drafts a Linear ticket, builds, opens a PR, waits for review
+  bots and drafts the reply.
+- **You stay in control.** Workers run with a guard: destructive git, Slack
+  posts, ticket and PR writes come to you as exact-payload Allow/Deny cards.
+  Nothing runs on a timer.
+- **Native and local.** SwiftUI app, a zero-dependency Node server on
+  `127.0.0.1`, plain files for state. No account, no cloud.
+
+## Screens
+
+| | |
+| --- | --- |
+| ![Home](docs/screenshots/home.png) **Home**: what's running, what needs you, PRs and issues | ![Session](docs/screenshots/chat.png) **Session**: the transcript, a question Claude is waiting on, the composer |
+| ![Linear](docs/screenshots/linear.png) **Linear**: your issues with sub-issues as a tree | ![Pull requests](docs/screenshots/pulls.png) **Pull requests**: what needs attention first |
+| ![Command menu](docs/screenshots/palette.png) **⌘K**: commands and full-text search | ![Inbox](docs/screenshots/inbox.png) **Inbox**: workers' questions, to-dos, activity |
+
+Every screenshot is the built-in demo (`npm run demo`): a fictional team, no
+real data.
+
+## Requirements
+
+- macOS 15 or later, and the Xcode Command Line Tools (`xcode-select --install`). Full Xcode isn't needed.
+- Node 18+
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code), signed in. For Slack threads, its Slack and Linear connectors.
+- [`gh`](https://cli.github.com), signed in, for the PR views
+- Optional: a Linear personal API key for the Linear views; [cmux](https://cmux.com), iTerm or Terminal to continue a session by hand
+
+## Quick start
 
 ```bash
-cp .env.example .env      # fill it in (every key is described there)
-npm start                 # the server, under launchd
+git clone https://github.com/george-bobby/bridge.git
+cd bridge
+cp .env.example .env      # fill it in: every key is described there
+npm start                 # the server, in the background under launchd
 npm run app               # build Bridge.app, install it to ~/Applications, open it
 ```
 
-`npm run app` builds the SwiftUI app in `native/macos` with `swift build`
-(the Xcode command line tools; full Xcode isn't needed), copies it to
-`~/Applications` and opens it. Rebuild it after moving the repo, because the
-repo path is baked in. The old browser UI is still served at
-http://localhost:4319 (see `legacy/`).
+No `npm install`: the server has zero dependencies. `npm run app` builds the
+SwiftUI app in `native/macos` with `swift build`, copies it to
+`~/Applications` and opens it. Rebuild after moving the repo, because the repo
+path is baked in.
 
-`npm start` renders the skill, links it into `~/.claude/skills/`, and runs
-the dashboard in the background under launchd, so it comes back after a login.
-`npm stop` stops it, and `npm restart` picks up changes to `.env`, `lib/` or
-`templates/`. `npm run dev` stops the background copy and runs it in the
-foreground, restarting on server edits; `npm start` puts it back afterwards.
+### Try it with demo data
+
+```bash
+npm run demo                                               # a second server on :4420 with a fictional team
+BRIDGE_PORT=4420 ~/Applications/Bridge.app/Contents/MacOS/Bridge
+```
+
+The demo has sessions in every state, PRs, Linear issues with sub-issues and
+dev servers. Its data lives in a temp folder rebuilt on every start, and any
+session you continue runs a stub agent, so it costs nothing.
+
+### Running the server
+
+`npm start` renders the Slack pipeline skill, links it into
+`~/.claude/skills/`, and runs the server under launchd, so it comes back after
+a login. `npm stop` stops it, and `npm restart` picks up changes to `.env`,
+`lib/` or `templates/`. `npm run dev` runs it in the foreground, restarting on
+server edits. The app starts the server itself if it isn't running.
 
 To give the pipeline your repo's own commands (checks, log queries, prod read
 paths), copy `templates/slack-fetch-pipeline/SKILL.md` to
 `templates.local/slack-fetch-pipeline/SKILL.md` and edit it. That copy is
 gitignored and used in place of the generic one.
+
+The previous browser UI is kept in `legacy/` and still served at
+http://localhost:4319.
 
 ## How it works
 
@@ -92,7 +143,7 @@ down are picked up.
 
 A SwiftUI desktop app in Linear's visual language: dense rows, hairline
 borders, Linear's workflow circles and priority bars, one indigo accent,
-keyboard first.
+keyboard first. Everything is reachable from `⌘K`.
 
 | | |
 | --- | --- |
@@ -211,11 +262,21 @@ data/               runtime state (gitignored)
 
 Design notes and the defaults chosen: [NOTES.md](NOTES.md).
 
+## Contributing
+
+Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md)
+for the layout, how to run the app against demo data, and the conventions.
+
 ## Tests
 
 ```bash
 npm test
 ```
 
-Runs a real dashboard against a scratch repo using `test/stub-claude.js`, a
-fake agent. It never touches `data/` and costs no usage.
+Runs a real server against a scratch repo using `test/stub-claude.js`, a
+fake agent. It never touches `data/` and costs no usage. The app builds with
+`cd native/macos && swift build`.
+
+## License
+
+MIT, see [LICENSE](LICENSE).

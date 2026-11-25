@@ -25,6 +25,7 @@
     "foreground": "node lib/render.js && node index.js",
     "render": "node lib/render.js",
     "test": "node --test --test-concurrency=1 test/*.test.js",
-    "app": "./scripts/build-app.sh install"
+    "app": "./scripts/build-app.sh install",
+    "demo": "node scripts/demo.js"
   }
 }
