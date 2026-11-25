@@ -5,9 +5,8 @@ import SwiftUI
 // MARK: - Terminal tab
 //
 // The session, continued inside the app: SwiftTerm's LocalProcessTerminalView
-// runs the server's resume command (GET /api/runs/:id/terminal, the same line
-// "Open in External Terminal" hands to Terminal.app) in the user's login
-// shell, in the session's folder. One terminal per session, kept alive in
+// runs the server's resume command (GET /api/runs/:id/terminal) in the
+// user's login shell, in the session's folder. One terminal per session, kept alive in
 // `TermStore` while its tab is open, so switching tabs or panes never kills it.
 
 @MainActor
@@ -190,7 +189,6 @@ struct TerminalPane: View {
                     copyToPasteboard(session.command); model.say("Command copied")
                 }
                 IconButton(icon: "arrow.clockwise", help: "Restart the session here") { session.restart() }
-                IconButton(icon: "arrow.up.forward.app", help: "Open in \(model.terminalName) instead") { Task { await model.terminal(runId) } }
             }
             .padding(.horizontal, 14).frame(height: 40)
             Hairline()

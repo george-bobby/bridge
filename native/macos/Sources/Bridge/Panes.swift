@@ -20,6 +20,8 @@ struct Pane: Identifiable, Hashable {
 
 enum PaneEdge { case leading, trailing, center }
 
+struct DropZone: Equatable { let pane: String; let edge: PaneEdge }
+
 /// What a drag carries: a sidebar session is its bare id (`.draggable(s.id)`),
 /// a tab or pane header is `bridge-tab:<run>\t<tab>`.
 enum PanePayload {
@@ -165,6 +167,18 @@ extension AppModel {
         focusPane(focusedPane)
     }
 
+    /// "Open to the Side" / ⌥-click: the session's chat beside the focused
+    /// pane (or focus it, when it's already on screen). Off the chat page,
+    /// this is just open.
+    func openToSide(_ run: String) {
+        guard isChatRoute, panes.indices.contains(focusedPane), !panes[focusedPane].run.isEmpty else { return open(run) }
+        if let j = panes.firstIndex(where: { $0.run == run && $0.tab == "chat" }) { return focusPane(j) }
+        if panes.count >= Self.maxPanes, let last = panes.last {
+            return dropInPane(run: run, tab: "chat", at: last.id, edge: .center)
+        }
+        dropInPane(run: run, tab: "chat", at: panes[focusedPane].id, edge: .trailing)
+    }
+
     /// ⌘\: open something useful beside the focused pane: this session's
     /// Changes (from its chat) or chat (from anything else), else the next
     /// chat in sidebar order that isn't on screen yet.
@@ -268,7 +282,7 @@ extension AppModel {
                 if NSEvent.pressedMouseButtons & 1 == 0 {
                     timer.invalidate()
                     // Let a drop land before the catchers go away.
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { if model.paneDragActive { withAnimation(M.hover) { model.paneDragActive = false } } }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { if model.paneDragActive { withAnimation(M.hover) { model.paneDragActive = false; model.dropZone = nil } } }
                     return
                 }
                 let pb = NSPasteboard(name: .drag)
@@ -356,7 +370,6 @@ struct PaneView: View {
     @Environment(AppModel.self) var model
     let pane: Pane
     let index: Int
-    @StateObject private var zone = Box<PaneEdge?>(nil)
 
     var focused: Bool { model.focusedPane == index }
 
@@ -366,27 +379,28 @@ struct PaneView: View {
             ZStack { PaneContent(run: pane.run, tab: pane.tab).id(pane.run + "|" + pane.tab).transition(.opacity) }
                 .animation(M.page, value: pane.run + "|" + pane.tab)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if model.isSplit && focused && model.showsDetails && !pane.run.isEmpty {
+                DetailsDrawer(id: pane.run)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
         }
+        .animation(M.snappy, value: model.isSplit && focused && model.showsDetails)
         .background(T.panel)
         .clipped()
         .contentShape(Rectangle())
-        .overlay { if model.paneDragActive { DropZones(zone: zone.v).allowsHitTesting(false) } }
+        .overlay { if model.paneDragActive { DropZones(zone: model.dropZone?.pane == pane.id ? model.dropZone?.edge : nil).allowsHitTesting(false) } }
         .overlay {
             if model.paneDragActive {
                 DropCatcher(
-                    update: { edge in if zone.v != edge { withAnimation(M.hover) { zone.v = edge } } },
+                    split: model.isSplit,
+                    update: { edge in model.hintDrop(pane.id, edge) },
                     perform: { raw, edge in
-                        zone.v = nil
-                        guard let (run, tab) = PanePayload.parse(raw, in: model) else { return false }
-                        model.dropInPane(run: run, tab: tab, at: pane.id, edge: edge)
-                        withAnimation(M.hover) { model.paneDragActive = false }
-                        return true
+                        model.landDrop(raw, at: pane.id, edge: edge)
                     })
             }
         }
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { PaneFrames.shared.frames[pane.id] = $0 }
         .onDisappear { PaneFrames.shared.frames[pane.id] = nil }
-        .onChange(of: model.paneDragActive) { if !model.paneDragActive { zone.v = nil } }
     }
 }
 
@@ -490,6 +504,9 @@ struct DropZones: View {
 /// web views, text views and the terminal all register for text drops
 /// themselves, and an AppKit view above them is the one sure way to win.
 struct DropCatcher: NSViewRepresentable {
+    let split: Bool
+    /// Every point is this edge (the details column: "beside the chat").
+    var fixed: PaneEdge? = nil
     let update: (PaneEdge?) -> Void
     let perform: (String, PaneEdge) -> Bool
 
@@ -502,15 +519,23 @@ struct DropCatcher: NSViewRepresentable {
     func updateNSView(_ v: CatcherView, context: Context) {
         v.update = update
         v.perform = perform
+        v.split = split
+        v.fixed = fixed
     }
 
     final class CatcherView: NSView {
         var update: (PaneEdge?) -> Void = { _ in }
         var perform: (String, PaneEdge) -> Bool = { _, _ in false }
+        var split = false
+        var fixed: PaneEdge?
         private var edge: PaneEdge = .center
 
+        /// One pane: either half splits. Split: the outer bands split, the
+        /// middle replaces that pane.
         func zone(_ info: NSDraggingInfo) -> PaneEdge {
+            if let fixed { return fixed }
             let x = convert(info.draggingLocation, from: nil).x
+            if !split { return x < bounds.width / 2 ? .leading : .trailing }
             let band = min(bounds.width * 0.3, 220)
             return x < band ? .leading : x > bounds.width - band ? .trailing : .center
         }
@@ -522,6 +547,7 @@ struct DropCatcher: NSViewRepresentable {
             return .move
         }
         override func draggingExited(_ sender: NSDraggingInfo?) { update(nil) }
+        override func draggingEnded(_ sender: NSDraggingInfo) { update(nil) }
         override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
             guard let raw = sender.draggingPasteboard.string(forType: .string) else { return false }
             return perform(raw, zone(sender))
@@ -560,5 +586,25 @@ struct PaneCommands: Commands {
 }
 
 extension AppModel {
+    func hintDrop(_ pane: String, _ edge: PaneEdge?) {
+        guard let edge else {
+            if dropZone?.pane == pane { withAnimation(M.hover) { dropZone = nil } }
+            return
+        }
+        let z = DropZone(pane: pane, edge: edge)
+        if dropZone != z { withAnimation(M.hover) { dropZone = z } }
+    }
+
+    @discardableResult func landDrop(_ raw: String, at pane: String, edge: PaneEdge) -> Bool {
+        dropZone = nil
+        guard let (run, tab) = PanePayload.parse(raw, in: self) else { return false }
+        dropInPane(run: run, tab: tab, at: pane, edge: edge)
+        withAnimation(M.hover) { paneDragActive = false }
+        return true
+    }
+
+    /// The details are for the chat and its changes; a browser or terminal
+    /// wants the room.
+    var showsDetails: Bool { inspectorShown && (chatTab == "chat" || chatTab == "changes") }
     var isChatRoute: Bool { if case .session = route { return true }; return false }
 }
