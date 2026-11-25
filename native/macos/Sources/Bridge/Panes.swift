@@ -331,6 +331,7 @@ extension AppModel {
     static let shared = PaneFrames()
     var frames: [String: CGRect] = [:]
     private var monitor: Any?
+    private var keys: Any?
     private var dragTimer: Timer?
     private var dragCount = 0
     weak var model: AppModel?
@@ -346,6 +347,9 @@ extension AppModel {
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] e in
             MainActor.assumeIsolated { self?.mouseDown(e) }
             return e
+        }
+        keys = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { e in
+            MainActor.assumeIsolated { model.messageKey(e) } ? nil : e
         }
     }
 

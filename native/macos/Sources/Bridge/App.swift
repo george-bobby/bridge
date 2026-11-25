@@ -28,7 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             if let last = pages.first(where: { $0.0 == "chat" }) {
                 pages.append(("collapsed", last.1))
                 if browser != nil { pages.append(("browser", last.1)) }
-                pages += [("split", last.1), ("split-details", last.1), ("split-wide", last.1), ("split4", last.1), ("drop", last.1), ("terminal", last.1)]
+                pages += [("split", last.1), ("split-details", last.1), ("split-wide", last.1), ("split4", last.1), ("messages", last.1), ("messages-split", last.1), ("drop", last.1), ("terminal", last.1)]
             }
             let hidden = model.sidebarHidden
             if let only = ProcessInfo.processInfo.environment["BRIDGE_SNAPSHOT_PAGES"]?.split(separator: ",").map(String.init) {
@@ -39,7 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 model.sidebarHidden = name == "collapsed"
                 if route == .settings { model.settingsPane = name.hasPrefix("settings-") ? String(name.dropFirst(9)) : "general" }
                 if name == "browser", case .session(let id) = route, let browser { model.open(id); model.openBrowser(id, url: browser) }
-                if name.hasPrefix("split"), case .session(let id) = route { model.panes = [Pane(run: id)]; model.focusedPane = 0 }
+                if name.hasPrefix("split") || name.hasPrefix("messages"), case .session(let id) = route { model.panes = [Pane(run: id)]; model.focusedPane = 0 }
                 if case .session(let id) = route { model.open(id) } else { model.route = route }
                 if name == "split" { model.splitRight(); model.splitRight() }
                 if name == "split4" { for _ in 0..<3 { model.splitRight() } }
@@ -62,7 +62,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 else if model.paneDragActive { model.paneDragActive = false; model.dropZone = nil }
                 if name == "terminal", case .session(let id) = route { model.openTerminalTab(id) }
                 if name == "slack", let m = model.mentions.first { model.openThread(m.permalink) }
-                try? await Task.sleep(nanoseconds: 2_500_000_000)
+                var wait: UInt64 = 2_500_000_000
+                // A long chat stepped back six prompts, caught mid-flash;
+                // split: the long chat beside another, stepped in its pane.
+                if name.hasPrefix("messages"), let long = model.sessions.first(where: { $0.id.contains("web-124") }) {
+                    model.panes = [Pane(run: long.id)]; model.focusedPane = 0
+                    model.open(long.id)
+                    if name == "messages-split", case .session(let id) = route { model.openToSide(id); model.focusPane(0) }
+                    try? await Task.sleep(nanoseconds: 2_500_000_000)
+                    for _ in 0..<6 { model.messageNavs[long.id]?.step(-1); try? await Task.sleep(nanoseconds: 450_000_000) }
+                    wait = 500_000_000
+                }
+                try? await Task.sleep(nanoseconds: wait)
                 guard let content = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil && $0.frame.width > 800 })?.contentView,
                       let view = content.superview ?? Optional(content),
                       let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(view.bounds.width * 2), pixelsHigh: Int(view.bounds.height * 2), bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { continue }

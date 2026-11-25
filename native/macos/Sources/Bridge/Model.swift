@@ -315,6 +315,8 @@ final class AppModel {
     /// Loaded task records (report, worktree) by id: the open one and the
     /// ones whose pane shows its details.
     var taskCache: [String: JSON] = [:]
+    /// Each on-screen transcript's message navigation, by run (Messages.swift).
+    @ObservationIgnored var messageNavs: [String: MessageNav] = [:]
     func taskData(_ id: String) -> JSON { id == openId ? openTask : taskCache[id] ?? .null }
 
     var sidebarHidden = UserDefaults.standard.bool(forKey: "sidebar.hidden") {
