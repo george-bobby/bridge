@@ -758,7 +758,7 @@ struct JobOption {
     let choices: [(String, String)]
 
     static let all: [JobOption] = [
-        JobOption(key: "permissionMode", label: "Mode", icon: "lock.shield", choices: [("plan", "Plan"), ("manual", "Manual"), ("acceptEdits", "Edit"), ("bypassPermissions", "Full access")]),
+        JobOption(key: "permissionMode", label: "Mode", icon: "lock.shield", choices: [("plan", "Plan mode"), ("manual", "Ask before acting"), ("acceptEdits", "Accept edits"), ("bypassPermissions", "Bypass permissions")]),
         JobOption(key: "model", label: "Model", icon: "cpu", choices: [("opus", "Opus"), ("sonnet", "Sonnet"), ("haiku", "Haiku"), ("fable", "Fable")]),
         JobOption(key: "effort", label: "Thinking", icon: "brain", choices: [("", "Auto"), ("low", "Low"), ("medium", "Medium"), ("high", "High"), ("xhigh", "X-High"), ("max", "Max")]),
     ]
@@ -791,36 +791,20 @@ struct Composer: View {
                 }
                 .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
-            if text.v.hasPrefix("/") && !text.v.contains(" ") && !text.v.contains("\n") {
-                SlashMenu(query: String(text.v.dropFirst())) { name in text.v = "/\(name) " }
-                    .padding(.horizontal, 8).padding(.top, 8)
-                    .transition(.opacity.combined(with: .move(edge: .bottom)))
-            }
-            ZStack(alignment: .topLeading) {
-                if text.v.isEmpty {
-                    Text(live ? "Queue a follow-up for when this turn ends…" : "Reply, paste an image, or ⌘L to quote a selection…")
-                        .font(T.ui(13.5)).foregroundStyle(T.text3).padding(.horizontal, 5).padding(.top, 1)
-                }
-                TextEditor(text: $text.v)
-                    .font(T.ui(13.5))
-                    .scrollContentBackground(.hidden)
-                    .scrollIndicators(.never)
-                    .focused($focused)
-                    .frame(minHeight: 44, maxHeight: 180)
-                    .fixedSize(horizontal: false, vertical: true)
+            PromptEditor(text: $text.v, placeholder: live ? "Queue a follow-up for when this turn ends…" : "Reply, paste an image, @ a file, # a session, / a skill…",
+                         source: .run(runId), exclude: runId, focused: $focused) { a in
+                if !items.contains(where: { $0.id == a.id }) { add(a) }
             }
             .padding(.horizontal, 12).padding(.top, 12)
             HStack(spacing: 4) {
                 Button { pickFiles() } label: { ComposerChip(icon: "paperclip", text: "") }
                     .buttonStyle(.plain).help("Attach images or files (or paste / drop them here)")
                 let agent = AgentKind.of(value("agent").string)
-                AgentPicker(runId: runId, current: agent)
-                ModelPicker(runId: runId, agent: agent, current: value(agent == .claude ? "model" : "agentModel").string)
-                ForEach(JobOption.all.filter { $0.key != "model" && ($0.key != "effort" || agent == .claude || agent == .codex) }, id: \.key) { opt in optionMenu(opt) }
-                contextToggle
-                repoButton
+                AgentModelPicker(agent: agent, modelId: value(agent == .claude ? "model" : "agentModel").string, effort: value("effort").string,
+                                 pick: { a, m in pickModel(a, m, was: agent) }, setEffort: { e in Task { await model.setOpts(runId, ["effort": e]) } })
+                AccessPicker(agent: agent, mode: value("permissionMode").string) { m in Task { await model.setOpts(runId, ["permissionMode": m]) } }
                 Spacer()
-                ContextMeter(run: model.openRun)
+                ContextButton(runId: runId, run: model.openRun, agent: agent, live: live)
                 if live && !text.v.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Button {
                         let t = text.v
@@ -851,7 +835,6 @@ struct Composer: View {
             }
             .padding(10)
         }
-        .animation(M.snappy, value: text.v.hasPrefix("/") && !text.v.contains(" "))
         .animation(M.snappy, value: items.map(\.id))
         .overlay {
             if dropping.v {
@@ -877,6 +860,7 @@ struct Composer: View {
         .onAppear {
             text.v = model.drafts[runId] ?? ""
             installPasteMonitor()
+            ComposerSnapshots.run(model: model) { t in text.v = t }
         }
         .onDisappear { if let m = monitor.v { NSEvent.removeMonitor(m); monitor.v = nil } }
         .onChange(of: text.v) { if model.drafts[runId] ?? "" != text.v { model.drafts[runId] = text.v } }
@@ -892,43 +876,15 @@ struct Composer: View {
         return own.isNull ? model.config["followup"][key] : own
     }
 
-    func optionMenu(_ opt: JobOption) -> some View {
-        let current = value(opt.key).string
-        let label = opt.choices.first { $0.0 == current }?.1 ?? (current.isEmpty ? "Auto" : current)
-        return Menu {
-            ForEach(opt.choices, id: \.0) { c in
-                Button { Task { await model.setOpts(runId, [opt.key: c.0]) } } label: {
-                    if c.0 == current { Label(c.1, systemImage: "checkmark") } else { Text(c.1) }
-                }
-            }
-        } label: {
-            ComposerChip(icon: opt.icon, text: label, warn: opt.key == "permissionMode" && current == "bypassPermissions")
+    /// Agent and model change together. Switching agents mid-session hands
+    /// the work over: the next agent's first turn opens with a briefing.
+    func pickModel(_ a: AgentKind, _ m: String, was: AgentKind) {
+        var patch: [String: Any] = ["agent": a.rawValue]
+        patch[a == .claude ? "model" : "agentModel"] = m
+        Task { await model.setOpts(runId, patch) }
+        if a != was && model.openRun["messages"].array.contains(where: { $0["role"].string == "assistant" }) {
+            model.say("Next turn goes to \(a.label), with a handoff briefing")
         }
-        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-        .help(opt.label)
-    }
-
-    var contextToggle: some View {
-        let on = value("context1m").bool
-        return Button { Task { await model.setOpts(runId, ["context1m": !on]) } } label: {
-            ComposerChip(icon: "rectangle.stack", text: on ? "1M" : "200k")
-        }
-        .buttonStyle(.plain).help("Context window")
-    }
-
-    var repoButton: some View {
-        let dir = value("workdir").string
-        return Button {
-            let p = NSOpenPanel()
-            p.canChooseDirectories = true
-            p.canChooseFiles = false
-            p.directoryURL = URL(fileURLWithPath: dir.isEmpty ? NSHomeDirectory() : dir)
-            p.prompt = "Use this folder"
-            if p.runModal() == .OK, let u = p.url { Task { await model.setOpts(runId, ["workdir": u.path]) } }
-        } label: {
-            ComposerChip(icon: "folder", text: dir.isEmpty ? "Repo" : URL(fileURLWithPath: dir).lastPathComponent)
-        }
-        .buttonStyle(.plain).help(dir.isEmpty ? "Working directory" : dir)
     }
 
     /// The draft is cleared only once the server has taken it, and only if
