@@ -31,6 +31,7 @@ struct Sidebar: View {
                     NavItem(icon: "arrow.triangle.pull", label: "Pull requests", route: .pulls, count: model.openPulls.count, hot: model.openPulls.contains(where: \.needsAttention))
                     NavItem(icon: "circle.lefthalf.filled", label: "Linear", route: .linear, count: model.issues.filter(\.active).count)
                     NavItem(icon: "book.closed", label: "Memory", route: .memory)
+                    NavItem(icon: "gauge.with.dots.needle.50percent", label: "Usage", route: .usage)
 
                     let pinned = model.boardSessions.filter(\.pinned).sorted { $0.updatedAt > $1.updatedAt }
                     if !pinned.isEmpty {

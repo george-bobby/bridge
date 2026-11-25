@@ -299,6 +299,16 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // --- plan usage for Claude, Codex, Cursor and Devin (status bar, Usage page) ---
+  if (req.method === "GET" && p === "/api/usage") {
+    if (!sameOrigin(req)) return sendJson(res, 403, { ok: false, error: "cross-origin request refused" });
+    try {
+      return sendJson(res, 200, { ok: true, ...(await require("./lib/usage").all({ refresh: url.searchParams.get("refresh") === "1" })) });
+    } catch (e) {
+      return sendJson(res, 500, { ok: false, error: String(e.message || e) });
+    }
+  }
+
   // --- .env from Settings; a restart applies it ----------------------------
   if (p === "/api/env" || p === "/api/restart") {
     if (!sameOrigin(req)) return sendJson(res, 403, { ok: false, error: "cross-origin request refused" });

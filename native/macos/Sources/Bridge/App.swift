@@ -17,7 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// Dev aid: render every page of the window to PNGs, for checking the UI
     /// without screen-recording permission. `BRIDGE_SNAPSHOT_DIR=/tmp/x Bridge`.
     private func snapshots(to dir: String) {
-        let routes: [(String, Route)] = [("home", .home), ("board", .board), ("sessions", .sessions), ("pulls", .pulls), ("linear", .linear), ("inbox", .inbox), ("memory", .memory), ("slack", .slack)]
+        let routes: [(String, Route)] = [("home", .home), ("board", .board), ("sessions", .sessions), ("pulls", .pulls), ("linear", .linear), ("inbox", .inbox), ("memory", .memory), ("slack", .slack), ("usage", .usage)]
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 8_000_000_000)
             var pages = routes
@@ -104,6 +104,7 @@ struct BridgeCommands: Commands {
             Button("Linear") { model.route = .linear }.keyboardShortcut("6")
             Button("Memory") { model.route = .memory }.keyboardShortcut("7")
             Button("Slack") { model.route = .slack }.keyboardShortcut("8")
+            Button("Usage") { model.route = .usage }.keyboardShortcut("9")
             Divider()
             Button("Orchestrator") { model.openOrchestrator(model.projectFilter) }.keyboardShortcut("o")
             Button("Add Project…") { model.addProject() }.keyboardShortcut("p", modifiers: [.command, .shift])
@@ -124,9 +125,10 @@ struct RootView: View {
         HStack(spacing: 0) {
             Sidebar().frame(width: 236)
             Rectangle().fill(T.line).frame(width: 1)
-            ZStack {
+            ZStack(alignment: .bottomTrailing) {
                 T.panel
                 detail
+                UsageStrip()
             }
         }
         .background(T.bg)
@@ -144,6 +146,7 @@ struct RootView: View {
         case .home: HomeView()
         case .inbox: InboxView()
         case .slack: SlackView()
+        case .usage: UsageView()
         case .board: BoardView()
         case .sessions: SessionsView()
         case .pulls: PullsView()
