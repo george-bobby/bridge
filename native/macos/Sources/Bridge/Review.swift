@@ -241,37 +241,6 @@ struct TodoList: View {
 
 // MARK: - Slash commands
 
-struct SlashMenu: View {
-    @Environment(AppModel.self) var model
-    let query: String
-    let pick: (String) -> Void
-
-    var body: some View {
-        let q = query.lowercased()
-        let hits = model.commands.filter { q.isEmpty || $0["name"].string.lowercased().hasPrefix(q) || $0["name"].string.lowercased().contains(q) }.prefix(8)
-        if !hits.isEmpty {
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(hits), id: \.self) { c in
-                    Button { pick(c["name"].string) } label: {
-                        HStack(spacing: 8) {
-                            Text("/" + c["name"].string).font(T.mono(12, .medium)).foregroundStyle(T.text)
-                            Text(c["description"].string).font(T.ui(11.5)).foregroundStyle(T.text3).lineLimit(1)
-                            Spacer()
-                            Text(c["source"].string).font(T.ui(10)).foregroundStyle(T.text3)
-                        }
-                        .padding(.horizontal, 10).frame(height: 28).contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(4)
-            .background(RoundedRectangle(cornerRadius: 9).fill(T.raised))
-            .overlay(RoundedRectangle(cornerRadius: 9).stroke(T.line, lineWidth: 1))
-            .shadow(color: .black.opacity(0.35), radius: 16, y: 6)
-        }
-    }
-}
-
 extension AppModel {
     func loadCommands(for runId: String) async {
         commands = (try? await API.get("/api/commands?runId=\(API.q(runId))"))?["commands"].array ?? []
@@ -292,27 +261,5 @@ extension AppModel {
             if !running.contains(id) { break }
         }
         return await send(text, to: id)
-    }
-}
-
-/// How full the context window was on the last turn.
-struct ContextMeter: View {
-    let run: JSON
-    var body: some View {
-        let last = run["messages"].array.last { $0["role"].string == "assistant" && $0["usage"]["input"].int + $0["usage"]["cacheRead"].int > 0 }
-        if let m = last {
-            let used = m["usage"]["input"].double + m["usage"]["cacheRead"].double + m["usage"]["cacheWrite"].double
-            let size = m["contextWindow"].double > 0 ? m["contextWindow"].double : 200_000
-            let f = min(1, used / size)
-            HStack(spacing: 4) {
-                ZStack {
-                    Circle().stroke(T.line, lineWidth: 2)
-                    Circle().trim(from: 0, to: f).stroke(f > 0.8 ? T.orange : T.text2, style: StrokeStyle(lineWidth: 2, lineCap: .round)).rotationEffect(.degrees(-90))
-                }
-                .frame(width: 12, height: 12)
-                Text(verbatim: "\(Int(f * 100))%").font(T.ui(10.5)).foregroundStyle(T.text3).monospacedDigit()
-            }
-            .help("Context: \(Fmt.tokens(Int(used))) of \(Fmt.tokens(Int(size))) tokens on the last turn")
-        }
     }
 }

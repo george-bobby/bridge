@@ -86,7 +86,8 @@ struct SessionMenu: View {
     var body: some View {
         Section {
             Button { model.open(session.id) } label: { Label("Open", systemImage: "arrow.up.forward.app") }
-            Button { Task { await model.terminal(session.id) } } label: { Label("Open in \(model.terminalName)", systemImage: "terminal") }
+            Button { model.open(session.id); model.openTerminalTab(session.id) } label: { Label("Open in Terminal Tab", systemImage: "terminal") }
+            Button { Task { await model.terminal(session.id) } } label: { Label("Open in \(model.terminalName)", systemImage: "arrow.up.forward.app") }
         }
         Section {
             Button { Task { await model.setPinned(session.id, !session.pinned) } } label: {

@@ -14,6 +14,9 @@
  *   stub:exit                 die without a result
  *   stub:ask                  ask a permission question and wait for the answer
  *
+ * `/compact` compacts (a compact_boundary event); the initialize handshake
+ * answers with a small command and model list.
+ *
  * Follow-up turns: an "[harness] <name> answered" message writes a
  * ready-for-review report; anything else repeats the brief's directives.
  * Every argv is appended to $STUB_LOG, so tests can check the flags.
@@ -88,6 +91,11 @@ const done = (text, extra = {}) => out({ type: "result", subtype: "success", res
 
 async function turn(prompt) {
   out({ type: "system", subtype: "init", session_id: "stub" });
+  if (/^\/compact\b/.test(prompt)) {
+    out({ type: "system", subtype: "status", status: "compacting" });
+    out({ type: "system", subtype: "compact_boundary", compact_metadata: { trigger: "manual", pre_tokens: 42000, post_tokens: 6000 } });
+    return done("", { num_turns: 0 });
+  }
   if (/^\[harness\] (\S+ answered|\S+ approved|You were interrupted)/.test(prompt)) {
     writeReport("ready-for-review");
     say("Applied the answer.");
@@ -136,7 +144,9 @@ process.stdin.on("data", (c) => {
     } catch {
       continue;
     }
-    if (m.type === "control_response" && waitingAnswer) {
+    if (m.type === "control_request" && m.request && m.request.subtype === "initialize") {
+      out({ type: "control_response", response: { subtype: "success", request_id: m.request_id, response: { commands: [{ name: "stub-skill", description: "A skill the stub reports (user)", argumentHint: "" }, { name: "compact", description: "Clear conversation history but keep a summary in context", argumentHint: "" }], models: [{ value: "default", displayName: "Default" }, { value: "opus", resolvedModel: "claude-opus-stub", displayName: "Opus", description: "Stub opus", supportedEffortLevels: ["low", "high"] }] } } });
+    } else if (m.type === "control_response" && waitingAnswer) {
       const r = waitingAnswer;
       waitingAnswer = null;
       r(m.response.response);
