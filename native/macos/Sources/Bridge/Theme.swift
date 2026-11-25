@@ -40,6 +40,13 @@ enum T {
     static let purple = Color(red: 0.55, green: 0.42, blue: 0.95)
     static let slack = Color(red: 0.80, green: 0.45, blue: 0.85)
 
+    static let lightsInset: CGFloat = 158
+    static let panelInset: CGFloat = 8
+    static let headerHeight: CGFloat = 52
+    static let sidebarWidth: CGFloat = 264
+    static let sideHover = Color.primary.opacity(0.055)
+    static let sideSelected = Color.primary.opacity(0.10)
+
     static func ui(_ size: CGFloat = 13, _ weight: Font.Weight = .regular) -> Font { .system(size: size, weight: weight) }
     static func mono(_ size: CGFloat = 12, _ weight: Font.Weight = .regular) -> Font { .system(size: size, weight: weight, design: .monospaced) }
 }
@@ -178,8 +185,8 @@ struct Chip: View {
             Text(text).font(mono ? T.mono(10.5, .medium) : T.ui(11, .medium)).lineLimit(1)
         }
         .foregroundStyle(tint ?? T.text2)
-        .padding(.horizontal, 6)
-        .frame(height: 20)
+        .padding(.horizontal, 7)
+        .frame(height: 22)
         .background(RoundedRectangle(cornerRadius: 5).fill((tint ?? T.text3).opacity(tint == nil ? 0.0 : 0.10)))
         .overlay(RoundedRectangle(cornerRadius: 5).stroke(tint == nil ? T.line : (tint ?? T.line).opacity(0.25), lineWidth: 1))
         .fixedSize()
@@ -228,17 +235,17 @@ struct Kbd: View {
 /// A row that lights on hover, the way every Linear list does.
 struct HoverRow<Content: View>: View {
     var selected = false
-    var height: CGFloat? = 36
+    var height: CGFloat? = 40
     let content: () -> Content
     @StateObject private var hover = Box(false)
 
     var body: some View {
         content()
             .frame(minHeight: height)
-            .padding(.horizontal, 14)
+            .padding(.horizontal, 20)
             .background(selected ? T.selected : hover.v ? T.hover : Color.clear)
             .contentShape(Rectangle())
-            .onHover { hover.v = $0 }
+            .hoverBox(hover)
     }
 }
 
@@ -257,8 +264,8 @@ struct GroupHeader<Trailing: View>: View {
             Spacer()
             trailing()
         }
-        .padding(.horizontal, 14)
-        .frame(height: 34)
+        .padding(.horizontal, 20)
+        .frame(height: 38)
         .background(T.raised.opacity(0.55))
     }
 }
@@ -271,6 +278,7 @@ extension GroupHeader where Trailing == EmptyView {
 
 /// The bar across the top of every page: title on the left, actions right.
 struct PageHeader<Actions: View>: View {
+    @Environment(AppModel.self) var model
     let title: String
     var subtitle: String = ""
     var icon: String? = nil
@@ -278,14 +286,15 @@ struct PageHeader<Actions: View>: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            if let icon { Image(systemName: icon).font(.system(size: 12, weight: .medium)).foregroundStyle(T.text2) }
-            Text(title).font(T.ui(13, .medium)).foregroundStyle(T.text)
-            if !subtitle.isEmpty { Text(subtitle).font(T.ui(12)).foregroundStyle(T.text3).lineLimit(1) }
+            if let icon { Image(systemName: icon).font(.system(size: 13, weight: .medium)).foregroundStyle(T.text2) }
+            Text(title).font(T.ui(14, .semibold)).foregroundStyle(T.text)
+            if !subtitle.isEmpty { Text(subtitle).font(T.ui(12.5)).foregroundStyle(T.text3).lineLimit(1) }
             Spacer()
             actions()
         }
-        .padding(.horizontal, 16)
-        .frame(height: 44)
+        .padding(.horizontal, 20)
+        .padding(.leading, model.sidebarHidden ? T.lightsInset : 0)
+        .frame(height: T.headerHeight)
         .overlay(alignment: .bottom) { Rectangle().fill(T.line).frame(height: 1) }
     }
 }
@@ -307,16 +316,17 @@ struct IconButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: icon)
-                .font(.system(size: 12.5, weight: .medium))
+                .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(hover.v ? T.text : T.text2)
                 .rotationEffect(.degrees(spinning ? 360 : 0))
                 .animation(spinning ? .linear(duration: 0.9).repeatForever(autoreverses: false) : .default, value: spinning)
-                .frame(width: 26, height: 26)
-                .background(RoundedRectangle(cornerRadius: 6).fill(hover.v ? T.hover : .clear))
+                .frame(width: 28, height: 28)
+                .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(hover.v ? T.hover : .clear))
+                .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(Pressable(scale: 0.9))
         .help(help)
-        .onHover { hover.v = $0 }
+        .hoverBox(hover)
     }
 }
 
@@ -325,15 +335,32 @@ struct LButton: ButtonStyle {
     var primary = false
     var danger = false
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(T.ui(12, .medium))
+        LButtonBody(label: configuration.label, pressed: configuration.isPressed, primary: primary, danger: danger)
+    }
+}
+
+private struct LButtonBody<Label: View>: View {
+    let label: Label
+    let pressed: Bool
+    let primary: Bool
+    let danger: Bool
+    @Environment(\.isEnabled) private var enabled
+    @StateObject private var hover = Box(false)
+
+    var body: some View {
+        label
+            .font(T.ui(12.5, .medium))
             .foregroundStyle(primary ? .white : danger ? T.red : T.text)
-            .padding(.horizontal, 10)
-            .frame(height: 26)
-            .background(RoundedRectangle(cornerRadius: 6).fill(primary ? T.accent : T.raised))
-            .overlay(RoundedRectangle(cornerRadius: 6).stroke(primary ? Color.clear : T.line, lineWidth: 1))
-            .opacity(configuration.isPressed ? 0.75 : 1)
+            .padding(.horizontal, 12)
+            .frame(height: 30)
+            .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(primary ? T.accent : hover.v ? T.hover : T.raised))
+            .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(.white.opacity(primary && hover.v ? 0.08 : 0)))
+            .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).stroke(primary ? Color.clear : T.line, lineWidth: 1))
+            .scaleEffect(pressed ? 0.97 : 1)
+            .opacity(enabled ? (pressed ? 0.85 : 1) : 0.45)
             .contentShape(Rectangle())
+            .hoverBox(hover)
+            .animation(M.pop, value: pressed)
     }
 }
 
@@ -343,8 +370,10 @@ struct EmptyState: View {
     var detail: String = ""
     var body: some View {
         VStack(spacing: 10) {
-            Image(systemName: icon).font(.system(size: 26, weight: .light)).foregroundStyle(T.text3)
-            Text(title).font(T.ui(13, .medium)).foregroundStyle(T.text2)
+            Image(systemName: icon).font(.system(size: 30, weight: .light)).foregroundStyle(T.text3)
+                .frame(width: 64, height: 64)
+                .background(Circle().fill(T.raised.opacity(0.6)))
+            Text(title).font(T.ui(14, .medium)).foregroundStyle(T.text2)
             if !detail.isEmpty { Text(detail).font(T.ui(12)).foregroundStyle(T.text3).multilineTextAlignment(.center).frame(maxWidth: 340) }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -357,18 +386,202 @@ struct LField: View {
     let placeholder: String
     @Binding var text: String
     var onSubmit: () -> Void = {}
+    @FocusState private var focused: Bool
     var body: some View {
         TextField(placeholder, text: $text)
             .textFieldStyle(.plain)
-            .font(T.ui(12.5))
-            .padding(.horizontal, 9)
-            .frame(height: 28)
-            .background(RoundedRectangle(cornerRadius: 6).fill(T.raised))
-            .overlay(RoundedRectangle(cornerRadius: 6).stroke(T.line, lineWidth: 1))
+            .font(T.ui(13))
+            .focused($focused)
+            .padding(.horizontal, 10)
+            .frame(height: 32)
+            .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(T.raised))
+            .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).stroke(focused ? T.accent.opacity(0.7) : T.line, lineWidth: 1))
+            .shadow(color: T.accent.opacity(focused ? 0.25 : 0), radius: 4)
+            .animation(M.hover, value: focused)
             .onSubmit(onSubmit)
     }
 }
 
 struct Hairline: View {
     var body: some View { Rectangle().fill(T.lineSoft).frame(height: 1) }
+}
+
+// MARK: - Motion
+
+enum M {
+    static let hover = Animation.easeOut(duration: 0.14)
+    static let snappy = Animation.snappy(duration: 0.3, extraBounce: 0.02)
+    static let page = Animation.smooth(duration: 0.24)
+    static let pop = Animation.spring(response: 0.3, dampingFraction: 0.84)
+}
+
+extension AnyTransition {
+    static var page: AnyTransition {
+        .asymmetric(insertion: .opacity.combined(with: .offset(y: 6)), removal: .opacity)
+    }
+    static var panel: AnyTransition {
+        .opacity.combined(with: .scale(scale: 0.96, anchor: .top))
+    }
+}
+
+extension View {
+    func hoverBox(_ box: Box<Bool>) -> some View {
+        onHover { h in withAnimation(M.hover) { box.v = h } }
+    }
+
+    func rise(_ index: Int) -> some View { modifier(Rise(delay: Double(index) * 0.04)) }
+
+    func shimmer(_ on: Bool = true) -> some View { modifier(Shimmer(on: on)) }
+
+    func floatingPanel(radius: CGFloat = 14) -> some View {
+        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        return self
+            .background(T.raised.opacity(0.72), in: shape)
+            .background(.regularMaterial, in: shape)
+            .overlay(shape.stroke(Color.white.opacity(0.09), lineWidth: 1))
+            .clipShape(shape)
+            .shadow(color: .black.opacity(0.5), radius: 40, y: 18)
+    }
+}
+
+struct Rise: ViewModifier {
+    let delay: Double
+    @StateObject private var shown = Box(false)
+    func body(content: Content) -> some View {
+        content
+            .opacity(shown.v ? 1 : 0)
+            .offset(y: shown.v ? 0 : 10)
+            .onAppear { withAnimation(M.snappy.delay(delay)) { shown.v = true } }
+    }
+}
+
+struct Shimmer: ViewModifier {
+    let on: Bool
+    @StateObject private var phase = Box(false)
+    func body(content: Content) -> some View {
+        content
+            .overlay {
+                if on {
+                    GeometryReader { g in
+                        LinearGradient(colors: [.clear, .white.opacity(0.7), .clear], startPoint: .leading, endPoint: .trailing)
+                            .frame(width: max(g.size.width * 0.5, 30))
+                            .offset(x: phase.v ? g.size.width : -max(g.size.width * 0.5, 30))
+                    }
+                    .mask(content)
+                    .allowsHitTesting(false)
+                }
+            }
+            .onAppear { withAnimation(.linear(duration: 1.5).repeatForever(autoreverses: false)) { phase.v = true } }
+    }
+}
+
+// MARK: - Native pieces
+
+struct VisualEffect: NSViewRepresentable {
+    var material: NSVisualEffectView.Material = .sidebar
+    var blending: NSVisualEffectView.BlendingMode = .behindWindow
+    var active = false
+
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let v = NSVisualEffectView()
+        updateNSView(v, context: context)
+        return v
+    }
+
+    func updateNSView(_ v: NSVisualEffectView, context: Context) {
+        v.material = material
+        v.blendingMode = blending
+        v.state = active ? .active : .followsWindowActiveState
+    }
+}
+
+struct SearchField: NSViewRepresentable {
+    var placeholder = "Filter"
+    @Binding var text: String
+
+    func makeNSView(context: Context) -> NSSearchField {
+        let f = NSSearchField()
+        f.placeholderString = placeholder
+        f.delegate = context.coordinator
+        f.sendsSearchStringImmediately = true
+        f.controlSize = .regular
+        f.font = .systemFont(ofSize: 12.5)
+        f.bezelStyle = .roundedBezel
+        return f
+    }
+
+    func updateNSView(_ f: NSSearchField, context: Context) {
+        context.coordinator.parent = self
+        if f.stringValue != text { f.stringValue = text }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject, NSSearchFieldDelegate {
+        var parent: SearchField
+        init(_ parent: SearchField) { self.parent = parent }
+        func controlTextDidChange(_ n: Notification) {
+            if let f = n.object as? NSTextField { parent.text = f.stringValue }
+        }
+    }
+}
+
+struct SlidingTabs: View {
+    struct Tab: Identifiable {
+        let id: String
+        let label: String
+        var count = 0
+        var hot = false
+        var icon: String? = nil
+    }
+
+    let tabs: [Tab]
+    @Binding var selection: String
+    @Namespace private var ns
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(tabs) { t in
+                let on = selection == t.id
+                Button { withAnimation(M.snappy) { selection = t.id } } label: {
+                    HStack(spacing: 6) {
+                        if let icon = t.icon { Image(systemName: icon).font(.system(size: 10.5, weight: .medium)) }
+                        Text(t.label).font(T.ui(12, .medium))
+                        if t.count > 0 {
+                            Text(verbatim: "\(t.count)").font(T.ui(10.5, .semibold)).monospacedDigit()
+                                .foregroundStyle(t.hot ? .white : T.text2)
+                                .padding(.horizontal, 5).frame(minHeight: 15)
+                                .background(Capsule().fill(t.hot ? T.orange : T.line))
+                                .contentTransition(.numericText())
+                        }
+                    }
+                    .foregroundStyle(on ? T.text : T.text2)
+                    .padding(.horizontal, 11).frame(height: 26)
+                    .background {
+                        if on {
+                            RoundedRectangle(cornerRadius: 6).fill(T.selected)
+                                .shadow(color: .black.opacity(0.25), radius: 1.5, y: 0.5)
+                                .matchedGeometryEffect(id: "pill", in: ns)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(2)
+        .background(RoundedRectangle(cornerRadius: 8).fill(T.raised.opacity(0.7)))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(T.lineSoft, lineWidth: 1))
+        .fixedSize()
+    }
+}
+
+struct Pressable: ButtonStyle {
+    var scale: CGFloat = 0.96
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? scale : 1)
+            .opacity(configuration.isPressed ? 0.85 : 1)
+            .animation(M.pop, value: configuration.isPressed)
+    }
 }
