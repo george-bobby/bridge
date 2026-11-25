@@ -744,12 +744,16 @@ final class AppModel {
     private func handle(_ name: String, _ d: JSON) {
         switch name {
         case "state": applyState(d)
-        case "runs": withAnimation(M.snappy) { sessions = d["runs"].array.map(Session.init) }
+        case "runs":
+            // Animate only when rows come, go or change place; animating every
+            // in-place update cross-fades the whole window while sessions stream.
+            let next = d["runs"].array.map(Session.init)
+            guard next != sessions else { break }
+            let place = { (l: [Session]) in l.map { "\($0.id)|\(self.column(of: $0).rawValue)|\($0.pinned)|\($0.project)" } }
+            if place(next) == place(sessions) { sessions = next } else { withAnimation(M.snappy) { sessions = next } }
         case "jobs":
-            withAnimation(M.snappy) {
-                running = Set(d["running"].array.map(\.string))
-                awaiting = Set(d["awaiting"].array.map(\.string))
-            }
+            let r = Set(d["running"].array.map(\.string)), a = Set(d["awaiting"].array.map(\.string))
+            if r != running || a != awaiting { withAnimation(M.snappy) { running = r; awaiting = a } }
         case "inbox": withAnimation(M.snappy) { inbox = d }
         case "projects": projects = d["projects"].array.map(Project.init)
         case "message", "delta", "run-updated":
