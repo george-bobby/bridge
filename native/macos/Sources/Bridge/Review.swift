@@ -30,25 +30,43 @@ struct ChangesView: View {
             if !s["repo"].bool && !s.isNull {
                 EmptyState(icon: "folder.badge.questionmark", title: "Not a git checkout", detail: s["dir"].string)
             } else {
-                HSplitView {
-                    VStack(spacing: 0) {
-                        ScrollView {
-                            LazyVStack(spacing: 0) {
-                                if s["files"].array.isEmpty { Text("Nothing uncommitted").font(T.ui(12)).foregroundStyle(T.text3).padding(14) }
-                                ForEach(s["files"].array, id: \.self) { f in fileRow(f) }
-                            }
+                // Side by side when there's room; stacked in a narrow split pane.
+                GeometryReader { g in
+                    if g.size.width >= 620 {
+                        HSplitView {
+                            files.frame(minWidth: 240, idealWidth: 300, maxWidth: 380)
+                            diffView.frame(minWidth: 300, maxWidth: .infinity, maxHeight: .infinity)
                         }
-                        Hairline()
-                        actions
+                    } else {
+                        VSplitView {
+                            files.frame(minHeight: 200, idealHeight: min(g.size.height * 0.45, 380), maxHeight: .infinity)
+                            diffView.frame(maxWidth: .infinity, minHeight: 160, maxHeight: .infinity)
+                        }
                     }
-                    .frame(minWidth: 240, idealWidth: 300, maxWidth: 380)
-                    ScrollView([.vertical, .horizontal]) { DiffText(diff: diff.v).padding(12) }
-                        .frame(minWidth: 300, maxWidth: .infinity, maxHeight: .infinity)
-                        .background(T.bg)
                 }
             }
         }
         .onAppear(perform: load)
+    }
+
+    var files: some View {
+        let s = status.v
+        return VStack(spacing: 0) {
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    if s["files"].array.isEmpty { Text("Nothing uncommitted").font(T.ui(12)).foregroundStyle(T.text3).padding(14) }
+                    ForEach(s["files"].array, id: \.self) { f in fileRow(f) }
+                }
+            }
+            Hairline()
+            actions
+        }
+    }
+
+    var diffView: some View {
+        ScrollView([.vertical, .horizontal]) { DiffText(diff: diff.v).padding(12) }
+            .defaultScrollAnchor(.topLeading)
+            .background(T.bg)
     }
 
     func fileRow(_ f: JSON) -> some View {
@@ -223,37 +241,6 @@ struct TodoList: View {
 
 // MARK: - Slash commands
 
-struct SlashMenu: View {
-    @Environment(AppModel.self) var model
-    let query: String
-    let pick: (String) -> Void
-
-    var body: some View {
-        let q = query.lowercased()
-        let hits = model.commands.filter { q.isEmpty || $0["name"].string.lowercased().hasPrefix(q) || $0["name"].string.lowercased().contains(q) }.prefix(8)
-        if !hits.isEmpty {
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(hits), id: \.self) { c in
-                    Button { pick(c["name"].string) } label: {
-                        HStack(spacing: 8) {
-                            Text("/" + c["name"].string).font(T.mono(12, .medium)).foregroundStyle(T.text)
-                            Text(c["description"].string).font(T.ui(11.5)).foregroundStyle(T.text3).lineLimit(1)
-                            Spacer()
-                            Text(c["source"].string).font(T.ui(10)).foregroundStyle(T.text3)
-                        }
-                        .padding(.horizontal, 10).frame(height: 28).contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(4)
-            .background(RoundedRectangle(cornerRadius: 9).fill(T.raised))
-            .overlay(RoundedRectangle(cornerRadius: 9).stroke(T.line, lineWidth: 1))
-            .shadow(color: .black.opacity(0.35), radius: 16, y: 6)
-        }
-    }
-}
-
 extension AppModel {
     func loadCommands(for runId: String) async {
         commands = (try? await API.get("/api/commands?runId=\(API.q(runId))"))?["commands"].array ?? []
@@ -274,27 +261,5 @@ extension AppModel {
             if !running.contains(id) { break }
         }
         return await send(text, to: id)
-    }
-}
-
-/// How full the context window was on the last turn.
-struct ContextMeter: View {
-    let run: JSON
-    var body: some View {
-        let last = run["messages"].array.last { $0["role"].string == "assistant" && $0["usage"]["input"].int + $0["usage"]["cacheRead"].int > 0 }
-        if let m = last {
-            let used = m["usage"]["input"].double + m["usage"]["cacheRead"].double + m["usage"]["cacheWrite"].double
-            let size = m["contextWindow"].double > 0 ? m["contextWindow"].double : 200_000
-            let f = min(1, used / size)
-            HStack(spacing: 4) {
-                ZStack {
-                    Circle().stroke(T.line, lineWidth: 2)
-                    Circle().trim(from: 0, to: f).stroke(f > 0.8 ? T.orange : T.text2, style: StrokeStyle(lineWidth: 2, lineCap: .round)).rotationEffect(.degrees(-90))
-                }
-                .frame(width: 12, height: 12)
-                Text(verbatim: "\(Int(f * 100))%").font(T.ui(10.5)).foregroundStyle(T.text3).monospacedDigit()
-            }
-            .help("Context: \(Fmt.tokens(Int(used))) of \(Fmt.tokens(Int(size))) tokens on the last turn")
-        }
     }
 }

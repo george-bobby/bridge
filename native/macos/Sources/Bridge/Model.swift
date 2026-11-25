@@ -209,7 +209,7 @@ enum Route: Hashable {
         case .usage: return "Usage"
         case .board: return "Board"
         case .sessions: return "Sessions"
-        case .pulls: return "Pull requests"
+        case .pulls: return "GitHub"
         case .linear: return "Linear"
         case .memory: return "Memory"
         case .session: return "Session"
@@ -258,7 +258,20 @@ final class AppModel {
     var usage: JSON = .null
     var agentCatalog: JSON = .null
     var commands: [JSON] = []
-    var chatTab = "chat"
+    /// The chat page's side-by-side panes (Panes.swift). One pane is today's
+    /// single chat; the focused one is the route's session and `chatTab`.
+    var panes: [Pane] = [Pane(run: "")]
+    var focusedPane = 0
+    /// A session or tab is being dragged: panes show their drop zones.
+    var paneDragActive = false
+    /// The focused pane's tab: "chat", "changes", "term" or "web-<id>".
+    var chatTab: String {
+        get { panes.indices.contains(focusedPane) ? panes[focusedPane].tab : "chat" }
+        set { if panes.indices.contains(focusedPane) { panes[focusedPane].tab = newValue } }
+    }
+    /// Runs with an open Terminal tab; the processes live in `terms`.
+    var terminalTabs: Set<String> = []
+    @ObservationIgnored let terms = TermStore()
     var slack: JSON = .null
     var mentions: [Mention] = []
     var slackThread: JSON = .null
@@ -273,7 +286,9 @@ final class AppModel {
     var errors: [String: String] = [:]
 
     var openRun: JSON = .null
-    @ObservationIgnored private var runCache: [String: JSON] = [:]
+    /// Every loaded run by id: the open one and the ones shown in other panes.
+    var runs: [String: JSON] = [:]
+    func runData(_ id: String) -> JSON { id == openId ? openRun : runs[id] ?? .null }
     @ObservationIgnored private var taskCache: [String: JSON] = [:]
 
     var sidebarHidden = UserDefaults.standard.bool(forKey: "sidebar.hidden") {
@@ -348,7 +363,7 @@ final class AppModel {
     func closeBrowser(_ runId: String, _ tabId: String) {
         withAnimation(M.snappy) {
             browserTabs[runId]?.removeAll { $0.id == tabId }
-            if chatTab == "web-\(tabId)" { chatTab = "chat" }
+            vacate(runId, "web-\(tabId)")
         }
         web.drop(tabId)
     }
@@ -359,7 +374,7 @@ final class AppModel {
         guard !quoted.isEmpty else { return }
         let cur = drafts[id] ?? ""
         drafts[id] = (cur.isEmpty ? "" : cur.hasSuffix("\n") ? cur : cur + "\n\n") + quoted + "\n\n"
-        chatTab = "chat"
+        showTab("chat", of: id)
         focusComposer += 1
     }
 
@@ -744,16 +759,20 @@ final class AppModel {
     private func handle(_ name: String, _ d: JSON) {
         switch name {
         case "state": applyState(d)
-        case "runs": withAnimation(M.snappy) { sessions = d["runs"].array.map(Session.init) }
+        case "runs":
+            // Animate only when rows come, go or change place; animating every
+            // in-place update cross-fades the whole window while sessions stream.
+            let next = d["runs"].array.map(Session.init)
+            guard next != sessions else { break }
+            let place = { (l: [Session]) in l.map { "\($0.id)|\(self.column(of: $0).rawValue)|\($0.pinned)|\($0.project)" } }
+            if place(next) == place(sessions) { sessions = next } else { withAnimation(M.snappy) { sessions = next } }
         case "jobs":
-            withAnimation(M.snappy) {
-                running = Set(d["running"].array.map(\.string))
-                awaiting = Set(d["awaiting"].array.map(\.string))
-            }
+            let r = Set(d["running"].array.map(\.string)), a = Set(d["awaiting"].array.map(\.string))
+            if r != running || a != awaiting { withAnimation(M.snappy) { running = r; awaiting = a } }
         case "inbox": withAnimation(M.snappy) { inbox = d }
         case "projects": projects = d["projects"].array.map(Project.init)
         case "message", "delta", "run-updated":
-            if d["runId"].string == openId { scheduleRefresh() }
+            if d["runId"].string == openId || paneRuns.contains(d["runId"].string) { scheduleRefresh() }
         case "ask":
             notify(title: "\(d["who"].nonEmpty ?? "A session") needs you", body: d["summary"].nonEmpty ?? "Claude is waiting on your answer", runId: d["runId"].string)
         case "outcome":
@@ -780,10 +799,11 @@ final class AppModel {
     // MARK: sessions
 
     func open(_ id: String) {
+        placeInPanes(id)
         route = .session(id)
         guard openId != id else { return }
         openId = id
-        openRun = runCache[id] ?? .null
+        openRun = runs[id] ?? .null
         openTask = taskCache[id] ?? .null
         Task {
             await refreshOpen()
@@ -797,7 +817,8 @@ final class AppModel {
         let id = openId
         guard !id.isEmpty, let r = try? await API.get("/api/runs/\(API.q(id))"), id == openId else { return }
         openRun = r["run"]
-        runCache[id] = openRun
+        runs[id] = openRun
+        await refreshPanes()
         let kind = r["run"]["kind"].string
         guard kind == "task" || kind == "slack" || kind.isEmpty else { return }
         let task = (try? await API.get("/api/tasks/\(API.q(id))")) ?? .null
@@ -862,6 +883,7 @@ final class AppModel {
         await act {
             try await API.delete("/api/runs/\(API.q(id))")
             if self.openId == id { self.openId = ""; self.route = .sessions }
+            self.forgetPanes(of: id)
         }
     }
 
@@ -907,7 +929,7 @@ final class AppModel {
         }
     }
 
-    func startIssue(_ issue: Issue, branch: String? = nil) async {
+    func startIssue(_ issue: Issue, branch: String? = nil, agent: AgentKind? = nil) async {
         let brief = [
             "Linear issue \(issue.key): \(issue.title)", issue.url, "",
             issue.description.isEmpty ? "(no description)" : issue.description, "",
@@ -916,6 +938,7 @@ final class AppModel {
         var body: [String: Any] = ["title": "\(issue.key) \(issue.title)", "brief": brief]
         let br = branch ?? issue.branch
         if !br.isEmpty { body["branch"] = br }
+        if let agent, agent != .claude { body["opts"] = ["agent": agent.rawValue] }
         do {
             let out = try await API.post("/api/tasks", body)
             say(out["state"].string == "queued" ? "Queued: every worker slot is busy." : "Worker started on \(out["branch"].string)")
@@ -923,7 +946,7 @@ final class AppModel {
         } catch {
             // Linear's branch already exists here: let the server name one.
             if error.localizedDescription.contains("already exists"), branch == nil, !issue.branch.isEmpty {
-                await startIssue(issue, branch: "")
+                await startIssue(issue, branch: "", agent: agent)
             } else {
                 say(error.localizedDescription, bad: true)
             }

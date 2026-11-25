@@ -168,7 +168,7 @@ extension BrowserView {
 // MARK: - Attachments
 
 struct Attachment: Identifiable, Hashable {
-    enum Kind: Hashable { case image, text, file }
+    enum Kind: Hashable { case image, text, file, session }
     let id: String
     let kind: Kind
     let name: String
@@ -210,6 +210,7 @@ struct Attachment: Identifiable, Hashable {
             case .text: out += "\n\n```\n\(a.text)\n```"
             case .image: out += "\n\n[Attached image, read it with your file tool: \(a.path)]"
             case .file: out += "\n\n[Attached file: \(a.path)]"
+            case .session: out += "\n\n[Referenced session \"\(a.name)\": read its briefing (with the path to its full transcript) at \(a.path)]"
             }
         }
         return out.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -227,7 +228,7 @@ struct AttachmentChip: View {
                 if item.kind == .image, let img = NSImage(contentsOfFile: item.path) {
                     Image(nsImage: img).resizable().scaledToFill()
                 } else {
-                    Image(systemName: item.kind == .text ? "text.alignleft" : "doc").font(.system(size: 13)).foregroundStyle(T.text2)
+                    Image(systemName: item.kind == .text ? "text.alignleft" : item.kind == .session ? "number" : "doc").font(.system(size: 13)).foregroundStyle(T.text2)
                         .frame(maxWidth: .infinity, maxHeight: .infinity).background(T.hover)
                 }
             }
@@ -235,7 +236,7 @@ struct AttachmentChip: View {
             .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
             VStack(alignment: .leading, spacing: 1) {
                 Text(item.kind == .image ? URL(fileURLWithPath: item.path).lastPathComponent : item.name).font(T.ui(12, .medium)).foregroundStyle(T.text).lineLimit(1)
-                Text(item.kind == .text ? "\(item.lines) lines" : item.kind == .image ? "Image" : "File").font(T.ui(11)).foregroundStyle(T.text3)
+                Text(item.kind == .text ? "\(item.lines) lines" : item.kind == .image ? "Image" : item.kind == .session ? "Session" : "File").font(T.ui(11)).foregroundStyle(T.text3)
             }
             .frame(maxWidth: 150, alignment: .leading)
         }

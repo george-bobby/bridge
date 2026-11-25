@@ -28,6 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             if let last = pages.first(where: { $0.0 == "chat" }) {
                 pages.append(("collapsed", last.1))
                 if browser != nil { pages.append(("browser", last.1)) }
+                pages += [("split", last.1), ("terminal", last.1)]
             }
             let hidden = model.sidebarHidden
             if let only = ProcessInfo.processInfo.environment["BRIDGE_SNAPSHOT_PAGES"]?.split(separator: ",").map(String.init) {
@@ -38,9 +39,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 model.sidebarHidden = name == "collapsed"
                 if name == "browser", case .session(let id) = route, let browser { model.open(id); model.openBrowser(id, url: browser) }
                 if case .session(let id) = route { model.open(id) } else { model.route = route }
+                if name == "split" { model.splitRight(); model.splitRight() }
+                if name == "terminal", case .session(let id) = route { model.openTerminalTab(id) }
                 if name == "slack", let m = model.mentions.first { model.openThread(m.permalink) }
                 try? await Task.sleep(nanoseconds: 2_500_000_000)
-                guard let view = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil && $0.frame.width > 800 })?.contentView,
+                guard let content = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil && $0.frame.width > 800 })?.contentView,
+                      let view = content.superview ?? Optional(content),
                       let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(view.bounds.width * 2), pixelsHigh: Int(view.bounds.height * 2), bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { continue }
                 rep.size = view.bounds.size
                 view.cacheDisplay(in: view.bounds, to: rep)
@@ -81,7 +85,7 @@ struct BridgeApp: App {
         .windowStyle(.hiddenTitleBar)
         .windowBackgroundDragBehavior(.enabled)
         .defaultSize(width: 1480, height: 920)
-        .commands { BridgeCommands(model: delegate.model) }
+        .commands { BridgeCommands(model: delegate.model); PaneCommands(model: delegate.model) }
 
         Settings {
             SettingsView()
@@ -103,7 +107,7 @@ let navOrder: [(label: String, icon: String, route: Route)] = [
     ("Inbox", "tray", .inbox),
     ("Sessions", "rectangle.stack", .sessions),
     ("Slack", "number", .slack),
-    ("Pull Requests", "arrow.triangle.pull", .pulls),
+    ("GitHub", "arrow.triangle.pull", .pulls),
     ("Linear", "circle.lefthalf.filled", .linear),
     ("Memory", "book.closed", .memory),
     ("Usage", "gauge.with.dots.needle.50percent", .usage),
@@ -180,10 +184,10 @@ struct RootView: View {
             ZStack {
                 T.panel
                 detail
-                    .id(model.route)
+                    .id(model.pageId)
                     .transition(.page)
             }
-            .animation(M.page, value: model.route)
+            .animation(M.page, value: model.pageId)
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(T.line.opacity(0.9), lineWidth: 1))
             .shadow(color: .black.opacity(0.25), radius: 6, y: 1)
@@ -193,6 +197,7 @@ struct RootView: View {
         }
         .background(VisualEffect(material: .sidebar))
         .background(T.bg.opacity(0.55))
+        .background(WindowChrome())
         .contentShape(Rectangle())
         .gesture(SpatialTapGesture(count: 2).onEnded { if $0.location.y <= T.headerHeight + T.panelInset { titleBarDoubleClick() } })
         .ignoresSafeArea()
@@ -204,7 +209,8 @@ struct RootView: View {
                 IconButton(icon: "chevron.right", help: "Forward (⌘])") { model.forward() }
                     .disabled(model.forwardStack.isEmpty).opacity(model.forwardStack.isEmpty ? 0.35 : 1)
             }
-            .padding(.leading, 78).padding(.top, model.sidebarHidden ? (T.headerHeight - 28) / 2 + T.panelInset : 9)
+            .frame(height: 28)
+            .padding(.leading, Chrome.buttonsLeft).padding(.top, Chrome.center - 14)
             .ignoresSafeArea()
         }
         .overlay {
@@ -282,7 +288,7 @@ struct ConnectingView: View {
         ZStack {
             T.bg
             VStack(spacing: 14) {
-                Logo(size: 40).modifier(Breathe())
+                Logo(size: 56).modifier(Breathe()).padding(.bottom, 4)
                 Text("Starting Bridge…").font(T.ui(13, .medium)).foregroundStyle(T.text2)
                 ProgressView().controlSize(.small)
                 if !model.serverError.isEmpty {
@@ -298,28 +304,60 @@ struct Breathe: ViewModifier {
     @StateObject private var on = Box(false)
     func body(content: Content) -> some View {
         content
-            .scaleEffect(on.v ? 1.06 : 0.96)
-            .shadow(color: T.accent.opacity(on.v ? 0.55 : 0.15), radius: on.v ? 18 : 6)
-            .onAppear { withAnimation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true)) { on.v = true } }
+            .scaleEffect(on.v ? 1.03 : 0.97)
+            .shadow(color: T.accent.opacity(on.v ? 0.5 : 0.18), radius: on.v ? 20 : 8, y: 4)
+            .onAppear { if !on.v { withAnimation(.easeInOut(duration: 1.4).repeatForever(autoreverses: true)) { on.v = true } } }
     }
 }
 
+/// The app icon's squircle and bridge mark (scripts/make-icon.swift draws the
+/// same geometry into icon.png).
 struct Logo: View {
     var size: CGFloat = 20
     var body: some View {
-        RoundedRectangle(cornerRadius: size * 0.28)
-            .fill(LinearGradient(colors: [T.accent, T.purple], startPoint: .topLeading, endPoint: .bottomTrailing))
-            .overlay(
-                Path { p in
-                    p.move(to: CGPoint(x: size * 0.22, y: size * 0.66))
-                    p.addLine(to: CGPoint(x: size * 0.40, y: size * 0.36))
-                    p.addLine(to: CGPoint(x: size * 0.54, y: size * 0.56))
-                    p.addLine(to: CGPoint(x: size * 0.64, y: size * 0.44))
-                    p.addLine(to: CGPoint(x: size * 0.80, y: size * 0.64))
-                }
-                .stroke(.white, style: StrokeStyle(lineWidth: size * 0.085, lineCap: .round, lineJoin: .round))
-            )
-            .frame(width: size, height: size)
+        let shape = RoundedRectangle(cornerRadius: size * 0.225, style: .continuous)
+        // Heavier strokes and no hangers at sidebar sizes, as the icon does at 16/32px.
+        let small = size < 24
+        ZStack {
+            shape.fill(LinearGradient(stops: [.init(color: Color(red: 0.54, green: 0.56, blue: 0.97), location: 0),
+                                              .init(color: T.accent, location: 0.38),
+                                              .init(color: Color(red: 0.23, green: 0.17, blue: 0.61), location: 0.78),
+                                              .init(color: Color(red: 0.14, green: 0.09, blue: 0.37), location: 1)],
+                                      startPoint: UnitPoint(x: 0.15, y: 0), endPoint: UnitPoint(x: 0.85, y: 1)))
+            shape.fill(RadialGradient(colors: [.white.opacity(0.26), .clear], center: UnitPoint(x: 0.5, y: -0.1), startRadius: 0, endRadius: size * 0.85))
+            BridgeMark(weight: small ? 1.35 : 1, hangers: !small)
+                .scale(small ? 1.15 : 1, anchor: UnitPoint(x: 0.5, y: 0.55))
+                .fill(LinearGradient(colors: [.white, Color(red: 0.89, green: 0.89, blue: 1)], startPoint: .top, endPoint: .bottom))
+                .shadow(color: Color(red: 0.07, green: 0.04, blue: 0.25).opacity(0.45), radius: size * 0.03, y: size * 0.015)
+        }
+        .overlay(shape.strokeBorder(LinearGradient(colors: [.white.opacity(0.35), .white.opacity(0.04), .black.opacity(0.15)], startPoint: .top, endPoint: .bottom), lineWidth: max(0.5, size * 0.012)))
+        .frame(width: size, height: size)
+    }
+}
+
+/// Arch, deck, piers and hangers in unit space across the icon body.
+struct BridgeMark: Shape {
+    var weight: CGFloat = 1
+    var hangers = true
+    func path(in r: CGRect) -> Path {
+        let w = r.width
+        func U(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: r.minX + x * w, y: r.minY + y * r.height) }
+        let deckY: CGFloat = 0.615, archR: CGFloat = 0.255, stroke = 0.068 * weight * w
+        var out = Path()
+        func add(_ width: CGFloat, _ build: (inout Path) -> Void) {
+            var p = Path(); build(&p)
+            out.addPath(p.strokedPath(StrokeStyle(lineWidth: width, lineCap: .round, lineJoin: .round)))
+        }
+        add(stroke) { $0.addArc(center: U(0.5, deckY), radius: archR * w, startAngle: .degrees(180), endAngle: .degrees(0), clockwise: false) }
+        add(stroke) { $0.move(to: U(0.17, deckY)); $0.addLine(to: U(0.83, deckY)) }
+        for x in [0.5 - archR, 0.5 + archR] { add(stroke) { $0.move(to: U(x, deckY)); $0.addLine(to: U(x, 0.76)) } }
+        if hangers {
+            for dx: CGFloat in [-0.125, 0, 0.125] {
+                let top = deckY - (archR * archR - dx * dx).squareRoot()
+                add(0.03 * weight * w) { $0.move(to: U(0.5 + dx, top)); $0.addLine(to: U(0.5 + dx, deckY)) }
+            }
+        }
+        return out
     }
 }
 

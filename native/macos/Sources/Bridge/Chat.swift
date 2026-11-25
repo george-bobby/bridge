@@ -10,15 +10,18 @@ struct ChatView: View {
     var session: Session? { model.sessions.first { $0.id == id } }
     var run: JSON { model.openRun }
 
+    /// The details panel is for the chat and its changes; a browser or
+    /// terminal wants the width.
+    var showsInspector: Bool { model.inspectorShown && (model.chatTab == "chat" || model.chatTab == "changes") }
+
     var body: some View {
         VStack(spacing: 0) {
             header
             SessionTabs(runId: id, session: session)
             HStack(spacing: 0) {
-                ZStack { content.id(model.chatTab).transition(.opacity) }
-                    .animation(M.page, value: model.chatTab)
+                PaneArea()
                     .frame(maxWidth: .infinity)
-                if model.inspectorShown && !model.chatTab.hasPrefix("web-") {
+                if showsInspector {
                     HStack(spacing: 0) {
                         Rectangle().fill(T.line).frame(width: 1)
                         PropertiesPanel(id: id).frame(width: 300)
@@ -28,22 +31,13 @@ struct ChatView: View {
             }
             .clipped()
         }
-        .onAppear {
-            if !model.chatTab.hasPrefix("web-") || !(model.browserTabs[id] ?? []).contains(where: { "web-\($0.id)" == model.chatTab }) { model.chatTab = "chat" }
-            Task { await model.loadCommands(for: id) }
-        }
-    }
-
-    @ViewBuilder var content: some View {
-        if model.chatTab == "changes" {
-            ChangesView(runId: id)
-        } else if model.chatTab.hasPrefix("web-"), let tab = model.browserTabs[id]?.first(where: { "web-\($0.id)" == model.chatTab }) {
-            BrowserView(page: model.web.page(for: tab))
-        } else {
-            VStack(spacing: 0) {
-                Transcript(run: run, runId: id)
-                Composer(runId: id)
-            }
+        .animation(M.snappy, value: showsInspector)
+        .task(id: id) {
+            let tab = model.chatTab
+            let known = tab == "chat" || tab == "changes" || (tab == "term" && model.terminalTabs.contains(id))
+                || (model.browserTabs[id] ?? []).contains(where: { "web-\($0.id)" == tab })
+            if !known { model.chatTab = "chat" }
+            await model.loadCommands(for: id)
         }
     }
 
@@ -82,7 +76,7 @@ struct ChatView: View {
                         .transition(.scale.combined(with: .opacity))
                 }
                 IconButton(icon: s.pinned ? "star.fill" : "star", help: s.pinned ? "Unpin" : "Pin to the sidebar") { Task { await model.setPinned(s.id, !s.pinned) } }
-                IconButton(icon: "terminal", help: "Continue this session in \(model.terminalName)") { Task { await model.terminal(id) } }
+                IconButton(icon: "terminal", help: "Continue this session in a Terminal tab (⌃`)") { model.openTerminalTab(id) }
                 Menu {
                     if !s.isOrchestrator {
                         Menu("Second Opinion") {
@@ -92,6 +86,10 @@ struct ChatView: View {
                         }
                         Divider()
                     }
+                    Button("Split Right") { model.splitRight() }.keyboardShortcut("\\")
+                    if model.isSplit { Button("Close Pane") { model.closeFocusedPane() } }
+                    Button("Open in External Terminal (\(model.terminalName))") { Task { await model.terminal(id) } }
+                    Divider()
                     if !s.permalink.isEmpty { Button("Read the Slack Thread") { model.openThread(s.permalink) } }
                     SessionMenu(session: s)
                 } label: { Image(systemName: "ellipsis").font(.system(size: 13.5)).foregroundStyle(T.text2).frame(width: 28, height: 28) }
@@ -145,10 +143,16 @@ struct SessionTabs: View {
         HStack(spacing: 4) {
             tab("chat", icon: "bubble.left", label: "Chat")
             tab("changes", icon: "plusminus", label: "Changes")
+            if model.terminalTabs.contains(runId) {
+                tab("term", icon: "terminal", label: "Terminal", close: { model.closeTerminalTab(runId) })
+                    .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .leading)))
+            }
             ForEach(webTabs) { t in
                 WebSessionTab(page: model.web.page(for: t), on: model.chatTab == "web-\(t.id)", ns: ns,
+                              elsewhere: elsewhere("web-\(t.id)"),
                               close: { model.closeBrowser(runId, t.id) },
-                              action: { withAnimation(M.snappy) { model.chatTab = "web-\(t.id)" } })
+                              action: { withAnimation(M.snappy) { model.showTab("web-\(t.id)", of: runId) } })
+                    .onDrag { NSItemProvider(object: PanePayload.tab(runId, "web-\(t.id)") as NSString) }
                     .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .leading)))
             }
             newTabMenu
@@ -159,13 +163,22 @@ struct SessionTabs: View {
         .frame(height: 42)
         .overlay(alignment: .bottom) { Rectangle().fill(T.line).frame(height: 1) }
         .animation(M.snappy, value: webTabs.map(\.id))
+        .animation(M.snappy, value: model.terminalTabs.contains(runId))
+    }
+
+    /// Shown in another pane: the tab says so with a dot, and clicking it
+    /// focuses that pane.
+    func elsewhere(_ key: String) -> Bool {
+        model.isSplit && model.chatTab != key && model.panes.contains { $0.run == runId && $0.tab == key }
     }
 
     func tab(_ key: String, icon: String, label: String, close: (() -> Void)? = nil) -> some View {
         let on = model.chatTab == key
-        return SessionTab(icon: icon, label: label, on: on, ns: ns, close: close) {
-            withAnimation(M.snappy) { model.chatTab = key }
+        return SessionTab(icon: icon, label: label, on: on, ns: ns, elsewhere: elsewhere(key), close: close) {
+            withAnimation(M.snappy) { model.showTab(key, of: runId) }
         }
+        .onDrag { NSItemProvider(object: PanePayload.tab(runId, key) as NSString) }
+        .help("Drag to the edge of the chat to open it side by side")
     }
 
     var newTabMenu: some View {
@@ -183,8 +196,12 @@ struct SessionTabs: View {
                 Button { model.openBrowser(runId, url: "") } label: { Label("New Browser Tab", systemImage: "globe") }
             }
             Section {
-                Button { withAnimation(M.snappy) { model.chatTab = "changes" } } label: { Label("Changes", systemImage: "plusminus") }
-                Button { Task { await model.terminal(runId) } } label: { Label("Terminal (\(model.terminalName))", systemImage: "terminal") }
+                Button { withAnimation(M.snappy) { model.showTab("changes", of: runId) } } label: { Label("Changes", systemImage: "plusminus") }
+                Button { model.openTerminalTab(runId) } label: { Label("Terminal", systemImage: "terminal") }
+                Button { model.splitRight() } label: { Label("Split Right", systemImage: "rectangle.split.2x1") }
+            }
+            Section {
+                Button { Task { await model.terminal(runId) } } label: { Label("Open in External Terminal (\(model.terminalName))", systemImage: "arrow.up.forward.app") }
             }
         } label: {
             Image(systemName: "plus").font(.system(size: 11.5, weight: .semibold)).foregroundStyle(T.text2)
@@ -199,10 +216,11 @@ struct WebSessionTab: View {
     @ObservedObject var page: WebPage
     let on: Bool
     let ns: Namespace.ID
+    var elsewhere = false
     let close: () -> Void
     let action: () -> Void
     var body: some View {
-        SessionTab(icon: page.loading ? "arrow.triangle.2.circlepath" : "globe", label: page.label, on: on, ns: ns, close: close, action: action)
+        SessionTab(icon: page.loading ? "arrow.triangle.2.circlepath" : "globe", label: page.label, on: on, ns: ns, elsewhere: elsewhere, close: close, action: action)
     }
 }
 
@@ -211,6 +229,7 @@ struct SessionTab: View {
     let label: String
     let on: Bool
     let ns: Namespace.ID
+    var elsewhere = false
     var close: (() -> Void)? = nil
     let action: () -> Void
     @StateObject private var hover = Box(false)
@@ -218,6 +237,9 @@ struct SessionTab: View {
     var body: some View {
         HStack(spacing: 7) {
             Image(systemName: icon).font(.system(size: 11, weight: .medium))
+                .overlay(alignment: .topTrailing) {
+                    if elsewhere { Circle().fill(T.accent).frame(width: 5, height: 5).offset(x: 3, y: -2).transition(.scale) }
+                }
             Text(label.count > 26 ? label.prefix(25) + "…" : label).font(T.ui(12.5, on ? .medium : .regular)).lineLimit(1).fixedSize()
             if let close {
                 Button(action: close) {
@@ -758,7 +780,7 @@ struct JobOption {
     let choices: [(String, String)]
 
     static let all: [JobOption] = [
-        JobOption(key: "permissionMode", label: "Mode", icon: "lock.shield", choices: [("plan", "Plan"), ("manual", "Manual"), ("acceptEdits", "Edit"), ("bypassPermissions", "Full access")]),
+        JobOption(key: "permissionMode", label: "Mode", icon: "lock.shield", choices: [("plan", "Plan mode"), ("manual", "Ask before acting"), ("acceptEdits", "Accept edits"), ("bypassPermissions", "Bypass permissions")]),
         JobOption(key: "model", label: "Model", icon: "cpu", choices: [("opus", "Opus"), ("sonnet", "Sonnet"), ("haiku", "Haiku"), ("fable", "Fable")]),
         JobOption(key: "effort", label: "Thinking", icon: "brain", choices: [("", "Auto"), ("low", "Low"), ("medium", "Medium"), ("high", "High"), ("xhigh", "X-High"), ("max", "Max")]),
     ]
@@ -778,21 +800,14 @@ struct Composer: View {
 
     var live: Bool { model.sessions.first { $0.id == runId }.map(model.isLive) ?? false }
     var trimmedEmpty: Bool { text.v.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-    var slashOpen: Bool { text.v.hasPrefix("/") && !text.v.contains(" ") }
     var draft: String { model.drafts[runId] ?? "" }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             attachmentStrip
-            if slashOpen && !text.v.contains("\n") {
-                SlashMenu(query: String(text.v.dropFirst())) { name in text.v = "/\(name) " }
-                    .padding(.horizontal, 8).padding(.top, 8)
-                    .transition(.opacity.combined(with: .move(edge: .bottom)))
-            }
             editor
             toolbar
         }
-        .animation(M.snappy, value: slashOpen)
         .animation(M.snappy, value: items.map(\.id))
         .overlay { dropOverlay }
         .animation(M.hover, value: dropping.v)
@@ -807,11 +822,12 @@ struct Composer: View {
         .onAppear {
             text.v = draft
             installPasteMonitor()
+            ComposerSnapshots.run(model: model) { t in text.v = t }
         }
         .onDisappear { if let m = monitor.v { NSEvent.removeMonitor(m); monitor.v = nil } }
         .onChange(of: text.v) { if draft != text.v { model.drafts[runId] = text.v } }
         .onChange(of: draft) { if text.v != draft { text.v = draft } }
-        .onChange(of: model.focusComposer) { focused = true }
+        .onChange(of: model.focusComposer, focusIfOpen)
     }
 
     @ViewBuilder var attachmentStrip: some View {
@@ -830,40 +846,36 @@ struct Composer: View {
     }
 
     var editor: some View {
-        ZStack(alignment: .topLeading) {
-            if text.v.isEmpty {
-                Text(live ? "Queue a follow-up for when this turn ends…" : "Reply, paste an image, or ⌘L to quote a selection…")
-                    .font(T.ui(13.5)).foregroundStyle(T.text3).padding(.horizontal, 5).padding(.top, 1)
-            }
-            TextEditor(text: $text.v)
-                .font(T.ui(13.5))
-                .scrollContentBackground(.hidden)
-                .scrollIndicators(.never)
-                .focused($focused)
-                .frame(minHeight: 44, maxHeight: 180)
-                .fixedSize(horizontal: false, vertical: true)
+        PromptEditor(text: $text.v, placeholder: live ? "Queue a follow-up for when this turn ends…" : "Reply, paste an image, @ a file, # a session, / a skill…",
+                     source: .run(runId), exclude: runId, focused: $focused) { a in
+            if !items.contains(where: { $0.id == a.id }) { add(a) }
         }
         .padding(.horizontal, 12).padding(.top, 12)
     }
 
     var toolbar: some View {
         let agent = AgentKind.of(value("agent").string)
-        let options = JobOption.all.filter { $0.key != "model" && ($0.key != "effort" || agent == .claude || agent == .codex) }
         return HStack(spacing: 4) {
-            Button { pickFiles() } label: { ComposerChip(icon: "paperclip", text: "") }
-                .buttonStyle(.plain).help("Attach images or files (or paste / drop them here)")
-            AgentPicker(runId: runId, current: agent)
-            ModelPicker(runId: runId, agent: agent, current: value(agent == .claude ? "model" : "agentModel").string)
-            ForEach(options, id: \.key) { opt in optionMenu(opt) }
-            contextToggle
-            repoButton
-            Spacer()
-            ContextMeter(run: model.openRun)
+            // Scrolls rather than overflowing in a narrow split pane.
+            ScrollView(.horizontal, showsIndicators: false) { toolbarChips(agent) }
+                .scrollBounceBehavior(.basedOnSize)
+            Spacer(minLength: 0)
+            ContextButton(runId: runId, run: model.runData(runId), agent: agent, live: live)
             if live && !trimmedEmpty { stopAndSendButton }
             Text("⌘↩").font(T.ui(11)).foregroundStyle(T.text3)
             sendButton
         }
         .padding(10)
+    }
+
+    func toolbarChips(_ agent: AgentKind) -> some View {
+        HStack(spacing: 4) {
+            Button { pickFiles() } label: { ComposerChip(icon: "paperclip", text: "") }
+                .buttonStyle(.plain).help("Attach images or files (or paste / drop them here)")
+            AgentModelPicker(agent: agent, modelId: value(agent == .claude ? "model" : "agentModel").string, effort: value("effort").string,
+                             pick: { a, m in pickModel(a, m, was: agent) }, setEffort: { e in Task { await model.setOpts(runId, ["effort": e]) } })
+            AccessPicker(agent: agent, mode: value("permissionMode").string) { m in Task { await model.setOpts(runId, ["permissionMode": m]) } }
+        }
     }
 
     var stopAndSendButton: some View {
@@ -893,7 +905,8 @@ struct Composer: View {
         .buttonStyle(Pressable(scale: 0.88))
         .keyboardShortcut(.return, modifiers: .command)
         // Covered by the New Task sheet or ⌘K: ⌘↩ belongs to them.
-        .disabled(sending.v || model.composeOpen || model.paletteOpen)
+        // ⌘↩ belongs to the focused pane's composer when chats are side by side.
+        .disabled(sending.v || model.composeOpen || model.paletteOpen || runId != model.openId)
     }
 
     @ViewBuilder var dropOverlay: some View {
@@ -906,48 +919,23 @@ struct Composer: View {
         }
     }
 
+    /// ⌘L and friends focus the open chat's composer, not every pane's.
+    func focusIfOpen() { if runId == model.openId { focused = true } }
+
     func value(_ key: String) -> JSON {
-        let own = model.openRun["opts"][key]
+        let own = model.runData(runId)["opts"][key]
         return own.isNull ? model.config["followup"][key] : own
     }
 
-    func optionMenu(_ opt: JobOption) -> some View {
-        let current = value(opt.key).string
-        let label = opt.choices.first { $0.0 == current }?.1 ?? (current.isEmpty ? "Auto" : current)
-        return Menu {
-            ForEach(opt.choices, id: \.0) { c in
-                Button { Task { await model.setOpts(runId, [opt.key: c.0]) } } label: {
-                    if c.0 == current { Label(c.1, systemImage: "checkmark") } else { Text(c.1) }
-                }
-            }
-        } label: {
-            ComposerChip(icon: opt.icon, text: label, warn: opt.key == "permissionMode" && current == "bypassPermissions")
+    /// Agent and model change together. Switching agents mid-session hands
+    /// the work over: the next agent's first turn opens with a briefing.
+    func pickModel(_ a: AgentKind, _ m: String, was: AgentKind) {
+        var patch: [String: Any] = ["agent": a.rawValue]
+        patch[a == .claude ? "model" : "agentModel"] = m
+        Task { await model.setOpts(runId, patch) }
+        if a != was && model.runData(runId)["messages"].array.contains(where: { $0["role"].string == "assistant" }) {
+            model.say("Next turn goes to \(a.label), with a handoff briefing")
         }
-        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-        .help(opt.label)
-    }
-
-    var contextToggle: some View {
-        let on = value("context1m").bool
-        return Button { Task { await model.setOpts(runId, ["context1m": !on]) } } label: {
-            ComposerChip(icon: "rectangle.stack", text: on ? "1M" : "200k")
-        }
-        .buttonStyle(.plain).help("Context window")
-    }
-
-    var repoButton: some View {
-        let dir = value("workdir").string
-        return Button {
-            let p = NSOpenPanel()
-            p.canChooseDirectories = true
-            p.canChooseFiles = false
-            p.directoryURL = URL(fileURLWithPath: dir.isEmpty ? NSHomeDirectory() : dir)
-            p.prompt = "Use this folder"
-            if p.runModal() == .OK, let u = p.url { Task { await model.setOpts(runId, ["workdir": u.path]) } }
-        } label: {
-            ComposerChip(icon: "folder", text: dir.isEmpty ? "Repo" : URL(fileURLWithPath: dir).lastPathComponent)
-        }
-        .buttonStyle(.plain).help(dir.isEmpty ? "Working directory" : dir)
     }
 
     /// The draft is cleared only once the server has taken it, and only if
@@ -1125,8 +1113,10 @@ struct PropertiesPanel: View {
                     }
                 }
 
-                if let s {
-                    PropSection(title: "Actions") {
+                // What the header can't do. Terminal, stop, pin and the rest
+                // live in the header; this is only the session's next step.
+                if let s, (!s.isTask && !s.worked && !s.isOrchestrator) || (s.isTask && !model.isLive(s) && s.taskStatus != "cleaned") {
+                    PropSection(title: "Next step") {
                         VStack(alignment: .leading, spacing: 6) {
                             if !s.isTask && !s.worked && !s.isOrchestrator {
                                 Button { Task { await model.start(id) } } label: { Label("Run the pipeline", systemImage: "play.fill").frame(maxWidth: .infinity) }.buttonStyle(LButton(primary: true))
@@ -1135,7 +1125,6 @@ struct PropertiesPanel: View {
                                 Button { Task { await model.relaunch(id) } } label: { Label("Relaunch worker", systemImage: "arrow.clockwise").frame(maxWidth: .infinity) }.buttonStyle(LButton())
                                 Button { Task { await model.cleanup(id) } } label: { Label("Clean up worktree", systemImage: "trash").frame(maxWidth: .infinity) }.buttonStyle(LButton())
                             }
-                            Button { Task { await model.terminal(id) } } label: { Label("Open in \(model.terminalName)", systemImage: "terminal").frame(maxWidth: .infinity) }.buttonStyle(LButton())
                         }
                     }
                 }
