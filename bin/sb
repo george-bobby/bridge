@@ -8,6 +8,8 @@
  *   sb slack <slack thread url>
  *   sb status [--json]
  *   sb show <id>
+ *   sb sessions [--project <id> | --all] [--json]   every chat (an orchestrator sees its own scope)
+ *   sb read <id>                          a briefing of any chat + its transcript path
  *   sb followup <id> "<message>"          queued if the worker is mid-turn
  *   sb relaunch <id> [--note "<text>"]
  *   sb declare waiting|resumed|phase "<text>"   (task from $SB_TASK_ID, or --task <id>)
@@ -141,6 +143,25 @@ async function main() {
       console.log(`${out.working} working · cap ${out.harness.maxWorkers} total / ${out.harness.maxPerRepo} per repo · mode ${out.harness.mode}`);
       if (!live.length) return console.log("No tasks.");
       for (const t of live) printTask(t);
+      return;
+    }
+    case "sessions": {
+      const q = new URLSearchParams();
+      if (flags.project) q.set("project", String(flags.project));
+      else if (!flags.all && process.env.SB_ROLE === "orchestrator" && process.env.SB_TASK_ID) q.set("orchestrator", process.env.SB_TASK_ID);
+      const out = await call("GET", `/api/sessions${q.toString() ? `?${q}` : ""}`);
+      if (flags.json) return console.log(JSON.stringify(out.sessions, null, 2));
+      return console.log(out.markdown);
+    }
+    case "read": {
+      if (!pos[0]) die("read <session id>");
+      const out = await call("GET", `/api/runs/${encodeURIComponent(pos[0])}/reference`);
+      let text = "";
+      try {
+        text = fs.readFileSync(out.path, "utf8");
+      } catch {}
+      console.log(text || `(no briefing written: ${out.path})`);
+      console.log(`\n--- transcript (run JSON, \`messages\`): ${out.transcript}${out.worktree ? `\n--- worktree: ${out.worktree}` : ""}`);
       return;
     }
     case "show": {

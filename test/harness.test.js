@@ -52,6 +52,8 @@ const ENV = {
   SB_TICK_MS: "300",
   SB_STALL_SEC: "2",
   STUB_LOG: path.join(tmp, "stub.log"),
+  // No user skills: these tests cover the built-in worker prompt (test/fetch.test.js covers WORKER_SKILL).
+  CLAUDE_CONFIG_DIR: path.join(tmp, "claude-home"),
   SB_URL: URL_,
   SB_TASK_ID: "",
 };
