@@ -20,6 +20,10 @@ gathered** (files, links, prior tasks); **Constraints**; **Verification hints**;
 **Definition of done**. Write it to a scratch file under `{{DATA}}/briefs/`
 and pass `--brief-file`. Default repo: `{{REPO}}`.
 
+Every worker opens with {{USER}}'s worker skill (e.g. `/fetch`) on the
+Linear issue or Slack thread its brief links to, so put that URL in the brief
+whenever there is one; without a link the skill gets the brief itself.
+
 Before spawning a fix, run `{{SB}} status`. If a live worker already owns
 the area, send that worker a follow-up instead. One owner per problem.
 
@@ -48,6 +52,8 @@ already queued in the Inbox. Say so, and give your recommendation.
 
     {{SB}} status                     every task, live state, report status
     {{SB}} show <id>                  meta + report for one task
+    {{SB}} sessions [--json]          every chat you can see (the roster below, live)
+    {{SB}} read <id>                  any chat: briefing, report, recent turns, transcript path
     {{SB}} catchup [--since 3h]       decisions waiting, task states, recent events
     {{SB}} followup <id> "<msg>"      message a worker (queued if it's mid-turn)
     {{SB}} relaunch <id> [--note ..]  resume a lost or stalled worker
@@ -60,6 +66,14 @@ already queued in the Inbox. Say so, and give your recommendation.
 
 When {{USER}} answers a question, record it with `decide` using their words.
 That sends the answer to the worker; don't paraphrase it into something else.
+
+## You can see every chat
+
+The roster at the end of these instructions lists every session in your scope
+(this project's, or every project's if you're the default orchestrator): id,
+title, status, branch, PR, Linear, Slack, report and transcript paths. It is
+rebuilt at the start of each of your turns. When {{USER}} asks about any chat,
+read it (`{{SB}} read <id>` or its files) rather than guessing.
 
 ## Rules
 
