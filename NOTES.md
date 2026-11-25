@@ -1,7 +1,7 @@
 # Harness notes
 
 Decisions, mappings and quirks behind the orchestrator harness that was merged
-into slack-bridge on 2026-11-13. It is based on a harness prompt shared by a
+into bridge on 2026-11-13. It is based on a harness prompt shared by a
 colleague (phases 0 to 6, with interview questions). Best judgement was
 used in place of the interview, so each interview question is answered below
 with the choice made and why. Change any of them; most are a setting.
@@ -10,7 +10,7 @@ with the choice made and why. Change any of them; most are a setting.
 
 The prompt assumes interactive agent sessions in terminal tabs, watched by
 scraping the screen, with a background watcher process per worker. This
-machine has no tmux, and slack-bridge already drives Claude Code headless over
+machine has no tmux, and bridge already drives Claude Code headless over
 the stream-json protocol with `--permission-prompt-tool stdio`. That gives
 structured events instead of screen text, and permission prompts and
 `AskUserQuestion` routed to the dashboard. So:
@@ -35,7 +35,7 @@ A restarted server rereads them (see Recovery).
 
 ## Interview answers (defaults chosen)
 
-- **Harness repo**: this one (slack-bridge). macOS, zsh, Node with no
+- **Harness repo**: this one (bridge). macOS, zsh, Node with no
   dependencies, the same as the rest of the project.
 - **Repos**: any git checkout; default `TARGET_REPO` (default branch from `origin/HEAD`, else main). Worktrees go to
   `WORKTREE_ROOT` for the target repo, else `<repo>-worktrees/`.
@@ -131,3 +131,27 @@ children of the server and die with it, so **resume is a relaunch** (`--resume
 suite: a real dashboard process on a random port, a scratch repo with a bare
 origin, and `test/stub-claude.js` forcing every outcome. Nothing touches
 `data/`, your repos, or usage.
+
+## Workspace views and the native app (2026-11-25)
+
+- **Board columns** are derived on the page from the run, its task status and the
+  PR's live state; only a manual placement is stored (`run.board`), written
+  without bumping `updatedAt`, so a drag never marks a chat unread. Manual wins
+  until unpinned. A run whose PR isn't among your open PRs (once loaded) counts as Done.
+- **Feeds** (`lib/sources.js`): one `gh api graphql` call for your open, review-requested
+  and recently merged PRs; Linear's GraphQL API with `LINEAR_API_KEY`. Each is cached
+  for 60s and fetched once at a time. They're GETs but private, so they take the
+  same loopback-origin check as writes.
+- **PR actions go through the orchestrator** rather than spawning directly, because
+  they work on an existing branch, which a fresh worktree can't check out if it's
+  checked out elsewhere. Linear's **Start session** spawns directly on Linear's branch name,
+  and falls back to a generated name if that branch exists.
+- **Ideas from Orca and Paseo**: dev-server ports tied to worktrees (Orca's `orca ports`),
+  `.worktreeinclude` (Paseo), full-text transcript search, a status line on each card, and
+  attention badges. Not built yet: Claude plan-usage meters (would need the Claude Code
+  OAuth token from the keychain), remote and phone access, and typed agent-to-agent mail.
+- **Bridge.app** never owns the server. It starts it through `install.sh start`
+  (launchd) if it's down, so quitting the window never kills a worker.
+  WKWebView has no web Notification API, so a user script injected at document
+  start stands in for it and posts to `UNUserNotificationCenter`. The Dock badge
+  comes from the page title `(n) Needs you`.

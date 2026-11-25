@@ -20,7 +20,7 @@
  *   sb mode normal|quiet|away
  *
  * The dashboard's address comes from $SB_URL (set in every harness session),
- * else SLACK_BRIDGE_PORT in .env, else 4319.
+ * else BRIDGE_PORT in .env, else 4319.
  */
 
 const fs = require("fs");
@@ -30,10 +30,10 @@ const ROOT = path.join(__dirname, "..");
 
 function baseUrl() {
   if (process.env.SB_URL) return process.env.SB_URL.replace(/\/+$/, "");
-  let port = process.env.SLACK_BRIDGE_PORT;
+  let port = process.env.BRIDGE_PORT;
   if (!port) {
     try {
-      const m = fs.readFileSync(path.join(ROOT, ".env"), "utf8").match(/^\s*SLACK_BRIDGE_PORT\s*=\s*["']?(\d+)/m);
+      const m = fs.readFileSync(path.join(ROOT, ".env"), "utf8").match(/^\s*BRIDGE_PORT\s*=\s*["']?(\d+)/m);
       if (m) port = m[1];
     } catch {}
   }

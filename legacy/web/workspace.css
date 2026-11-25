@@ -1,0 +1,184 @@
+/* The workspace layer: view switcher, Overview, Board, PRs, Linear.
+   Built only from app.css's tokens, so both themes follow automatically. */
+
+/* --- shell -------------------------------------------------------------- */
+.viewnav { flex: 0 0 auto; }
+.viewnav button { padding: 5px 11px; font-size: 12.5px; }
+.app.wide { grid-template-columns: 100%; grid-template-areas: "top" "main"; }
+.app.wide .sidebar, .app.wide .inspector { display: none; }
+.app.wide .main { display: flex; }
+@media (max-width: 1180px) { .topbar .linkform { flex-basis: 360px; } }
+@media (max-width: 980px) { .viewnav button { padding: 5px 8px; } .brand { font-size: 0; gap: 0; } }
+
+.wsview { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; overflow: auto; padding: 22px 26px 40px; }
+.wshead { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+.wstitle h2 { margin: 0; font-size: 20px; letter-spacing: -0.015em; font-weight: 680; }
+.wssub { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+.wsq {
+  height: 32px; width: 220px; border-radius: 9px; border: 1px solid var(--line); background: var(--surface-2);
+  padding: 0 10px; font-size: 13px; outline: none;
+}
+.wsq:focus { border-color: var(--accent); }
+.wserr {
+  border: 1px solid color-mix(in srgb, var(--bad) 35%, var(--line)); background: color-mix(in srgb, var(--bad) 8%, transparent);
+  color: var(--bad); border-radius: 10px; padding: 8px 12px; font-size: 12.5px; margin-bottom: 12px;
+}
+.wsnone { color: var(--muted); font-size: 12.5px; padding: 6px 2px; }
+.wsnone.pad { padding: 40px 0; text-align: center; }
+.wslink { color: inherit; text-decoration: none; }
+.wslink:hover { color: var(--accent-ink); text-decoration: underline; }
+.linkbtn { border: 0; background: none; color: var(--accent-ink); font-size: 12px; cursor: pointer; padding: 2px 4px; }
+.linkbtn:hover { text-decoration: underline; }
+
+/* --- chips -------------------------------------------------------------- */
+.wschip {
+  display: inline-flex; align-items: center; gap: 4px; font-size: 10.5px; font-weight: 650; white-space: nowrap;
+  padding: 2px 7px; border-radius: 6px; background: var(--chip); color: var(--muted); text-decoration: none;
+}
+a.wschip:hover { filter: brightness(1.15); }
+.wschip.ok { background: color-mix(in srgb, var(--on) 16%, transparent); color: var(--on); }
+.wschip.bad { background: color-mix(in srgb, var(--bad) 15%, transparent); color: var(--bad); }
+.wschip.warn { background: color-mix(in srgb, var(--warn) 17%, transparent); color: var(--warn); }
+.wschip.good { background: color-mix(in srgb, var(--on) 16%, transparent); color: var(--on); }
+.wschip.accent { background: color-mix(in srgb, var(--accent) 17%, transparent); color: var(--accent-ink); }
+.wschip.live { background: color-mix(in srgb, var(--warn) 17%, transparent); color: var(--warn); }
+.wschip.live::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: pulse 1.3s ease-in-out infinite; }
+.wschip.merged { background: color-mix(in srgb, #a371f7 18%, transparent); color: light-dark(#8250df, #b392f0); }
+.wschip.pr { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent-ink); }
+.wschip.port { background: color-mix(in srgb, var(--on) 14%, transparent); color: var(--on); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.wschip.issue { background: var(--surface-3); color: var(--ink-2); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.wschip.label { background: color-mix(in srgb, var(--lc, var(--muted)) 18%, transparent); color: var(--ink-2); }
+.wschip.label::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--lc, var(--muted)); }
+
+/* --- kanban ------------------------------------------------------------- */
+.kanban { display: grid; grid-template-columns: repeat(5, minmax(240px, 1fr)); gap: 12px; flex: 1 1 auto; min-height: 0; overflow-x: auto; }
+.kcol {
+  display: flex; flex-direction: column; min-height: 0; border-radius: 14px; background: var(--surface-2);
+  border: 1px solid var(--line-soft); transition: border-color 0.12s, background 0.12s;
+}
+.kcol.over { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 6%, var(--surface-2)); }
+.kcolhead { display: flex; align-items: center; gap: 8px; padding: 11px 12px 8px; font-size: 12.5px; font-weight: 650; }
+.kcount { color: var(--muted); font-weight: 600; font-variant-numeric: tabular-nums; }
+.kdot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; background: var(--muted); }
+.kdot.backlog { background: transparent; border: 1.6px dashed var(--muted); }
+.kdot.doing { background: var(--warn); }
+.kdot.needs { background: var(--bad); }
+.kdot.review { background: var(--accent); }
+.kdot.done { background: var(--on); }
+.kbody { display: flex; flex-direction: column; gap: 8px; padding: 2px 8px 10px; overflow-y: auto; min-height: 120px; flex: 1 1 auto; }
+.kempty { color: var(--muted); font-size: 12px; text-align: center; padding: 18px 0; border: 1px dashed var(--line); border-radius: 10px; }
+.kmore { border: 0; background: none; color: var(--muted); font-size: 12px; cursor: pointer; padding: 6px; }
+.kmore:hover { color: var(--ink); }
+
+.kcard {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 11px; padding: 9px 11px 10px;
+  cursor: grab; display: flex; flex-direction: column; gap: 5px; box-shadow: 0 1px 2px var(--shadow-color);
+  transition: border-color 0.12s, transform 0.12s, box-shadow 0.12s;
+}
+.kcard:hover { border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); box-shadow: var(--shadow); }
+.kcard:active { cursor: grabbing; }
+.kcard.dragging { opacity: 0.35; transform: scale(0.98); }
+.kcard.hot { border-left: 3px solid var(--warn); }
+.kcard.live { border-left: 3px solid var(--on); }
+.kc-top { display: flex; align-items: center; gap: 6px; font-size: 10.5px; color: var(--muted); }
+.kc-kind { font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; font-size: 9.5px; }
+.kc-kind.slack { color: light-dark(#7a2e8e, #d08bea); }
+.kc-kind.task { color: var(--accent-ink); }
+.kc-key { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink-2); }
+.kc-pin { border: 0; background: var(--chip); color: var(--muted); border-radius: 5px; font-size: 9.5px; padding: 1px 5px; cursor: pointer; }
+.kc-pin:hover { color: var(--ink); }
+.kc-title { font-size: 13px; font-weight: 620; line-height: 1.35; color: var(--ink); overflow-wrap: anywhere; }
+.kc-text {
+  font-size: 12px; color: var(--ink-2); line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere;
+}
+.kc-status {
+  font-size: 11.5px; color: var(--accent-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.kc-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 2px; }
+.kc-cost { margin-left: auto; font-size: 10.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.knew { display: flex; flex-direction: column; gap: 6px; padding: 2px 0 4px; }
+.knew textarea {
+  resize: vertical; min-height: 52px; border-radius: 10px; border: 1px dashed var(--line); background: var(--surface);
+  padding: 8px 10px; font-size: 12.5px; outline: none;
+}
+.knew textarea:focus { border-style: solid; border-color: var(--accent); }
+.knew .btn { align-self: flex-end; height: 26px; padding: 0 12px; font-size: 12px; }
+.knew textarea:placeholder-shown + .btn { display: none; }
+
+/* --- lists (PRs, Linear) ------------------------------------------------- */
+.wsbody { display: flex; flex-direction: column; gap: 22px; max-width: 1180px; }
+.wssec h3, .wspane h3 {
+  margin: 0 0 6px; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 700;
+  display: flex; align-items: center; gap: 8px;
+}
+.wssec h3 .n { font-variant-numeric: tabular-nums; color: var(--ink-2); }
+.wsrow {
+  display: flex; align-items: flex-start; gap: 12px; padding: 10px 12px; border: 1px solid var(--line-soft);
+  background: var(--surface); border-radius: 11px; margin-bottom: 6px;
+}
+.wsrow:hover { border-color: var(--line); }
+.wsmain { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.wsrowtitle { font-size: 13.5px; font-weight: 600; display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+.wsrowtitle a { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wsrowtitle .key { color: var(--muted); font-size: 11.5px; flex: 0 0 auto; }
+.wsmeta { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11.5px; color: var(--muted); align-items: center; }
+.wsmeta .dim { opacity: 0.8; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wschips { display: flex; flex-wrap: wrap; gap: 4px; }
+.wschips:empty { display: none; }
+.wsacts { display: flex; gap: 6px; flex: 0 0 auto; align-items: center; flex-wrap: wrap; justify-content: flex-end; max-width: 300px; }
+.wsacts .btn { height: 28px; padding: 0 10px; font-size: 12px; }
+.diffstat { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; display: inline-flex; gap: 5px; }
+.diffstat .add { color: var(--on); }
+.diffstat .del { color: var(--bad); }
+.prstate { width: 10px; height: 10px; border-radius: 50%; margin-top: 5px; flex: 0 0 auto; background: var(--on); }
+.prstate.draft { background: var(--muted); }
+.prstate.merged { background: light-dark(#8250df, #a371f7); }
+.prstate.closed { background: var(--bad); }
+.pri { width: 14px; height: 14px; margin-top: 3px; flex: 0 0 auto; border-radius: 3px; background: var(--chip); position: relative; }
+.pri.p1 { background: var(--bad); }
+.pri.p2 { background: color-mix(in srgb, var(--warn) 85%, var(--bad)); }
+.pri.p3 { background: var(--warn); opacity: 0.75; }
+.pri.p4 { background: var(--muted); opacity: 0.6; }
+.lstate { display: inline-flex; align-items: center; gap: 5px; color: var(--ink-2); }
+.ldot { width: 8px; height: 8px; border-radius: 50%; }
+
+/* --- overview ----------------------------------------------------------- */
+.wstiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin-bottom: 18px; }
+.wstile {
+  text-align: left; border: 1px solid var(--line-soft); background: var(--surface); border-radius: 13px;
+  padding: 12px 14px; cursor: pointer; transition: border-color 0.12s, transform 0.12s;
+}
+.wstile:hover { border-color: var(--accent); transform: translateY(-1px); }
+.wstile .v { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.wstile .l { font-size: 12px; color: var(--ink-2); font-weight: 600; }
+.wstile .s { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.wstile.live .v { color: var(--on); }
+.wstile.warn .v { color: var(--warn); }
+.wsgrid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr); gap: 16px; align-items: start; }
+@media (max-width: 1100px) { .wsgrid { grid-template-columns: 1fr; } }
+.wscol { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.wspane { border: 1px solid var(--line-soft); background: var(--surface-2); border-radius: 14px; padding: 12px; }
+.wspane header { display: flex; align-items: center; margin-bottom: 6px; }
+.wspane header h3 { margin: 0; }
+.wspane .wsrow { margin-bottom: 6px; }
+.wspane .wsrow:last-child { margin-bottom: 0; }
+.wsmini {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "d t w" ". s s"; gap: 0 8px; align-items: center;
+  width: 100%; text-align: left; border: 0; background: transparent; border-radius: 9px; padding: 7px 8px; cursor: pointer;
+}
+.wsmini:hover { background: var(--surface-3); }
+.wsmini.static { cursor: default; }
+.wsmini.static:hover { background: transparent; }
+.wsmini .kdot { grid-area: d; }
+.wsmini .t { grid-area: t; font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wsmini .s { grid-area: s; font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wsmini .s:empty { display: none; }
+.wsmini .w { grid-area: w; font-size: 11px; color: var(--muted); }
+
+/* --- native shell (Bridge.app) -------------------------------------------
+   The window's title bar is hidden; the traffic lights float over the top
+   bar's left edge, so the brand steps aside for them. */
+html.native .topbar { padding-left: 84px; -webkit-user-select: none; user-select: none; }
+html.native .topbar input { -webkit-user-select: text; user-select: text; }

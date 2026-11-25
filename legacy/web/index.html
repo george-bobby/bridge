@@ -3,13 +3,15 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Slack Bridge</title>
+    <title>Bridge</title>
     <!-- Before app.css so the memory panel's integration rules win. Every
          selector in it is scoped to .milkdown, so it cannot touch the rest of
          the page; only the editor's 2.7MB of JS is deferred to first open. -->
     <link rel="stylesheet" href="/vendor/milkdown.css" />
     <link rel="stylesheet" href="/app.css" />
     <link rel="stylesheet" href="/harness.css" />
+    <link rel="stylesheet" href="/workspace.css" />
+    <script>if (/BridgeApp\//.test(navigator.userAgent)) document.documentElement.classList.add("native");</script>
     <link
       rel="icon"
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%237c74ff'/%3E%3Cpath d='M9 20l4-8 3 5 2-3 5 6' stroke='white' stroke-width='2.4' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"
@@ -26,7 +28,7 @@
             <rect width="32" height="32" rx="8" fill="#7c74ff" />
             <path d="M9 20l4-8 3 5 2-3 5 6" stroke="white" stroke-width="2.4" fill="none" stroke-linecap="round" stroke-linejoin="round" />
           </svg>
-          Slack Bridge
+          Bridge
         </div>
 
         <!-- The only way work starts: paste a Slack thread link (Enter opens the
@@ -161,6 +163,9 @@
               <div class="wrap" id="composerWrap"></div>
             </div>
           </div>
+
+          <!-- Built by harness.js: decisions, to-dos, task status, activity. -->
+          <div id="inboxView" class="inboxview" hidden></div>
         </section>
       </main>
 
@@ -221,19 +226,6 @@
       </div>
     </aside>
 
-    <!-- ------------------------------------------------------- inbox --- -->
-    <aside class="drawer" id="panelInbox" aria-hidden="true">
-      <header>
-        <h2>Inbox</h2>
-        <div class="spacer"></div>
-        <button class="iconbtn panel-close" title="Close">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
-            <path d="M6 6l12 12M18 6L6 18" />
-          </svg>
-        </button>
-      </header>
-      <div class="content" id="inboxBody"></div>
-    </aside>
 
     <!-- ---------------------------------------------------- settings --- -->
     <aside class="drawer" id="panelSettings" aria-hidden="true">
@@ -458,5 +450,6 @@
     <div class="toasts" id="toasts"></div>
     <script src="/app.js"></script>
     <script src="/harness.js"></script>
+    <script src="/workspace.js"></script>
   </body>
 </html>
