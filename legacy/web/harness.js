@@ -1,4 +1,4 @@
-/* slack-bridge — the harness layer of the dashboard.
+/* bridge — the harness layer of the dashboard.
  *
  * Loaded after app.js and built on its globals (S, $, el, api, md, toast,
  * openRun, ...). It wraps a handful of app.js's render functions rather than
@@ -149,7 +149,7 @@ const _paintTitle = paintTitle;
 paintTitle = function () {
   _paintTitle();
   const n = H.inbox.counts.decisions || 0;
-  if (n && !/Needs you/.test(document.title)) document.title = `(${n}) Inbox · Slack Bridge`;
+  if (n && !/Needs you/.test(document.title)) document.title = `(${n}) Inbox · Bridge`;
 };
 
 /* ------------------------------------------------------------ inspector */

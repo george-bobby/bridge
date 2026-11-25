@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * slack-bridge dashboard
+ * bridge dashboard
  *
  * A zero-dependency local control panel for the Slack -> Claude Code fetch
  * pipeline. It does NOT talk to Slack and holds no Slack credentials. You paste
@@ -34,12 +34,14 @@ const proposals = require("./lib/proposals");
 const bus = require("./lib/bus");
 const harness = require("./lib/harness");
 const tasks = require("./lib/tasks");
+const sources = require("./lib/sources");
 
 const ROOT = __dirname;
-// PORT stays supported for a one-off override; SLACK_BRIDGE_PORT in .env is
+// PORT stays supported for a one-off override; BRIDGE_PORT in .env is
 // the setting emit.sh also reads, so the two agree by default.
 const PORT = Number(process.env.PORT) || env.port;
-const PUBLIC = path.join(ROOT, "public");
+// The web UI, kept as the legacy client. The desktop app (native/macos) is the main one.
+const PUBLIC = path.join(ROOT, "legacy", "web");
 
 /* ------------------------------------------------------------- http utils */
 
@@ -294,6 +296,21 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // --- read-only feeds for the workspace views (GitHub PRs, Linear issues) ---
+  const src = req.method === "GET" && p.match(/^\/api\/sources\/(pulls|linear|ports)$/);
+  if (src) {
+    // Private data on a GET: a page elsewhere can't read the answer, but DNS
+    // rebinding could, so hold it to the same loopback rule as the writes.
+    if (!sameOrigin(req)) return sendJson(res, 403, { ok: false, error: "cross-origin request refused" });
+    try {
+      const data = await sources[src[1]]({ refresh: url.searchParams.get("refresh") === "1" });
+      sendJson(res, 200, { ok: true, ...data });
+    } catch (e) {
+      sendJson(res, 502, { ok: false, error: String(e.message || e) });
+    }
+    return;
+  }
+
   // --- working-directory picker --------------------------------------------
   if (req.method === "GET" && p === "/api/dirs") {
     try {
@@ -401,6 +418,13 @@ const server = http.createServer(async (req, res) => {
     } catch (e) {
       sendJson(res, 400, { ok: false, error: String(e.message || e) });
     }
+    return;
+  }
+
+  // --- transcript search (the ⌘K palette) -----------------------------------
+  if (req.method === "GET" && p === "/api/search") {
+    if (!sameOrigin(req)) return sendJson(res, 403, { ok: false, error: "cross-origin request refused" });
+    sendJson(res, 200, { ok: true, hits: store.searchRuns(url.searchParams.get("q")) });
     return;
   }
 
@@ -629,6 +653,19 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // The board column you dragged this chat to ("" = automatic).
+    if (req.method === "POST" && verb === "board") {
+      try {
+        const body = JSON.parse((await readBody(req)) || "{}");
+        const board = store.setBoard(id, body.column);
+        bus.broadcast("runs", { runs: store.listRunSummaries() });
+        sendJson(res, 200, { ok: true, board });
+      } catch (e) {
+        sendJson(res, 400, { ok: false, error: String(e.message || e) });
+      }
+      return;
+    }
+
     // Clears the unread dot. Cheap enough to fire on every chat open.
     if (req.method === "POST" && verb === "seen") {
       const run = store.loadRun(id);
@@ -719,13 +756,13 @@ server.on("error", (err) => {
   console.error(`  stop it:   npm stop   (the background copy npm start runs)`);
   console.error(`  find it:   lsof -nP -iTCP:${PORT} -sTCP:LISTEN`);
   console.error(`  replace:   kill $(lsof -t -iTCP:${PORT} -sTCP:LISTEN) && node index.js`);
-  console.error(`  or move:   SLACK_BRIDGE_PORT=4320 node index.js`);
+  console.error(`  or move:   BRIDGE_PORT=4320 node index.js`);
   process.exit(1);
 });
 
 server.listen(PORT, "127.0.0.1", () => {
   const config = store.readConfig();
-  console.log(`slack-bridge dashboard  ->  http://localhost:${PORT}`);
+  console.log(`bridge dashboard  ->  http://localhost:${PORT}`);
   console.log(`  runs:      ${store.PATHS.runs}`);
   console.log(`  config:    ${store.PATHS.config}`);
   console.log(`  follow-up: ${jobs.resolveWorkdir(config)}  (model: ${config.followup.model})`);

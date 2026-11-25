@@ -38,3 +38,6 @@ package-lock.json
 # Your own copies of templates/ (e.g. a repo-specific skill). Rendered in
 # preference to templates/ and never committed.
 templates.local/
+
+# ─── Native app build output (scripts/build-app.sh) ─────────────────────────
+dist/

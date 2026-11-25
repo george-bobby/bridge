@@ -1,13 +1,16 @@
 {
-  "name": "slack-bridge",
+  "name": "bridge",
   "version": "2.0.0",
   "private": true,
   "license": "MIT",
-  "description": "Zero-dependency local dashboard for running a Slack thread through Claude Code end to end: paste a thread link, and a session reads it via the Slack connector, root-causes it, builds, opens a PR and replies, asking you at each gate. Nothing runs on a timer and no Slack token or bot is involved.",
+  "description": "Zero-dependency local command center for Claude Code: a native macOS app with a Kanban board of sessions, your GitHub PRs and Linear issues, and Slack threads run end to end by headless Claude workers in their own worktrees.",
   "keywords": [
-    "slack",
     "claude-code",
+    "orchestrator",
+    "kanban",
+    "slack",
     "linear",
+    "github",
     "dashboard"
   ],
   "main": "index.js",
@@ -21,6 +24,7 @@
     "dev": "./scripts/install.sh stop >/dev/null; node lib/render.js && node --watch-path=index.js --watch-path=lib index.js",
     "foreground": "node lib/render.js && node index.js",
     "render": "node lib/render.js",
-    "test": "node --test --test-concurrency=1 test/*.test.js"
+    "test": "node --test --test-concurrency=1 test/*.test.js",
+    "app": "./scripts/build-app.sh install"
   }
 }
