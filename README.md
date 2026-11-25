@@ -37,6 +37,15 @@ the questions workers are waiting on.
 - **Configured and developed from the app.** `.env` is editable in Settings,
   and Bridge can work on its own source: add it as a project, start sessions on
   it, then rebuild and relaunch the app from Settings.
+- **Four agents, one session.** Run any session on Claude Code, Codex, Cursor or
+  Devin, with each one's own models (listed live from its CLI). Switch agents
+  mid-session and the next one is handed a briefing of the work so far. Ask a
+  second agent for a read-only second opinion in one click.
+- **Usage at a glance.** Plan limits for Claude, Codex and Cursor (session,
+  weekly, monthly, with reset times and a "runs out at" projection) in the
+  bottom-right corner, plus what Bridge ran on each agent this week and month.
+- **Review and ship from the session.** The Changes tab lists what the session
+  changed with per-file diffs; commit, push and open the PR from there.
 - **You stay in control.** Workers run with a guard: destructive git, Slack
   posts, ticket and PR writes come to you as exact-payload Allow/Deny cards.
   Nothing runs on a timer.
@@ -47,9 +56,10 @@ the questions workers are waiting on.
 
 | | |
 | --- | --- |
-| ![Home](docs/screenshots/home.png) **Home**: what's running, what needs you, PRs and issues | ![Session](docs/screenshots/chat.png) **Session**: the transcript, a question Claude is waiting on, the composer |
+| ![Home](docs/screenshots/home.png) **Home**: what's running, what needs you, PRs and issues | ![Session](docs/screenshots/chat.png) **Session**: to-dos, inline edit diffs, the agent and model chips, the worker's report |
 | ![Linear](docs/screenshots/linear.png) **Linear**: your issues with sub-issues as a tree | ![Pull requests](docs/screenshots/pulls.png) **Pull requests**: what needs attention first |
 | ![Slack](docs/screenshots/slack.png) **Slack**: your mentions and their threads, read and replied to in place | ![Inbox](docs/screenshots/inbox.png) **Inbox**: workers' questions, to-dos, activity |
+| ![Usage](docs/screenshots/usage.png) **Usage**: plan limits for every agent, and what Bridge ran on each | ![A question](docs/screenshots/question.png) **Questions**: Claude waits on you, answered in place |
 | ![Command menu](docs/screenshots/palette.png) **⌘K**: commands and full-text search | ![Sessions](docs/screenshots/sessions.png) **Sessions**: every session, grouped by status |
 
 Every screenshot is the built-in demo (`npm run demo`): a fictional team, no
@@ -166,11 +176,34 @@ keyboard first. Everything is reachable from `⌘K`.
 | **Slack** `⌘8` | Messages that mention you, newest first. Open one to read the whole thread, reply in it as yourself, or **Hand to Claude** to run the pipeline on it in a project you pick |
 | **Settings** `⌘,` | Pipeline gates, session defaults, harness caps; **Environment** edits `.env` (secrets are write-only) and restarts the server to apply it; **Develop** adds Bridge's own repo as a project and rebuilds and relaunches the app |
 
-A session opens as a chat with Claude's transcript (thinking, tool calls with
+**Agents.** The composer's first chip picks the agent: Claude Code, Codex
+(`codex exec --json`), Cursor (`cursor-agent` stream-json) or Devin (`devin -p`
+with `--export`). The model chip lists that agent's own models, searchable.
+Switching agents mid-session is a handoff: the incoming agent's first turn
+opens with a briefing (task, branch and worktree, PR, the conversation since it
+last worked, the latest report). Bridge's guard hook runs only inside Claude
+Code; the other agents use their own sandboxes and approvals, and the chip
+marks that. **Second opinion** (the two-people button) starts another agent on
+the session read-only, in its own worktree.
+
+**Usage.** The strip in the bottom-right corner shows each agent's tightest
+limit; hover for every window, click for the Usage page (`⌘9`). Claude and
+Codex are read with their CLIs' own logins (Claude Code's Keychain entry,
+`~/.codex/auth.json`, falling back to Codex's session logs), Cursor with the
+editor's login. Devin publishes no plan limits, so its card shows the ACUs of
+turns Bridge ran.
+
+A session opens as a chat with the agent's transcript (thinking, tool calls with
 their output, answers), permission, question and plan cards you answer in place, a
 composer with mode / model / thinking / context / repo, and a properties panel
 with status, branch, worktree, PR, Linear issue, dev servers and the worker's
 report.
+
+The **Changes** tab shows the working folder's changed files with a diff for
+each, and commits, pushes and opens the PR (`gh pr create`) on your click. The
+composer completes slash commands (your Claude skills and commands, plus
+`/compact` and friends), shows how full the context window is, and **Stop &
+send** interrupts a running turn instead of queueing behind it.
 
 Also: `⌘K` command menu (commands, sessions, PRs, issues and full-text
 transcript search), `⌘N` new task (a Slack link runs the pipeline; anything

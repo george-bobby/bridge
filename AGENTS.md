@@ -28,3 +28,6 @@ Zero-dependency Node dashboard (no `npm install`) plus a Swift WKWebView shell.
 - `lib/envfile.js`: `.env` read/write for Settings, schema from `.env.example`; secrets are write-only
 - `lib/slack.js`: native Slack connector on a user token (`SLACK_USER_TOKEN`); `lib/demo.js` has a fixture Slack for `npm run demo`
 - `POST /api/restart` exits the server; launchd (KeepAlive) restarts it after re-rendering the skill
+- `lib/agents.js`: Codex/Cursor/Devin adapters into Claude's stream-json, handoff briefings, the model catalog (`codex debug models`, `cursor-agent --list-models`, `devin models list --format json`); spawn agents with `ACP_BACKEND` removed or Devin says "Not logged in"
+- `lib/usage.js`: plan usage (Claude oauth/usage, Codex wham/usage + session-log fallback, Cursor dashboard API); never stores or refreshes tokens
+- `lib/changes.js`: per-session git status/diff/commit/push/`gh pr create`

@@ -239,6 +239,9 @@ final class AppModel {
     var composeProject: String? = nil
 
     var usage: JSON = .null
+    var agentCatalog: JSON = .null
+    var commands: [JSON] = []
+    var chatTab = "chat"
     var slack: JSON = .null
     var mentions: [Mention] = []
     var slackThread: JSON = .null
@@ -587,6 +590,7 @@ final class AppModel {
         if let s = try? await API.get("/api/state") { applyState(s) }
         Task { await loadSlack() }
         Task { await loadUsage() }
+        Task { if let c = try? await API.get("/api/agents") { agentCatalog = c } }
         if let r = try? await API.get("/api/runs") { sessions = r["runs"].array.map(Session.init) }
         if let i = try? await API.get("/api/inbox") { inbox = i }
         await loadSources(refresh: false)
