@@ -187,7 +187,7 @@ function snapshot() {
     workerSkill: workerSkillState(),
     // Only what the page actually draws: the repo a new chat's job would run
     // in, which the composer's picker opens on.
-    meta: { workdir: jobs.resolveWorkdir(store.readConfig()), terminal: env.terminalApp, root: ROOT, projects: projects.list(jobs.resolveWorkdir(store.readConfig())) },
+    meta: { workdir: jobs.resolveWorkdir(store.readConfig()), root: ROOT, projects: projects.list(jobs.resolveWorkdir(store.readConfig())) },
     now: Date.now(),
   };
 }
@@ -920,18 +920,10 @@ const server = http.createServer(async (req, res) => {
       }
       return;
     }
-    if (req.method === "POST" && verb === "terminal") {
-      try {
-        sendJson(res, 200, { ok: true, ...(await jobs.openTerminal(id, { config: store.readConfig() })) });
-      } catch (e) {
-        sendJson(res, 409, { ok: false, error: String(e.message || e) });
-      }
-      return;
-    }
 
     // The session's working folder: what changed, per-file diffs, and the
     // commit / push / PR actions you take on them from the app.
-    if (verb === "changes" || verb === "diff" || verb === "commit" || verb === "push" || verb === "pr" || verb === "advisor") {
+    if (verb === "changes" || verb === "diff" || verb === "commit" || verb === "push" || verb === "pr") {
       if (!sameOrigin(req)) return sendJson(res, 403, { ok: false, error: "cross-origin request refused" });
       const changes = require("./lib/changes");
       try {
@@ -940,6 +932,9 @@ const server = http.createServer(async (req, res) => {
         const meta = tasks.exists(id) ? tasks.readMeta(id) || {} : {};
         const dir = meta.worktree && fs.existsSync(meta.worktree) ? meta.worktree : jobs.resolveWorkdir(store.readConfig(), run);
         const body = req.method === "POST" ? JSON.parse((await readBody(req)) || "{}") : {};
+        if (req.method === "GET" && verb === "pr") {
+          return sendJson(res, 200, { ok: true, ...(await changes.activity(run.prUrl || meta.prUrl, { refresh: url.searchParams.get("refresh") === "1" })) });
+        }
         if (req.method === "GET" && verb === "changes") return sendJson(res, 200, { ok: true, ...(await changes.status(dir)) });
         if (req.method === "GET" && verb === "diff") return sendJson(res, 200, { ok: true, diff: await changes.diff(dir, url.searchParams.get("file")) });
         if (req.method === "POST" && verb === "commit") return sendJson(res, 200, { ok: true, ...(await changes.commit(dir, body.message)) });
@@ -952,20 +947,6 @@ const server = http.createServer(async (req, res) => {
           if (tasks.exists(id)) tasks.writeMeta(id, { prUrl });
           bus.broadcast("runs", { runs: store.listRunSummaries() });
           return sendJson(res, 200, { ok: true, prUrl });
-        }
-        if (req.method === "POST" && verb === "advisor") {
-          // A second opinion: another agent, briefed on this session, in its
-          // own worktree and in plan mode, so it can read but not change.
-          const agent = ["claude", "codex", "cursor", "devin"].includes(body.agent) ? body.agent : "codex";
-          const brief = require("./lib/agents").handoff({ ...run, messages: [...run.messages, { role: "assistant", agent: "__none__", state: "done", text: "" }] }, agent, { meta, report: tasks.readReport(id) });
-          const ask = String(body.question || "Review the approach and the current state. What's wrong, risky or missing, and what would you do next?").slice(0, 4000);
-          const out = await harness.spawnTask({
-            repo: meta.repo || projects.get(store.listRunSummaries().find((r) => r.runId === id)?.project || "")?.path || jobs.resolveWorkdir(store.readConfig(), run),
-            title: `Second opinion: ${String(run.who || id).slice(0, 60)}`,
-            brief: `${brief.replace(/^# Handoff:.*$/m, "# You are an advisor on this session").replace(/## Now$/, "")}\n## Your job\n${ask}\n\nAdvise only. DO NOT edit files, commit or push. Answer with findings ranked by importance and a recommendation.`,
-            opts: { agent, permissionMode: "plan" },
-          });
-          return sendJson(res, 200, { ok: true, ...out });
         }
       } catch (e) {
         return sendJson(res, 400, { ok: false, error: String(e.message || e) });
