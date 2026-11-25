@@ -40,7 +40,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 if case .session(let id) = route { model.open(id) } else { model.route = route }
                 if name == "slack", let m = model.mentions.first { model.openThread(m.permalink) }
                 try? await Task.sleep(nanoseconds: 2_500_000_000)
-                guard let view = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil && $0.frame.width > 800 })?.contentView,
+                guard let content = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil && $0.frame.width > 800 })?.contentView,
+                      let view = content.superview ?? Optional(content),
                       let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(view.bounds.width * 2), pixelsHigh: Int(view.bounds.height * 2), bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { continue }
                 rep.size = view.bounds.size
                 view.cacheDisplay(in: view.bounds, to: rep)
@@ -103,7 +104,7 @@ let navOrder: [(label: String, icon: String, route: Route)] = [
     ("Inbox", "tray", .inbox),
     ("Sessions", "rectangle.stack", .sessions),
     ("Slack", "number", .slack),
-    ("Pull Requests", "arrow.triangle.pull", .pulls),
+    ("GitHub", "arrow.triangle.pull", .pulls),
     ("Linear", "circle.lefthalf.filled", .linear),
     ("Memory", "book.closed", .memory),
     ("Usage", "gauge.with.dots.needle.50percent", .usage),
@@ -193,6 +194,7 @@ struct RootView: View {
         }
         .background(VisualEffect(material: .sidebar))
         .background(T.bg.opacity(0.55))
+        .background(WindowChrome())
         .contentShape(Rectangle())
         .gesture(SpatialTapGesture(count: 2).onEnded { if $0.location.y <= T.headerHeight + T.panelInset { titleBarDoubleClick() } })
         .ignoresSafeArea()
@@ -204,7 +206,8 @@ struct RootView: View {
                 IconButton(icon: "chevron.right", help: "Forward (⌘])") { model.forward() }
                     .disabled(model.forwardStack.isEmpty).opacity(model.forwardStack.isEmpty ? 0.35 : 1)
             }
-            .padding(.leading, 78).padding(.top, model.sidebarHidden ? (T.headerHeight - 28) / 2 + T.panelInset : 9)
+            .frame(height: 28)
+            .padding(.leading, Chrome.buttonsLeft).padding(.top, Chrome.center - 14)
             .ignoresSafeArea()
         }
         .overlay {
