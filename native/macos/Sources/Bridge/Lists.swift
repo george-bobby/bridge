@@ -84,27 +84,55 @@ struct SessionMenu: View {
     @Environment(AppModel.self) var model
     let session: Session
     var body: some View {
-        Button("Open") { model.open(session.id) }
-        Button(session.pinned ? "Unpin" : "Pin to Sidebar") { Task { await model.setPinned(session.id, !session.pinned) } }
-        if model.projects.count > 1 {
-            Menu("Move to Project") {
-                ForEach(model.projects) { p in
-                    Button(p.name) { Task { await model.setProject(session.id, p.id) } }.disabled(p.id == session.project)
+        Section {
+            Button { model.open(session.id) } label: { Label("Open", systemImage: "arrow.up.forward.app") }
+            Button { Task { await model.terminal(session.id) } } label: { Label("Open in \(model.terminalName)", systemImage: "terminal") }
+        }
+        Section {
+            Button { Task { await model.setPinned(session.id, !session.pinned) } } label: {
+                Label(session.pinned ? "Unpin from Sidebar" : "Pin to Sidebar", systemImage: session.pinned ? "star.slash" : "star")
+            }
+            Menu {
+                ForEach(Column.allCases) { c in
+                    Button { Task { await model.move(session.id, to: c) } } label: {
+                        Label(c.label, systemImage: !session.boardPin.isEmpty && model.column(of: session) == c ? "checkmark" : c.symbol)
+                    }
                 }
+                Divider()
+                Button { Task { await model.move(session.id, to: nil) } } label: {
+                    Label("Automatic", systemImage: session.boardPin.isEmpty ? "checkmark" : "wand.and.stars")
+                }
+            } label: { Label("Set Status", systemImage: model.column(of: session).symbol) }
+            if model.projects.count > 1 {
+                Menu {
+                    ForEach(model.projects) { p in
+                        Button { Task { await model.setProject(session.id, p.id) } } label: { Label(p.name, systemImage: p.id == session.project ? "checkmark" : "folder") }
+                            .disabled(p.id == session.project)
+                    }
+                } label: { Label("Move to Project", systemImage: "folder") }
             }
         }
-        Menu("Set Status") {
-            ForEach(Column.allCases) { c in Button(c.label) { Task { await model.move(session.id, to: c) } } }
-            Divider()
-            Button("Automatic") { Task { await model.move(session.id, to: nil) } }
+        if !session.prUrl.isEmpty || !session.linearUrl.isEmpty || !session.permalink.isEmpty {
+            Section {
+                if !session.prUrl.isEmpty { Button { openURL(session.prUrl) } label: { Label("Open Pull Request", systemImage: "arrow.triangle.pull") } }
+                if !session.linearUrl.isEmpty { Button { openURL(session.linearUrl) } label: { Label("Open in Linear", systemImage: "circle.lefthalf.filled") } }
+                if !session.permalink.isEmpty { Button { openURL(session.permalink) } label: { Label("Open Slack Thread", systemImage: "number") } }
+            }
         }
-        if !session.prUrl.isEmpty { Button("Open Pull Request") { openURL(session.prUrl) } }
-        if !session.linearUrl.isEmpty { Button("Open in Linear") { openURL(session.linearUrl) } }
-        if !session.permalink.isEmpty { Button("Open Slack Thread") { openURL(session.permalink) } }
-        Button("Open in \(model.terminalName)") { Task { await model.terminal(session.id) } }
-        if model.isLive(session) { Button("Stop") { Task { await model.stop(session.id) } } }
-        Divider()
-        Button("Delete", role: .destructive) { Task { await model.delete(session.id) } }.disabled(model.isLive(session))
+        Menu {
+            if !session.branch.isEmpty { Button { copyToPasteboard(session.branch) } label: { Label("Branch Name", systemImage: "arrow.triangle.branch") } }
+            if !session.prUrl.isEmpty { Button { copyToPasteboard(session.prUrl) } label: { Label("Pull Request Link", systemImage: "link") } }
+            if !session.issueKey.isEmpty { Button { copyToPasteboard(session.issueKey) } label: { Label("Issue ID", systemImage: "number.square") } }
+            Button { copyToPasteboard(session.title) } label: { Label("Title", systemImage: "textformat") }
+            Button { copyToPasteboard(session.id) } label: { Label("Session ID", systemImage: "barcode") }
+        } label: { Label("Copy", systemImage: "doc.on.doc") }
+        Section {
+            if model.isLive(session) {
+                Button { Task { await model.stop(session.id) } } label: { Label("Stop", systemImage: "stop.circle") }
+            }
+            Button(role: .destructive) { Task { await model.delete(session.id) } } label: { Label("Delete", systemImage: "trash") }
+                .disabled(model.isLive(session))
+        }
     }
 }
 
@@ -151,19 +179,31 @@ struct PRMenu: View {
     let pr: PullRequest
     let mine: Bool
     var body: some View {
-        Button("Open on GitHub") { openURL(pr.url) }
-        if let s = model.session(forPR: pr) { Button("Open Session") { model.open(s.id) } }
-        Button("Copy Link") { copyToPasteboard(pr.url) }
-        Button("Copy Branch Name") { copyToPasteboard(pr.branch) }
-        if pr.open {
-            Divider()
-            if mine {
-                if pr.failing { Button("Fix CI with Claude") { ask("Spawn a worker for \(pr.url) (branch \(pr.branch)): checks are failing. Check out the existing PR branch, find why CI fails, fix it and push to the same branch.") } }
-                Button("Resolve Comments with Claude") { ask("Spawn a worker for \(pr.url) (branch \(pr.branch)): check out the existing PR branch and run /resolve on it.") }
-                if pr.mergeable == "CONFLICTING" { Button("Fix Conflicts with Claude") { ask("Spawn a worker for \(pr.url) (branch \(pr.branch)): check out the PR branch, merge the base branch in, resolve the conflicts, verify, and push.") } }
-            } else {
-                Button("Review with Claude") { ask("Spawn a worker to review \(pr.url): run /review on it and report findings. Do not approve or merge.") }
+        Section {
+            Button { openURL(pr.url) } label: { Label("Open on GitHub", systemImage: "safari") }
+            if let s = model.session(forPR: pr) { Button { model.open(s.id) } label: { Label("Open Session", systemImage: "bubble.left.and.text.bubble.right") } }
+            if pr.open, !model.servers(forBranch: pr.branch).isEmpty, let port = model.servers(forBranch: pr.branch).first?.ports.first {
+                Button { openURL("http://localhost:\(port)") } label: { Label("Open Dev Server :\(port)", systemImage: "play.circle") }
             }
+        }
+        if pr.open {
+            Section {
+                if mine {
+                    if pr.failing { Button { ask("Spawn a worker for \(pr.url) (branch \(pr.branch)): checks are failing. Check out the existing PR branch, find why CI fails, fix it and push to the same branch.") } label: { Label("Fix CI with Claude", systemImage: "wrench.and.screwdriver") } }
+                    Button { ask("Spawn a worker for \(pr.url) (branch \(pr.branch)): check out the existing PR branch and run /resolve on it.") } label: { Label("Resolve Comments with Claude", systemImage: "text.bubble") }
+                    if pr.mergeable == "CONFLICTING" { Button { ask("Spawn a worker for \(pr.url) (branch \(pr.branch)): check out the PR branch, merge the base branch in, resolve the conflicts, verify, and push.") } label: { Label("Fix Conflicts with Claude", systemImage: "arrow.triangle.merge") } }
+                } else {
+                    Button { ask("Spawn a worker to review \(pr.url): run /review on it and report findings. Do not approve or merge.") } label: { Label("Review with Claude", systemImage: "eye") }
+                }
+            }
+        }
+        Section {
+            Button { copyToPasteboard(pr.url) } label: { Label("Copy Link", systemImage: "link") }
+                .keyboardShortcut(",", modifiers: [.command, .shift])
+            Button { copyToPasteboard(pr.branch) } label: { Label("Copy Branch Name", systemImage: "arrow.triangle.branch") }
+                .keyboardShortcut(".", modifiers: [.command, .shift])
+            Button { copyToPasteboard("\(pr.repoName)#\(pr.number)") } label: { Label("Copy Reference", systemImage: "number") }
+                .keyboardShortcut(".", modifiers: .command)
         }
     }
     func ask(_ t: String) { Task { await model.askOrchestrator(t) } }
@@ -555,18 +595,6 @@ struct BoardCard: View {
     }
 }
 
-struct LayoutPicker: View {
-    @Environment(AppModel.self) var model
-    var body: some View {
-        Picker("", selection: Binding(get: { model.route == .sessions ? "list" : "board" }, set: { model.route = $0 == "list" ? .sessions : .board })) {
-            Image(systemName: "rectangle.split.3x1").help("Board").tag("board")
-            Image(systemName: "list.bullet").help("List").tag("list")
-        }
-        .pickerStyle(.segmented).labelsHidden().fixedSize()
-        .help("Board or list")
-    }
-}
-
 // MARK: - Sessions list
 
 struct SessionsView: View {
@@ -622,14 +650,22 @@ struct SessionsView: View {
     }
 }
 
-// MARK: - Pull requests
+// MARK: - GitHub
 
 struct PullsView: View {
     @Environment(AppModel.self) var model
+    @AppStorage("pulls.tab") private var tab = "all"
 
     var body: some View {
         VStack(spacing: 0) {
-            PageHeader(title: "Pull requests", subtitle: model.pulls["login"].nonEmpty.map { "as \($0)" } ?? "", icon: "arrow.triangle.pull") {
+            PageHeader(title: "GitHub", subtitle: model.pulls["login"].nonEmpty.map { "@\($0)" } ?? "", icon: "arrow.triangle.pull") {
+                SlidingTabs(tabs: [
+                    .init(id: "all", label: "All"),
+                    .init(id: "attention", label: "Needs attention", count: attention.count, hot: true),
+                    .init(id: "review", label: "Reviews", count: model.reviewPulls.count),
+                    .init(id: "open", label: "Open", count: model.openPulls.count),
+                    .init(id: "merged", label: "Merged"),
+                ], selection: $tab)
                 IconButton(icon: "arrow.clockwise", help: "Refresh", spinning: model.loading.contains("pulls")) { Task { await model.load("pulls", refresh: true) } }
             }
             if let e = model.errors["pulls"], !e.isEmpty { ErrorBar(text: e) }
@@ -638,13 +674,28 @@ struct PullsView: View {
             } else {
                 ScrollView {
                     LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
-                        group("Needs attention", model.openPulls.filter(\.needsAttention), icon: AnyView(StatusIcon(kind: .attention, size: 13)), mine: true)
-                        group("Review requested", model.reviewPulls, icon: AnyView(Image(systemName: "eye").font(.system(size: 11)).foregroundStyle(T.yellow)), mine: false)
-                        group("Open", model.openPulls.filter { !$0.needsAttention }, icon: AnyView(StatusIcon(kind: .review, size: 13)), mine: true)
-                        group("Merged · last 14 days", model.mergedPulls, icon: AnyView(StatusIcon(kind: .done, size: 13)), mine: true)
+                        if tab == "all" || tab == "attention" { group("Needs attention", attention, icon: AnyView(StatusIcon(kind: .attention, size: 13)), mine: true) }
+                        if tab == "all" || tab == "review" { group("Review requested", model.reviewPulls, icon: AnyView(Image(systemName: "eye").font(.system(size: 11)).foregroundStyle(T.yellow)), mine: false) }
+                        if tab == "all" { group("Open", model.openPulls.filter { !$0.needsAttention }, icon: AnyView(StatusIcon(kind: .review, size: 13)), mine: true) }
+                        if tab == "open" { group("Open", model.openPulls, icon: AnyView(StatusIcon(kind: .review, size: 13)), mine: true) }
+                        if tab == "all" || tab == "merged" { group("Merged · last 14 days", model.mergedPulls, icon: AnyView(StatusIcon(kind: .done, size: 13)), mine: true) }
+                        if empty { EmptyState(icon: "checkmark.circle", title: "Nothing here", detail: "No pull requests in this view.") }
                     }
+                    .animation(M.snappy, value: tab)
                 }
             }
+        }
+    }
+
+    var attention: [PullRequest] { model.openPulls.filter(\.needsAttention) }
+
+    var empty: Bool {
+        switch tab {
+        case "attention": return attention.isEmpty
+        case "review": return model.reviewPulls.isEmpty
+        case "open": return model.openPulls.isEmpty
+        case "merged": return model.mergedPulls.isEmpty
+        default: return model.openPulls.isEmpty && model.reviewPulls.isEmpty && model.mergedPulls.isEmpty
         }
     }
 
@@ -675,66 +726,6 @@ struct ErrorBar: View {
 
 // MARK: - Linear
 
-struct LinearView: View {
-    @Environment(AppModel.self) var model
-    @AppStorage("linear.subissues") private var showSubs = true
-    @AppStorage("linear.done") private var showDone = false
-    @StateObject private var collapsed = Box(Set<String>())
-
-    static let order: [StatusKind] = [.progress, .review, .todo, .triage, .backlog, .done, .canceled]
-
-    var body: some View {
-        VStack(spacing: 0) {
-            PageHeader(title: "My issues", subtitle: model.linear["viewer"].nonEmpty ?? "", icon: "circle.lefthalf.filled") {
-                Toggle("Sub-issues", isOn: Binding(get: { showSubs }, set: { v in withAnimation(M.snappy) { showSubs = v } })).toggleStyle(.switch).controlSize(.mini).font(T.ui(12))
-                Toggle("Done", isOn: Binding(get: { showDone }, set: { v in withAnimation(M.snappy) { showDone = v } })).toggleStyle(.switch).controlSize(.mini).font(T.ui(12))
-                IconButton(icon: "arrow.clockwise", help: "Refresh", spinning: model.loading.contains("linear")) { Task { await model.load("linear", refresh: true) } }
-            }
-            if let e = model.errors["linear"], !e.isEmpty { ErrorBar(text: e) }
-            if model.linear.isNull {
-                EmptyState(icon: "circle.lefthalf.filled", title: model.loading.contains("linear") ? "Loading from Linear…" : "Nothing loaded")
-            } else if !model.linear["configured"].bool {
-                EmptyState(icon: "key", title: "Linear isn't connected", detail: "Add LINEAR_API_KEY to .env and restart the server.")
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
-                        ForEach(groups, id: \.0) { group in
-                            Section {
-                                if !collapsed.v.contains(group.0) {
-                                    ForEach(group.2) { IssueTree(issue: $0, showSubs: showSubs) }
-                                }
-                            } header: {
-                                GroupHeader(title: group.0, count: group.2.count, icon: AnyView(StatusIcon(kind: group.1, color: hexColor(group.2.first?.stateColor ?? "", fallback: group.1.color), size: 13))) {
-                                    Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(T.text3)
-                                        .rotationEffect(.degrees(collapsed.v.contains(group.0) ? 0 : 90))
-                                }
-                                .contentShape(Rectangle())
-                                .onTapGesture {
-                                    withAnimation(M.snappy) {
-                                        if collapsed.v.contains(group.0) { collapsed.v.remove(group.0) } else { collapsed.v.insert(group.0) }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /// Issues grouped by workflow state, in Linear's order. A sub-issue whose
-    /// parent is also yours is shown under that parent rather than twice.
-    var groups: [(String, StatusKind, [Issue])] {
-        // A sub-issue moves under its parent only when that parent is shown.
-        let shownParents = Set(model.issues.filter { showDone || $0.active }.map(\.key))
-        let visible = model.issues.filter { (showDone || $0.active) && !(showSubs && shownParents.contains($0.parentKey)) }
-        var byState: [String: [Issue]] = [:]
-        for i in visible { byState[i.state, default: []].append(i) }
-        return byState.map { ($0.key, $0.value.first!.status, $0.value.sorted { ($0.priority == 0 ? 9 : $0.priority, -$0.updatedAt) < ($1.priority == 0 ? 9 : $1.priority, -$1.updatedAt) }) }
-            .sorted { (Self.order.firstIndex(of: $0.1) ?? 9, -($0.2.first?.statePos ?? 0)) < (Self.order.firstIndex(of: $1.1) ?? 9, -($1.2.first?.statePos ?? 0)) }
-    }
-}
-
 struct IssueTree: View {
     @Environment(AppModel.self) var model
     let issue: Issue
@@ -760,8 +751,10 @@ struct IssueRow: View {
     var expandable = false
     var expanded = true
     var toggle: () -> Void = {}
+    @AppStorage("linear.props") private var propsRaw = LinearProps.defaults
 
     var body: some View {
+        let props = csvSet(propsRaw)
         HoverRow(height: 40) {
             HStack(spacing: 10) {
                 ZStack {
@@ -774,9 +767,9 @@ struct IssueRow: View {
                     }
                 }
                 .frame(width: 12)
-                PriorityIcon(priority: issue.priority).help(issue.priorityLabel)
-                Text(issue.key).font(T.mono(11.5)).foregroundStyle(T.text3).frame(width: 74, alignment: .leading)
-                StatusIcon(kind: issue.status, color: hexColor(issue.stateColor, fallback: issue.status.color)).help(issue.state)
+                if props.contains("priority") { PriorityIcon(priority: issue.priority).help(issue.priorityLabel) }
+                if props.contains("id") { Text(issue.key).font(T.mono(11.5)).foregroundStyle(T.text3).frame(width: 74, alignment: .leading) }
+                if props.contains("status") { StatusIcon(kind: issue.status, color: hexColor(issue.stateColor, fallback: issue.status.color)).help(issue.state) }
                 if !issue.parentKey.isEmpty && !model.issues.contains(where: { $0.key == issue.parentKey }) {
                     Text(issue.parentTitle).font(T.ui(12.5)).foregroundStyle(T.text3).lineLimit(1).frame(maxWidth: 180, alignment: .leading)
                     Image(systemName: "chevron.right").font(.system(size: 8, weight: .bold)).foregroundStyle(T.text3)
@@ -792,19 +785,19 @@ struct IssueRow: View {
                     .help("\(issue.childrenDone) of \(issue.children.count) sub-issues done")
                 }
                 Spacer(minLength: 8)
-                ForEach(issue.labels.prefix(2), id: \.0) { l in Chip(text: l.0, dot: hexColor(l.1)) }
-                ForEach(model.pulls(forIssue: issue.key).prefix(2)) { pr in
+                if props.contains("labels") { ForEach(issue.labels.prefix(2), id: \.0) { l in Chip(text: l.0, dot: hexColor(l.1)) } }
+                ForEach(props.contains("prs") ? Array(model.pulls(forIssue: issue.key).prefix(2)) : []) { pr in
                     Button { openURL(pr.url) } label: {
                         HStack(spacing: 4) { Chip(text: "#\(pr.number)", icon: pr.state == "MERGED" ? "arrow.triangle.merge" : "arrow.triangle.pull", tint: pr.state == "MERGED" ? T.purple : nil, mono: true) }
                     }
                     .buttonStyle(.plain)
                     if pr.open { ChecksIcon(pr: pr).font(.system(size: 11.5)) }
                 }
-                if !issue.project.isEmpty { Chip(text: issue.project, icon: "cube") }
-                if let c = issue.cycle { Chip(text: "Cycle \(c)", icon: "arrow.triangle.2.circlepath") }
-                IssueSessionButton(issue: issue)
-                Avatar(name: issue.assignee.isEmpty ? "?" : issue.assignee, url: issue.assigneeAvatar, size: 18)
-                Text(Fmt.ago(issue.updatedAt)).font(T.ui(11.5)).foregroundStyle(T.text3).frame(width: 30, alignment: .trailing)
+                if props.contains("project") && !issue.project.isEmpty { Chip(text: issue.project, icon: "cube") }
+                if props.contains("cycle"), let c = issue.cycle { Chip(text: "Cycle \(c)", icon: "arrow.triangle.2.circlepath") }
+                if props.contains("session") { IssueSessionButton(issue: issue) }
+                if props.contains("assignee") { Avatar(name: issue.assignee.isEmpty ? "?" : issue.assignee, url: issue.assigneeAvatar, size: 18) }
+                if props.contains("updated") { Text(Fmt.ago(issue.updatedAt)).font(T.ui(11.5)).foregroundStyle(T.text3).frame(width: 30, alignment: .trailing) }
             }
         }
         .onTapGesture(count: 2) { openURL(issue.url) }
@@ -848,9 +841,22 @@ struct SubIssueRow: View {
         .background(T.raised.opacity(0.18))
         .onTapGesture(count: 2) { openURL(child.url) }
         .contextMenu {
-            Button("Open in Linear") { openURL(child.url) }
-            Button("Copy ID") { copyToPasteboard(child.key) }
-            if let mine { IssueMenu(issue: mine) }
+            if let mine {
+                IssueMenu(issue: mine)
+            } else {
+                Section {
+                    Button { openURL(child.url) } label: { Label("Open in Linear", systemImage: "arrow.up.forward.app") }
+                    if let pr = model.pulls(forIssue: child.key).first {
+                        Button { openURL(pr.url) } label: { Label("Open #\(pr.number) on GitHub", systemImage: "arrow.triangle.pull") }
+                    }
+                }
+                Section {
+                    Button { copyToPasteboard(child.key) } label: { Label("Copy ID", systemImage: "number.square") }
+                        .keyboardShortcut(".", modifiers: .command)
+                    Button { copyToPasteboard(child.url) } label: { Label("Copy Link", systemImage: "link") }
+                        .keyboardShortcut(",", modifiers: [.command, .shift])
+                }
+            }
         }
     }
 }
@@ -889,12 +895,30 @@ struct IssueMenu: View {
     @Environment(AppModel.self) var model
     let issue: Issue
     var body: some View {
-        Button("Open in Linear") { openURL(issue.url) }
-        if let s = model.session(forIssue: issue.key) { Button("Open Session") { model.open(s.id) } }
-        else if issue.active { Button("Start Session with Claude") { Task { await model.startIssue(issue) } } }
-        Divider()
-        Button("Copy ID") { copyToPasteboard(issue.key) }
-        Button("Copy Branch Name") { copyToPasteboard(issue.branch) }
-        Button("Copy Link") { copyToPasteboard(issue.url) }
+        Section {
+            Button { openURL(issue.url) } label: { Label("Open in Linear", systemImage: "arrow.up.forward.app") }
+            if let s = model.session(forIssue: issue.key) {
+                Button { model.open(s.id) } label: { Label("Open Session", systemImage: "bubble.left.and.text.bubble.right") }
+            } else if issue.active {
+                StartWithMenu(issue: issue)
+            }
+        }
+        let prs = model.pulls(forIssue: issue.key)
+        if !prs.isEmpty {
+            Section {
+                ForEach(prs.prefix(3)) { pr in
+                    Button { openURL(pr.url) } label: { Label("Open #\(pr.number) on GitHub", systemImage: pr.state == "MERGED" ? "arrow.triangle.merge" : "arrow.triangle.pull") }
+                }
+            }
+        }
+        Section {
+            Button { copyToPasteboard(issue.key) } label: { Label("Copy ID", systemImage: "number.square") }
+                .keyboardShortcut(".", modifiers: .command)
+            Button { copyToPasteboard(issue.branch) } label: { Label("Copy Branch Name", systemImage: "arrow.triangle.branch") }
+                .keyboardShortcut(".", modifiers: [.command, .shift])
+            Button { copyToPasteboard(issue.url) } label: { Label("Copy Link", systemImage: "link") }
+                .keyboardShortcut(",", modifiers: [.command, .shift])
+            Button { copyToPasteboard("\(issue.key) \(issue.title)") } label: { Label("Copy ID and Title", systemImage: "doc.on.doc") }
+        }
     }
 }
