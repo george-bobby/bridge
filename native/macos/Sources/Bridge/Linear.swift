@@ -251,14 +251,26 @@ struct LinearView: View {
         default:
             var byState: [String: [Issue]] = [:]
             for i in visible { byState[i.state, default: []].append(i) }
-            return byState.map { (name: $0.key, kind: $0.value.first!.status, list: $0.value) }
-                .sorted { (Self.order.firstIndex(of: $0.kind) ?? 9, -($0.list.first?.statePos ?? 0)) < (Self.order.firstIndex(of: $1.kind) ?? 9, -($1.list.first?.statePos ?? 0)) }
-                .map { g in
-                    IssueGroup(id: "s:\(g.name)", title: g.name,
-                               icon: AnyView(StatusIcon(kind: g.kind, color: hexColor(g.list.first?.stateColor ?? "", fallback: g.kind.color), size: 13)),
-                               issues: sorted(g.list))
-                }
+            let names = byState.keys.sorted { stateRank(byState[$0] ?? []) < stateRank(byState[$1] ?? []) }
+            return names.map { name in stateGroup(name, byState[name] ?? []) }
         }
+    }
+}
+
+extension LinearView {
+    /// Workflow order, then Linear's own position within a type. Split out so CI's
+    /// slower type-checker doesn't give up on one long chained expression.
+    func stateRank(_ list: [Issue]) -> (Int, Double) {
+        let kind: StatusKind = list.first?.status ?? .backlog
+        let pos: Double = list.first?.statePos ?? 0
+        return (Self.order.firstIndex(of: kind) ?? 9, -pos)
+    }
+
+    func stateGroup(_ name: String, _ list: [Issue]) -> IssueGroup {
+        let kind: StatusKind = list.first?.status ?? .backlog
+        let color: Color = hexColor(list.first?.stateColor ?? "", fallback: kind.color)
+        let icon = AnyView(StatusIcon(kind: kind, color: color, size: 13))
+        return IssueGroup(id: "s:\(name)", title: name, icon: icon, issues: sorted(list))
     }
 }
 
