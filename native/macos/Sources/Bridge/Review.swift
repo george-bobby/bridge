@@ -246,14 +246,6 @@ extension AppModel {
         commands = (try? await API.get("/api/commands?runId=\(API.q(runId))"))?["commands"].array ?? []
     }
 
-    func secondOpinion(_ runId: String, agent: AgentKind) async {
-        await act {
-            let out = try await API.post("/api/runs/\(API.q(runId))/advisor", ["agent": agent.rawValue])
-            self.say("\(agent.label) is reviewing it in its own worktree")
-            self.open(out["taskId"].string)
-        }
-    }
-
     func stopAndSend(_ text: String, to id: String) async -> Bool {
         await stop(id)
         for _ in 0..<20 {

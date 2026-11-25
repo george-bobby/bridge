@@ -167,6 +167,15 @@ struct DevServer: Identifiable, Hashable {
 enum Column: String, CaseIterable, Identifiable {
     case backlog, doing, needs, review, done
     var id: String { rawValue }
+    init(linear kind: StatusKind) {
+        switch kind {
+        case .triage, .backlog, .todo: self = .backlog
+        case .progress: self = .doing
+        case .review: self = .review
+        case .done, .canceled: self = .done
+        case .attention: self = .needs
+        }
+    }
     var label: String {
         switch self {
         case .backlog: return "Backlog"
@@ -248,7 +257,6 @@ final class AppModel {
     var running: Set<String> = []
     var awaiting: Set<String> = []
     var defaultWorkdir = ""
-    var terminalName = "Terminal"
     var bridgeRoot = ""
     var projects: [Project] = []
     /// The project the Board and Sessions show; nil is every project.
@@ -264,6 +272,8 @@ final class AppModel {
     var focusedPane = 0
     /// A session or tab is being dragged: panes show their drop zones.
     var paneDragActive = false
+    /// The pane and edge a drag would land on, for the highlight.
+    var dropZone: DropZone? = nil
     /// The focused pane's tab: "chat", "changes", "term" or "web-<id>".
     var chatTab: String {
         get { panes.indices.contains(focusedPane) ? panes[focusedPane].tab : "chat" }
@@ -297,6 +307,13 @@ final class AppModel {
     var inspectorShown = !UserDefaults.standard.bool(forKey: "inspector.hidden") {
         didSet { UserDefaults.standard.set(!inspectorShown, forKey: "inspector.hidden") }
     }
+    /// With panes side by side the details dock under the focused pane as a
+    /// drawer; this is whether that drawer is open or folded to its strip.
+    var drawerOpen = !UserDefaults.standard.bool(forKey: "drawer.closed") {
+        didSet { UserDefaults.standard.set(!drawerOpen, forKey: "drawer.closed") }
+    }
+    /// GET /api/runs/:id/pr, by PR URL: review state, checks, comments.
+    var prActivity: [String: JSON] = [:]
 
     func toggleSidebar() { withAnimation(M.snappy) { sidebarHidden.toggle() } }
 
@@ -428,6 +445,9 @@ final class AppModel {
         if let p, !p.open { return .done }
         if isAwaiting(s) || needsStatuses.contains(st) { return .needs }
         if isLive(s) || st == "working" || st == "queued" { return .doing }
+        // A linked Linear issue is the source of truth for where the work
+        // stands, once nothing live says otherwise (a manual move still wins).
+        if let issue = linkedIssue(s) { return Column(linear: issue.status) }
         if st == "cleaned" || st == "stopped" { return .done }
         // A PR missing from the feed is unknown, not closed: the feed holds only
         // your PRs and reviews asked of you, so stay in review until it's seen.
@@ -751,7 +771,6 @@ final class AppModel {
         running = Set(s["jobs"]["running"].array.map(\.string))
         awaiting = Set(s["jobs"]["awaiting"].array.map(\.string))
         defaultWorkdir = s["meta"]["workdir"].string
-        terminalName = s["meta"]["terminal"].nonEmpty ?? "Terminal"
         bridgeRoot = s["meta"]["root"].string
         if !s["meta"]["projects"].isNull { projects = s["meta"]["projects"].array.map(Project.init) }
     }
@@ -863,16 +882,6 @@ final class AppModel {
 
     func stop(_ id: String) async { await act { try await API.post("/api/runs/\(API.q(id))/stop") } }
     func start(_ id: String) async { await act { try await API.post("/api/runs/\(API.q(id))/start") } }
-    func terminal(_ id: String) async {
-        await act {
-            let out = try await API.post("/api/runs/\(API.q(id))/terminal")
-            if out["opened"].bool { self.say("Opened in \(out["app"].nonEmpty ?? self.terminalName)") }
-            else {
-                copyToPasteboard(out["command"].string)
-                self.say((out["note"].nonEmpty ?? "Couldn't open a terminal") + " (command copied)", bad: true)
-            }
-        }
-    }
     func relaunch(_ id: String) async { await act { try await API.post("/api/tasks/\(API.q(id))/relaunch") } }
     func cleanup(_ id: String, force: Bool = false) async {
         await act { try await API.post("/api/tasks/\(API.q(id))/cleanup", ["force": force]) }

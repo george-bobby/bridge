@@ -28,7 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             if let last = pages.first(where: { $0.0 == "chat" }) {
                 pages.append(("collapsed", last.1))
                 if browser != nil { pages.append(("browser", last.1)) }
-                pages += [("split", last.1), ("terminal", last.1)]
+                pages += [("split", last.1), ("drop", last.1), ("terminal", last.1)]
             }
             let hidden = model.sidebarHidden
             if let only = ProcessInfo.processInfo.environment["BRIDGE_SNAPSHOT_PAGES"]?.split(separator: ",").map(String.init) {
@@ -40,6 +40,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 if name == "browser", case .session(let id) = route, let browser { model.open(id); model.openBrowser(id, url: browser) }
                 if case .session(let id) = route { model.open(id) } else { model.route = route }
                 if name == "split" { model.splitRight(); model.splitRight() }
+                // A drag in flight over the last pane's middle, to check the drop highlight.
+                if name == "drop" { model.paneDragActive = true; model.dropZone = model.panes.last.map { DropZone(pane: $0.id, edge: model.isSplit ? .center : .trailing) } }
+                else if model.paneDragActive { model.paneDragActive = false; model.dropZone = nil }
                 if name == "terminal", case .session(let id) = route { model.openTerminalTab(id) }
                 if name == "slack", let m = model.mentions.first { model.openThread(m.permalink) }
                 try? await Task.sleep(nanoseconds: 2_500_000_000)
@@ -424,35 +427,39 @@ struct SessionNavItem: View {
     var body: some View {
         let on = model.route == .session(session.id)
         let meta = subtitle
-        Button { model.open(session.id) } label: {
-            HStack(alignment: meta == nil ? .center : .top, spacing: 10) {
-                Group {
-                    if session.isOrchestrator {
-                        Image(systemName: "sparkles").font(.system(size: 12, weight: .medium)).foregroundStyle(T.purple)
-                    } else {
-                        SessionIcon(session: session)
-                    }
+        HStack(alignment: meta == nil ? .center : .top, spacing: 10) {
+            Group {
+                if session.isOrchestrator {
+                    Image(systemName: "sparkles").font(.system(size: 12, weight: .medium)).foregroundStyle(T.purple)
+                } else {
+                    SessionIcon(session: session)
                 }
-                .frame(width: 18, height: 18)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(session.isOrchestrator ? "Orchestrator" : session.title).font(T.ui(13, on ? .medium : .regular)).foregroundStyle(on ? T.text : T.text2).lineLimit(1)
-                    if let meta {
-                        Text(meta.0).font(T.ui(11.5)).foregroundStyle(meta.1).lineLimit(1)
-                            .transition(.opacity)
-                    }
-                }
-                Spacer(minLength: 4)
-                if model.isAwaiting(session) { PulseDot(color: T.orange).padding(.top, meta == nil ? 0 : 6).transition(.scale.combined(with: .opacity)) }
-                else if session.unread && !on { Circle().fill(T.accent).frame(width: 6, height: 6).padding(.top, meta == nil ? 0 : 6).transition(.scale.combined(with: .opacity)) }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, meta == nil ? 0 : 6)
-            .frame(minHeight: 30)
-            .background(NavHighlight(on: on, hover: hover.v))
-            .contentShape(Rectangle())
+            .frame(width: 18, height: 18)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(session.isOrchestrator ? "Orchestrator" : session.title).font(T.ui(13, on ? .medium : .regular)).foregroundStyle(on ? T.text : T.text2).lineLimit(1)
+                if let meta {
+                    Text(meta.0).font(T.ui(11.5)).foregroundStyle(meta.1).lineLimit(1)
+                        .transition(.opacity)
+                }
+            }
+            Spacer(minLength: 4)
+            if model.isAwaiting(session) { PulseDot(color: T.orange).padding(.top, meta == nil ? 0 : 6).transition(.scale.combined(with: .opacity)) }
+            else if session.unread && !on { Circle().fill(T.accent).frame(width: 6, height: 6).padding(.top, meta == nil ? 0 : 6).transition(.scale.combined(with: .opacity)) }
         }
-        .buttonStyle(Pressable(scale: 0.98))
+        .padding(.horizontal, 10)
+        .padding(.vertical, meta == nil ? 0 : 6)
+        .frame(minHeight: 30)
+        .background(NavHighlight(on: on, hover: hover.v))
+        .contentShape(Rectangle())
+        // A tap, not a Button: a Button tracks the mouse itself and a drag
+        // never starts. ⌥-click opens the chat beside the focused pane.
+        .onTapGesture {
+            if NSEvent.modifierFlags.contains(.option) { model.openToSide(session.id) } else { model.open(session.id) }
+        }
         .hoverBox(hover)
+        .onDrag { NSItemProvider(object: session.id as NSString) }
+        .help("⌥-click or drag onto the chat to open side by side")
         .contextMenu { SessionMenu(session: session) }
     }
 

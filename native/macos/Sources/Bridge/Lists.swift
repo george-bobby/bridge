@@ -59,7 +59,7 @@ struct SessionRow: View {
             HStack(spacing: 12) {
                 SessionIcon(session: session)
                 Text(session.isTask ? "TASK" : "SLACK").font(T.mono(10, .semibold)).foregroundStyle(session.isTask ? T.accent : T.slack).frame(width: 38, alignment: .leading)
-                if !session.issueKey.isEmpty { Text(session.issueKey).font(T.mono(11.5)).foregroundStyle(T.text3) }
+                if !session.issueKey.isEmpty && !session.title.hasPrefix(session.issueKey) { Text(session.issueKey).font(T.mono(11.5)).foregroundStyle(T.text3) }
                 Text(session.title).font(T.ui(13, .medium)).foregroundStyle(T.text).lineLimit(1)
                 if session.pinned { Image(systemName: "star.fill").font(.system(size: 9)).foregroundStyle(T.yellow) }
                 Text(model.isAwaiting(session) ? session.askedFor : session.statusLine.isEmpty ? session.snippet : session.statusLine)
@@ -70,7 +70,6 @@ struct SessionRow: View {
                 if !session.prUrl.isEmpty {
                     Chip(text: "#\(session.prNumber)", icon: "arrow.triangle.pull", mono: true)
                 }
-                if session.cost > 0 { Text(Fmt.money(session.cost)).font(T.ui(11.5)).foregroundStyle(T.text3).monospacedDigit() }
                 Text(Fmt.ago(session.updatedAt)).font(T.ui(11.5)).foregroundStyle(T.text3).frame(width: 34, alignment: .trailing)
             }
         }
@@ -83,11 +82,16 @@ struct SessionRow: View {
 struct SessionMenu: View {
     @Environment(AppModel.self) var model
     let session: Session
+    /// In the chat's own ⋯ menu: opening it again (or beside itself) and the
+    /// terminal (the + menu has it) would only repeat what's on screen.
+    var inChat = false
     var body: some View {
-        Section {
-            Button { model.open(session.id) } label: { Label("Open", systemImage: "arrow.up.forward.app") }
-            Button { model.open(session.id); model.openTerminalTab(session.id) } label: { Label("Open in Terminal Tab", systemImage: "terminal") }
-            Button { Task { await model.terminal(session.id) } } label: { Label("Open in \(model.terminalName)", systemImage: "arrow.up.forward.app") }
+        if !inChat {
+            Section {
+                Button { model.open(session.id) } label: { Label("Open", systemImage: "arrow.up.forward.app") }
+                Button { model.openToSide(session.id) } label: { Label("Open to the Side", systemImage: "rectangle.split.2x1") }
+                Button { model.open(session.id); model.openTerminalTab(session.id) } label: { Label("Terminal", systemImage: "terminal") }
+            }
         }
         Section {
             Button { Task { await model.setPinned(session.id, !session.pinned) } } label: {
@@ -273,9 +277,6 @@ struct HomeView: View {
                                 }
                             }
                         }
-                        Card(title: "Spend", count: nil, icon: AnyView(Image(systemName: "chart.bar").font(.system(size: 11)).foregroundStyle(T.text2))) {
-                            SpendChart().frame(height: 140).padding(20)
-                        }
                     }
                     .rise(5)
                 }
@@ -299,8 +300,7 @@ struct HomeView: View {
             Stat(value: "\(model.needsCount)", label: "Need you", tint: model.needsCount > 0 ? T.orange : nil) { model.route = .inbox }
             Stat(value: model.pulls.isNull ? "–" : "\(model.openPulls.count)", label: "Open PRs", sub: "\(model.openPulls.filter(\.needsAttention).count) need attention") { model.route = .pulls }
             Stat(value: model.pulls.isNull ? "–" : "\(model.reviewPulls.count)", label: "Reviews for you") { model.route = .pulls }
-            Stat(value: model.linear.isNull ? "–" : "\(model.issues.filter { $0.stateType == "started" }.count)", label: "Issues in progress") { model.route = .linear }
-            Stat(value: Fmt.money(model.cost["today"].double), label: "Spent today", last: true) {}
+            Stat(value: model.linear.isNull ? "–" : "\(model.issues.filter { $0.stateType == "started" }.count)", label: "Issues in progress", last: true) { model.route = .linear }
         }
         .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(T.raised.opacity(0.5)))
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(T.line, lineWidth: 1))
@@ -409,35 +409,6 @@ struct CompactIssue: View {
     }
 }
 
-struct SpendChart: View {
-    @Environment(AppModel.self) var model
-    @StateObject private var grown = Box(false)
-    var body: some View {
-        let series = model.cost["series"].array
-        let maxV = max(series.map { $0["work"].double + $0["poll"].double }.max() ?? 0, 0.01)
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(Fmt.money(model.cost["total"].double)).font(T.ui(18, .semibold))
-                Text(verbatim: "over \(model.cost["jobs"].int) jobs").font(T.ui(11.5)).foregroundStyle(T.text3)
-            }
-            GeometryReader { g in
-                HStack(alignment: .bottom, spacing: 4) {
-                    ForEach(Array(series.enumerated()), id: \.offset) { i, d in
-                        let v = d["work"].double + d["poll"].double
-                        RoundedRectangle(cornerRadius: 2)
-                            .fill(v > 0 ? T.accent : T.line)
-                            .frame(height: max(2, g.size.height * (grown.v ? v / maxV : 0)))
-                            .animation(M.snappy.delay(0.2 + Double(i) * 0.02), value: grown.v)
-                            .help("\(Fmt.clock(d["day"].double)): \(Fmt.money(v))")
-                    }
-                }
-                .frame(maxHeight: .infinity, alignment: .bottom)
-            }
-        }
-        .onAppear { grown.v = true }
-    }
-}
-
 // MARK: - Board
 
 struct BoardView: View {
@@ -542,7 +513,7 @@ struct BoardCard: View {
         VStack(alignment: .leading, spacing: 9) {
             HStack(spacing: 6) {
                 Text(session.isTask ? "TASK" : "SLACK").font(T.mono(10, .semibold)).foregroundStyle(session.isTask ? T.accent : T.slack)
-                if !session.issueKey.isEmpty { Text(session.issueKey).font(T.mono(11)).foregroundStyle(T.text3).fixedSize() }
+                if !session.issueKey.isEmpty && !session.title.hasPrefix(session.issueKey) { Text(session.issueKey).font(T.mono(11)).foregroundStyle(T.text3).fixedSize() }
                 ProjectChip(session: session).lineLimit(1)
                 Spacer(minLength: 4)
                 if session.pinned { Image(systemName: "star.fill").font(.system(size: 9)).foregroundStyle(T.yellow) }
@@ -568,7 +539,7 @@ struct BoardCard: View {
                 Text(session.statusLine).font(T.ui(11.5)).foregroundStyle(T.accent).lineLimit(1)
             }
             let ports = model.servers(for: session)
-            if !session.prUrl.isEmpty || !ports.isEmpty || session.cost > 0 {
+            if !session.prUrl.isEmpty || !ports.isEmpty {
                 HStack(spacing: 5) {
                     if !session.prUrl.isEmpty {
                         Button { openURL(session.prUrl) } label: { Chip(text: "#\(session.prNumber)", icon: "arrow.triangle.pull", mono: true) }.buttonStyle(.plain)
@@ -576,7 +547,6 @@ struct BoardCard: View {
                     if let pr { ChecksIcon(pr: pr).font(.system(size: 11.5)) }
                     PortChips(servers: ports)
                     Spacer()
-                    if session.cost > 0 { Text(Fmt.money(session.cost)).font(T.ui(11)).foregroundStyle(T.text3).monospacedDigit().fixedSize() }
                 }
             }
         }

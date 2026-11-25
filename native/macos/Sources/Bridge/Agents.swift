@@ -283,7 +283,7 @@ struct LocalStat: View {
             HStack(spacing: 10) {
                 Text(verbatim: "\(b["turns"].int) turns")
                 Text(verbatim: "\(Fmt.tokens(b["tokens"].int)) tokens")
-                if acu { Text(String(format: "%.2f ACUs", b["acu"].double)) } else if b["cost"].double > 0 { Text(Fmt.money(b["cost"].double)) }
+                if acu { Text(String(format: "%.2f ACUs", b["acu"].double)) }
             }
             .font(T.ui(12, .medium)).foregroundStyle(T.text2).monospacedDigit()
         }
