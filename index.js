@@ -299,6 +299,57 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // --- slash commands: the skills and commands a session's agent can run ---
+  if (req.method === "GET" && p === "/api/commands") {
+    const runId = store.safeId(url.searchParams.get("runId") || "");
+    const run = runId ? store.loadRun(runId) : null;
+    const dir = run ? jobs.resolveWorkdir(store.readConfig(), run) : jobs.resolveWorkdir(store.readConfig());
+    const out = new Map();
+    const read = (base, kind) => {
+      let names = [];
+      try {
+        names = fs.readdirSync(base);
+      } catch {
+        return;
+      }
+      for (const n of names) {
+        const file = kind === "skill" ? path.join(base, n, "SKILL.md") : path.join(base, n);
+        if (kind === "command" && !n.endsWith(".md")) continue;
+        let text = "";
+        try {
+          text = fs.readFileSync(file, "utf8").slice(0, 4000);
+        } catch {
+          continue;
+        }
+        const name = kind === "skill" ? ((text.match(/^name:\s*(.+)$/m) || [])[1] || n).trim() : n.replace(/\.md$/, "");
+        const desc = ((text.match(/^description:\s*(.+)$/m) || [])[1] || text.replace(/^---[\s\S]*?---/, "").trim().split("\n")[0] || "").replace(/^["']|["']$/g, "").slice(0, 160);
+        if (!out.has(name)) out.set(name, { name, description: desc, source: kind });
+      }
+    };
+    for (const root of [path.join(dir, ".claude"), path.join(os.homedir(), ".claude")]) {
+      read(path.join(root, "skills"), "skill");
+      read(path.join(root, "commands"), "command");
+    }
+    for (const b of [["compact", "Summarise the conversation so far to free up context"], ["review", "Review the current changes"], ["init", "Write a CLAUDE.md for this repo"]]) if (!out.has(b[0])) out.set(b[0], { name: b[0], description: b[1], source: "built-in" });
+    return sendJson(res, 200, { ok: true, commands: [...out.values()].sort((a, b) => a.name.localeCompare(b.name)) });
+  }
+
+  // --- the agents installed here and their models (composer pickers) --------
+  if (req.method === "GET" && p === "/api/agents") {
+    if (env.demo) return sendJson(res, 200, { ok: true, agents: require("./lib/demo").agents() });
+    return sendJson(res, 200, { ok: true, ...(await require("./lib/agents").catalog({ refresh: url.searchParams.get("refresh") === "1" })) });
+  }
+
+  // --- plan usage for Claude, Codex, Cursor and Devin (status bar, Usage page) ---
+  if (req.method === "GET" && p === "/api/usage") {
+    if (!sameOrigin(req)) return sendJson(res, 403, { ok: false, error: "cross-origin request refused" });
+    try {
+      return sendJson(res, 200, { ok: true, ...(await require("./lib/usage").all({ refresh: url.searchParams.get("refresh") === "1" })) });
+    } catch (e) {
+      return sendJson(res, 500, { ok: false, error: String(e.message || e) });
+    }
+  }
+
   // --- .env from Settings; a restart applies it ----------------------------
   if (p === "/api/env" || p === "/api/restart") {
     if (!sameOrigin(req)) return sendJson(res, 403, { ok: false, error: "cross-origin request refused" });
@@ -728,6 +779,49 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 409, { ok: false, error: String(e.message || e) });
       }
       return;
+    }
+
+    // The session's working folder: what changed, per-file diffs, and the
+    // commit / push / PR actions you take on them from the app.
+    if (verb === "changes" || verb === "diff" || verb === "commit" || verb === "push" || verb === "pr" || verb === "advisor") {
+      if (!sameOrigin(req)) return sendJson(res, 403, { ok: false, error: "cross-origin request refused" });
+      const changes = require("./lib/changes");
+      try {
+        const run = store.loadRun(id);
+        if (!run) throw new Error("no such run");
+        const meta = tasks.exists(id) ? tasks.readMeta(id) || {} : {};
+        const dir = meta.worktree && fs.existsSync(meta.worktree) ? meta.worktree : jobs.resolveWorkdir(store.readConfig(), run);
+        const body = req.method === "POST" ? JSON.parse((await readBody(req)) || "{}") : {};
+        if (req.method === "GET" && verb === "changes") return sendJson(res, 200, { ok: true, ...(await changes.status(dir)) });
+        if (req.method === "GET" && verb === "diff") return sendJson(res, 200, { ok: true, diff: await changes.diff(dir, url.searchParams.get("file")) });
+        if (req.method === "POST" && verb === "commit") return sendJson(res, 200, { ok: true, ...(await changes.commit(dir, body.message)) });
+        if (req.method === "POST" && verb === "push") return sendJson(res, 200, { ok: true, ...(await changes.push(dir)) });
+        if (req.method === "POST" && verb === "pr") {
+          const prUrl = await changes.openPr(dir, body);
+          const fresh = store.loadRun(id);
+          fresh.prUrl = prUrl;
+          store.saveRun(fresh);
+          if (tasks.exists(id)) tasks.writeMeta(id, { prUrl });
+          bus.broadcast("runs", { runs: store.listRunSummaries() });
+          return sendJson(res, 200, { ok: true, prUrl });
+        }
+        if (req.method === "POST" && verb === "advisor") {
+          // A second opinion: another agent, briefed on this session, in its
+          // own worktree and in plan mode, so it can read but not change.
+          const agent = ["claude", "codex", "cursor", "devin"].includes(body.agent) ? body.agent : "codex";
+          const brief = require("./lib/agents").handoff({ ...run, messages: [...run.messages, { role: "assistant", agent: "__none__", state: "done", text: "" }] }, agent, { meta, report: tasks.readReport(id) });
+          const ask = String(body.question || "Review the approach and the current state. What's wrong, risky or missing, and what would you do next?").slice(0, 4000);
+          const out = await harness.spawnTask({
+            repo: meta.repo || projects.get(store.listRunSummaries().find((r) => r.runId === id)?.project || "")?.path || jobs.resolveWorkdir(store.readConfig(), run),
+            title: `Second opinion: ${String(run.who || id).slice(0, 60)}`,
+            brief: `${brief.replace(/^# Handoff:.*$/m, "# You are an advisor on this session").replace(/## Now$/, "")}\n## Your job\n${ask}\n\nAdvise only. DO NOT edit files, commit or push. Answer with findings ranked by importance and a recommendation.`,
+            opts: { agent, permissionMode: "plan" },
+          });
+          return sendJson(res, 200, { ok: true, ...out });
+        }
+      } catch (e) {
+        return sendJson(res, 400, { ok: false, error: String(e.message || e) });
+      }
     }
 
     // Pinned to the top of its project in the sidebar.

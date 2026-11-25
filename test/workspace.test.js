@@ -24,12 +24,26 @@ const ENV = {
   BRIDGE_ENV_FILE: path.join(tmp, "none.env"),
   TARGET_REPO: tmp,
   LINEAR_API_KEY: "",
+  CODEX_BIN: path.join(tmp, "fake-codex"),
 };
 
 const RUN_ID = "1700000001.000100";
 let server;
 
 test.before(async () => {
+  // A stand-in Codex: reads the prompt from stdin, prints `codex exec --json` events.
+  fs.writeFileSync(
+    ENV.CODEX_BIN,
+    `#!/bin/sh
+cat >> "${tmp}/codex-prompt.txt"
+printf '%s\\n' '{"type":"thread.started","thread_id":"th-123"}'
+printf '%s\\n' '{"type":"item.started","item":{"id":"i1","type":"command_execution","command":"ls","status":"in_progress"}}'
+printf '%s\\n' '{"type":"item.completed","item":{"id":"i1","type":"command_execution","command":"ls","aggregated_output":"a.txt\\n","exit_code":0,"status":"completed"}}'
+printf '%s\\n' '{"type":"item.completed","item":{"id":"i2","type":"agent_message","text":"Codex says hi"}}'
+printf '%s\\n' '{"type":"turn.completed","usage":{"input_tokens":100,"cached_input_tokens":40,"output_tokens":7}}'
+`,
+    { mode: 0o755 },
+  );
   fs.mkdirSync(path.join(DATA, "runs"), { recursive: true });
   fs.writeFileSync(
     path.join(DATA, "runs", `${RUN_ID}.json`),
@@ -123,4 +137,89 @@ test(".worktreeinclude copies the listed untracked files into a new worktree", a
   fs.symlinkSync(outside, path.join(wt, "certs"));
   assert.strictEqual(await tasks.copyIncludes(repo, wt), 0);
   assert.deepStrictEqual(fs.readdirSync(outside), []);
+});
+
+async function waitFor(fn, ms = 10000) {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    const v = await fn();
+    if (v) return v;
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  throw new Error("timed out");
+}
+
+test("a session can switch agents: Codex runs through the same transcript, and the next agent gets a handoff", async () => {
+  await post(`/api/runs/${RUN_ID}/opts`, { opts: { agent: "codex" } });
+  await post(`/api/runs/${RUN_ID}/followup`, { text: "List the files." });
+  const run = await waitFor(async () => {
+    const r = (await get(`/api/runs/${RUN_ID}`)).run;
+    const m = r.messages.filter((x) => x.role === "assistant").pop();
+    return m && m.state === "done" ? r : null;
+  });
+  const reply = run.messages.filter((x) => x.role === "assistant").pop();
+  assert.strictEqual(reply.agent, "codex");
+  assert.strictEqual(reply.text, "Codex says hi");
+  const tool = reply.steps.find((x) => x.kind === "tool");
+  assert.deepStrictEqual([tool.name, tool.ok, tool.result.trim()], ["Bash", true, "a.txt"]);
+  assert.strictEqual(reply.usage.output, 7);
+  assert.strictEqual(run.agentSessions.codex, "th-123", "the agent's session id is kept for the next turn");
+  assert.match(fs.readFileSync(path.join(tmp, "codex-prompt.txt"), "utf8"), /List the files\./);
+
+  // Back to Claude (the stub): it gets a briefing of what Codex did.
+  await post(`/api/runs/${RUN_ID}/opts`, { opts: { agent: "claude" } });
+  await post(`/api/runs/${RUN_ID}/followup`, { text: "Now summarise." });
+  const after = await waitFor(async () => {
+    const r = (await get(`/api/runs/${RUN_ID}`)).run;
+    const m = r.messages.filter((x) => x.role === "assistant").pop();
+    return m && m.agent === "claude" && m.state !== "running" ? r : null;
+  });
+  assert.ok(after.messages.some((m) => m.role === "event" && m.phase === "handoff" && /Claude/.test(m.text)));
+});
+
+test("a handoff briefs only what happened since the agent last worked, ignoring turns that failed", () => {
+  const { handoff } = require("../lib/agents");
+  const run = {
+    kind: "task", who: "Fix CSV", text: "CSV drops a row", prUrl: "https://github.com/acme/x/pull/1",
+    messages: [
+      { role: "user", text: "fix it" },
+      { role: "assistant", agent: "claude", state: "done", text: "Found paginateRows()" },
+      { role: "user", text: "codex, take over" },
+      { role: "assistant", agent: "codex", state: "done", text: "Fixed and pushed", steps: [{ kind: "tool", name: "Bash", detail: "npm test" }] },
+      { role: "user", text: "claude again" },
+      { role: "assistant", agent: "claude", state: "error", text: "" },
+    ],
+  };
+  const brief = handoff(run, "claude", { meta: { branch: "alex/csv", worktree: "/w" } });
+  assert.match(brief, /taking over this session from Codex/);
+  assert.match(brief, /Codex \(used: Bash npm test\): Fixed and pushed/);
+  assert.doesNotMatch(brief, /Found paginateRows/, "only what's new since Claude last worked");
+  assert.match(brief, /Branch: alex\/csv/);
+  assert.strictEqual(handoff({ ...run, messages: run.messages.slice(0, 4) }, "codex"), "", "no handoff to the agent that spoke last");
+});
+
+test("changes: list, diff and commit a session's working folder; slash commands are discoverable", async () => {
+  const repo = path.join(tmp, "changes-repo");
+  fs.mkdirSync(repo);
+  const g = (...a) => execFileSync("git", a, { cwd: repo, stdio: "ignore" });
+  g("init", "-q", "-b", "main");
+  fs.writeFileSync(path.join(repo, "a.txt"), "one\n");
+  g("add", ".");
+  g("-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-qm", "init");
+  g("config", "user.email", "t@t");
+  g("config", "user.name", "t");
+  g("config", "commit.gpgsign", "false");
+  fs.writeFileSync(path.join(repo, "a.txt"), "one\ntwo\n");
+  fs.writeFileSync(path.join(repo, "new.txt"), "fresh\n");
+  await post(`/api/runs/${RUN_ID}/opts`, { opts: { workdir: repo } });
+  const st = await get(`/api/runs/${RUN_ID}/changes`);
+  assert.deepStrictEqual(st.files.map((f) => `${f.kind}:${f.path}`).sort(), ["added:new.txt", "modified:a.txt"]);
+  assert.match((await get(`/api/runs/${RUN_ID}/diff?file=a.txt`)).diff, /^\+two$/m);
+  assert.match((await get(`/api/runs/${RUN_ID}/diff?file=new.txt`)).diff, /^\+fresh$/m);
+  assert.strictEqual((await get(`/api/runs/${RUN_ID}/diff?file=${encodeURIComponent("../../etc/passwd")}`)).status, 400);
+  const after = await post(`/api/runs/${RUN_ID}/commit`, { message: "two lines" });
+  assert.deepStrictEqual(after.files, []);
+  assert.strictEqual(after.commits[0].subject, "two lines");
+  const { commands } = await get(`/api/commands?runId=${RUN_ID}`);
+  assert.ok(commands.some((c) => c.name === "compact"));
 });
