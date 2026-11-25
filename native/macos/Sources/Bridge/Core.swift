@@ -194,7 +194,9 @@ enum Fmt {
         return n < 1 ? String(format: "$%.2f", n) : String(format: "$%.2f", n)
     }
 
-    static func tokens(_ n: Int) -> String { n >= 1000 ? String(format: "%.1fk", Double(n) / 1000) : "\(n)" }
+    static func tokens(_ n: Int) -> String {
+        n >= 1_000_000 ? String(format: "%.1fM", Double(n) / 1_000_000) : n >= 1000 ? String(format: "%.1fk", Double(n) / 1000) : "\(n)"
+    }
 
     static func clock(_ seconds: Double) -> String {
         let f = DateFormatter()

@@ -17,7 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// Dev aid: render every page of the window to PNGs, for checking the UI
     /// without screen-recording permission. `BRIDGE_SNAPSHOT_DIR=/tmp/x Bridge`.
     private func snapshots(to dir: String) {
-        let routes: [(String, Route)] = [("home", .home), ("board", .board), ("sessions", .sessions), ("pulls", .pulls), ("linear", .linear), ("inbox", .inbox), ("memory", .memory), ("slack", .slack), ("usage", .usage)]
+        let routes: [(String, Route)] = [("home", .home), ("board", .board), ("sessions", .sessions), ("pulls", .pulls), ("linear", .linear), ("inbox", .inbox), ("memory", .memory), ("slack", .slack), ("usage", .usage), ("settings", .settings), ("settings-agents", .settings), ("settings-integrations", .settings), ("settings-projects", .settings), ("settings-notifications", .settings), ("settings-advanced", .settings)]
         let browser = ProcessInfo.processInfo.environment["BRIDGE_SNAPSHOT_URL"]
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 8_000_000_000)
@@ -37,6 +37,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             for (name, route) in pages {
                 model.paletteOpen = name == "palette"
                 model.sidebarHidden = name == "collapsed"
+                if route == .settings { model.settingsPane = name.hasPrefix("settings-") ? String(name.dropFirst(9)) : "general" }
                 if name == "browser", case .session(let id) = route, let browser { model.open(id); model.openBrowser(id, url: browser) }
                 if case .session(let id) = route { model.open(id) } else { model.route = route }
                 if name == "split" { model.splitRight(); model.splitRight() }
@@ -51,6 +52,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: "\(dir)/\(name).png"))
             }
             model.sidebarHidden = hidden
+            // The sidebar's usage popover lives in its own window: render it directly.
+            let card = ImageRenderer(content: UsageCard(providers: model.usageProviders) {}.background(T.raised).preferredColorScheme(.dark))
+            card.scale = 2
+            if let img = card.nsImage, let tiff = img.tiffRepresentation, let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
+                try? png.write(to: URL(fileURLWithPath: "\(dir)/usage-popover.png"))
+            }
         }
     }
 
@@ -86,12 +93,6 @@ struct BridgeApp: App {
         .windowBackgroundDragBehavior(.enabled)
         .defaultSize(width: 1480, height: 920)
         .commands { BridgeCommands(model: delegate.model); PaneCommands(model: delegate.model) }
-
-        Settings {
-            SettingsView()
-                .environment(delegate.model)
-                .preferredColorScheme(.dark)
-        }
 
         MenuBarExtra {
             MenuBarPanel().environment(delegate.model).preferredColorScheme(.dark)
@@ -130,6 +131,9 @@ struct BridgeCommands: Commands {
     }
 
     var body: some Commands {
+        CommandGroup(replacing: .appSettings) {
+            Button("Settings…") { model.navigate(.settings) }.keyboardShortcut(",")
+        }
         CommandGroup(replacing: .newItem) {
             Button("New Task…") { model.compose(in: model.projectFilter) }.keyboardShortcut("n")
             Button("New Browser Tab") {
@@ -240,6 +244,7 @@ struct RootView: View {
         case .pulls: PullsView()
         case .linear: LinearView()
         case .memory: MemoryView()
+        case .settings: SettingsView()
         case .session(let id): ChatView(id: id)
         }
     }

@@ -106,6 +106,20 @@ struct UsageProvider: Identifiable {
     var windows: [UsageWindow] { j["windows"].array.map(UsageWindow.init) }
     /// The window closest to its limit: what the status bar shows.
     var tightest: UsageWindow? { windows.filter { $0.used != nil }.max { ($0.used ?? 0) < ($1.used ?? 0) } }
+    var plan: String { j["plan"].string }
+    var account: String { j["account"].string }
+    var reason: String { j["reason"].string }
+    /// Facts to list as label/value rows.
+    var facts: [JSON] { j["details"].array.filter { !$0["info"].bool } }
+    /// Explanations shown as a note rather than a row ("no plan limits published").
+    var notes: [String] { j["details"].array.filter { $0["info"].bool }.map { $0["value"].string } }
+    /// How loud a problem is: a missing login is just information; a
+    /// rejected login or a failed request is something to fix.
+    var problemTone: Color {
+        if j["status"].string == "error" { return T.red }
+        let r = reason.lowercased()
+        return r.contains("rejected") || r.contains("expired") || r.contains("rate limited") ? T.orange : T.text3
+    }
 }
 
 extension AppModel {
@@ -144,38 +158,81 @@ struct UsageGauge: View {
 /// Every agent's windows, compactly: the sidebar's usage popover.
 struct UsageCard: View {
     let providers: [UsageProvider]
+    var open: (() -> Void)? = nil
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            ForEach(providers) { p in
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 6) {
-                        AgentMark(agent: p.agent, size: 14)
-                        Text(p.agent.label).font(T.ui(12, .semibold))
-                        if !p.j["plan"].string.isEmpty { Chip(text: p.j["plan"].string) }
-                        Spacer()
-                    }
-                    if !p.ok {
-                        Text(p.j["reason"].string).font(T.ui(11)).foregroundStyle(T.orange).lineLimit(2)
-                    } else if p.windows.isEmpty {
-                        Text(p.j["local"]["week"]["acu"].double > 0 ? String(format: "%.2f ACUs this week through Bridge", p.j["local"]["week"]["acu"].double) : "No plan limits published").font(T.ui(11)).foregroundStyle(T.text3)
-                    }
-                    ForEach(p.windows) { w in
-                        HStack(spacing: 8) {
-                            Text(w.label).font(T.ui(11)).foregroundStyle(T.text2).frame(width: 110, alignment: .leading).lineLimit(1)
-                            UsageBar(window: w).frame(width: 120)
-                            Text(verbatim: "\(Int((w.used ?? 0).rounded()))%").font(T.ui(11, .medium)).monospacedDigit().frame(width: 32, alignment: .trailing)
-                            Text(Countdown.until(w.resetsAt)).font(T.ui(11)).foregroundStyle(T.text3).frame(width: 50, alignment: .trailing)
-                        }
-                    }
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("Plan usage").font(T.ui(13, .semibold)).foregroundStyle(T.text)
+                Spacer()
+                if let t = providers.map({ $0.j["fetchedAt"].double }).max(), t > 0 {
+                    Text("Updated \(Fmt.ago(t / 1000) == "now" ? "just now" : Fmt.ago(t / 1000) + " ago")").font(T.ui(11)).foregroundStyle(T.text3)
                 }
             }
-            Text("Click for details").font(T.ui(10.5)).foregroundStyle(T.text3)
+            .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 10)
+            ForEach(providers) { p in
+                Hairline()
+                UsageCardRow(provider: p)
+            }
+            if let open {
+                Hairline()
+                Button(action: open) {
+                    HStack(spacing: 6) {
+                        Text("Open Usage")
+                        Image(systemName: "arrow.right").font(.system(size: 10, weight: .semibold))
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(LButton())
+                .padding(12)
+            }
         }
-        .padding(14)
-        .frame(width: 360, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 10).fill(T.raised))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(T.line, lineWidth: 1))
-        .shadow(color: .black.opacity(0.45), radius: 24, y: 10)
+        .frame(width: 340, alignment: .leading)
+    }
+}
+
+struct UsageCardRow: View {
+    let provider: UsageProvider
+
+    var body: some View {
+        let p = provider
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 7) {
+                AgentMark(agent: p.agent, size: 16)
+                Text(p.agent.label).font(T.ui(12.5, .semibold)).foregroundStyle(T.text)
+                if !p.plan.isEmpty { Text(p.plan).font(T.ui(11)).foregroundStyle(T.text3) }
+                Spacer()
+                if let w = p.tightest {
+                    Text(verbatim: "\(Int((w.used ?? 0).rounded()))%").font(T.ui(12, .semibold)).foregroundStyle(w.tone).monospacedDigit()
+                }
+            }
+            if !p.ok {
+                UsageNote(text: p.reason, tone: p.problemTone)
+            } else if p.windows.isEmpty {
+                UsageNote(text: p.j["local"]["week"]["acu"].double > 0 ? String(format: "%.2f ACUs this week through Bridge", p.j["local"]["week"]["acu"].double) : (p.notes.first ?? "No plan limits published"), tone: T.text3)
+            }
+            ForEach(p.windows) { w in
+                HStack(spacing: 10) {
+                    Text(w.label).font(T.ui(11.5)).foregroundStyle(T.text2).frame(width: 96, alignment: .leading).lineLimit(1)
+                    UsageBar(window: w, height: 4)
+                    Text(Countdown.until(w.resetsAt)).font(T.ui(11)).foregroundStyle(T.text3).monospacedDigit().frame(width: 48, alignment: .trailing)
+                }
+            }
+        }
+        .padding(.horizontal, 16).padding(.vertical, 12)
+    }
+}
+
+/// A one-line explanation: info in grey, problems tinted.
+struct UsageNote: View {
+    let text: String
+    var tone: Color = T.text3
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: tone == T.text3 ? "info.circle" : "exclamationmark.triangle").font(.system(size: 10.5, weight: .medium))
+            Text(text).font(T.ui(11.5)).fixedSize(horizontal: false, vertical: true)
+        }
+        .foregroundStyle(tone == T.text3 ? T.text2 : tone)
     }
 }
 
@@ -207,19 +264,26 @@ struct UsageView: View {
                     Task { await model.loadUsage(refresh: true); loading.v = false }
                 }
             }
-            ScrollView {
-                VStack(spacing: 14) {
-                    if model.usageProviders.isEmpty { ProgressView().controlSize(.small).padding(40) }
-                    ForEach(model.usageProviders) { p in ProviderCard(provider: p) }
-                    Text("Read with each agent's own login on this Mac (Claude Code, Codex, Cursor). Bridge never refreshes or stores those tokens.")
-                        .font(T.ui(11.5)).foregroundStyle(T.text3).padding(.top, 4)
-                }
-                .padding(24)
-                .frame(maxWidth: 760)
-                .frame(maxWidth: .infinity)
-            }
+            ScrollView { content }
         }
         .onAppear { Task { await model.loadUsage() } }
+    }
+
+    var content: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            if model.usageProviders.isEmpty { ProgressView().controlSize(.small).frame(maxWidth: .infinity).padding(40) }
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 360), spacing: 16, alignment: .top)], alignment: .leading, spacing: 16) {
+                ForEach(Array(model.usageProviders.enumerated()), id: \.element.id) { i, p in ProviderCard(provider: p).rise(i) }
+            }
+            HStack(spacing: 6) {
+                Image(systemName: "lock").font(.system(size: 10, weight: .medium))
+                Text("Read with each agent's own login on this Mac (Claude Code, Codex, cursor-agent). Bridge never refreshes or stores those tokens.")
+            }
+            .font(T.ui(11.5)).foregroundStyle(T.text3)
+        }
+        .padding(28)
+        .frame(maxWidth: 1000)
+        .frame(maxWidth: .infinity)
     }
 }
 
@@ -227,49 +291,94 @@ struct ProviderCard: View {
     let provider: UsageProvider
 
     var body: some View {
-        let p = provider
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                AgentMark(agent: p.agent, size: 18)
-                Text(p.agent.label).font(T.ui(13.5, .semibold))
-                if !p.j["plan"].string.isEmpty { Chip(text: p.j["plan"].string) }
-                Spacer()
-                if !p.ok { HStack(spacing: 5) { Circle().fill(T.text3).frame(width: 6, height: 6); Text("Unavailable").font(T.ui(11.5)).foregroundStyle(T.text3) } }
-                else if let stale = p.j["stale"].nonEmpty { Text(stale).font(T.ui(11)).foregroundStyle(T.orange).lineLimit(1) }
+        VStack(alignment: .leading, spacing: 0) {
+            header.padding(16)
+            Hairline()
+            VStack(alignment: .leading, spacing: 14) {
+                status
+                ForEach(provider.windows) { WindowMeter(window: $0) }
+                if !provider.facts.isEmpty { facts }
             }
-            if !p.ok {
-                Text(p.j["reason"].string).font(T.ui(12)).foregroundStyle(T.red.opacity(0.9))
-            }
-            ForEach(p.windows) { w in
-                VStack(alignment: .leading, spacing: 5) {
-                    HStack {
-                        Text(w.label).font(T.ui(12.5, .medium))
-                        Spacer()
-                        Text(w.used.map { "\(Int($0.rounded()))% used" } ?? "—").font(T.ui(12)).foregroundStyle(T.text2).monospacedDigit()
-                    }
-                    UsageBar(window: w, height: 6)
-                    HStack(spacing: 6) {
-                        if let r = w.resetsAt { Text("resets in \(Countdown.until(r)) · \(Countdown.clock(r))") }
-                        if let out = w.runsOut { Text("· runs out \(Countdown.clock(out))").foregroundStyle(T.orange) }
-                    }
-                    .font(T.ui(11)).foregroundStyle(T.text3)
-                }
-            }
-            ForEach(Array(p.j["details"].array.enumerated()), id: \.offset) { _, d in
-                HStack { Text(d["label"].string).font(T.ui(12)).foregroundStyle(T.text2); Spacer(); Text(d["value"].string).font(T.ui(12)).foregroundStyle(T.text).multilineTextAlignment(.trailing) }
-            }
-            if !p.j["account"].string.isEmpty { Text(p.j["account"].string).font(T.ui(11.5)).foregroundStyle(T.text3) }
-            if !p.j["local"].isNull {
+            .padding(16)
+            .frame(maxWidth: .infinity, minHeight: 92, alignment: .topLeading)
+            if !provider.j["local"].isNull {
                 Hairline()
-                HStack(spacing: 0) {
-                    LocalStat(title: "Through Bridge · 7 days", b: p.j["local"]["week"], acu: p.agent == .devin)
-                    LocalStat(title: "30 days", b: p.j["local"]["month"], acu: p.agent == .devin)
+                HStack(alignment: .top, spacing: 0) {
+                    LocalStat(title: "7 days", b: provider.j["local"]["week"], acu: provider.agent == .devin)
+                    LocalStat(title: "30 days", b: provider.j["local"]["month"], acu: provider.agent == .devin)
                 }
+                .padding(.horizontal, 16).padding(.vertical, 12)
+                .background(T.bg.opacity(0.35))
             }
         }
-        .padding(16)
-        .background(RoundedRectangle(cornerRadius: 10).fill(T.raised.opacity(0.45)))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(T.line, lineWidth: 1))
+        .card()
+    }
+
+    var header: some View {
+        HStack(spacing: 10) {
+            AgentMark(agent: provider.agent, size: 24)
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 6) {
+                    Text(provider.agent.label).font(T.ui(14, .semibold)).foregroundStyle(T.text)
+                    if !provider.plan.isEmpty { Chip(text: provider.plan) }
+                }
+                if !provider.account.isEmpty { Text(provider.account).font(T.ui(11.5)).foregroundStyle(T.text3).lineLimit(1) }
+            }
+            Spacer()
+            if !provider.ok {
+                Chip(text: provider.j["status"].string == "error" ? "Error" : "Unavailable", dot: provider.problemTone == T.text3 ? T.text3 : provider.problemTone)
+            } else if let stale = provider.j["stale"].nonEmpty {
+                Chip(text: "Stale", dot: T.orange).help(stale)
+            } else if let w = provider.tightest {
+                Text(verbatim: "\(Int((w.used ?? 0).rounded()))%").font(T.ui(20, .semibold)).foregroundStyle(w.tone).monospacedDigit()
+                    .help("\(w.label): the window closest to its limit")
+            }
+        }
+    }
+
+    @ViewBuilder var status: some View {
+        if !provider.ok {
+            UsageNote(text: provider.reason, tone: provider.problemTone)
+        }
+        ForEach(provider.notes, id: \.self) { UsageNote(text: $0) }
+        if provider.ok && provider.windows.isEmpty && provider.notes.isEmpty { UsageNote(text: "No plan limits published") }
+    }
+
+    var facts: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(provider.facts.enumerated()), id: \.offset) { i, d in
+                if i > 0 { Hairline() }
+                HStack(alignment: .firstTextBaseline) {
+                    Text(d["label"].string).font(T.ui(12)).foregroundStyle(T.text2)
+                    Spacer(minLength: 12)
+                    Text(d["value"].string).font(T.ui(12, .medium)).foregroundStyle(T.text).monospacedDigit().multilineTextAlignment(.trailing)
+                }
+                .padding(.vertical, 7)
+            }
+        }
+    }
+}
+
+struct WindowMeter: View {
+    let window: UsageWindow
+    var body: some View {
+        let w = window
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(w.label).font(T.ui(12.5, .medium)).foregroundStyle(T.text)
+                Spacer()
+                Text(w.used.map { "\(Int($0.rounded()))%" } ?? "—").font(T.ui(12.5, .semibold)).foregroundStyle(w.used == nil ? T.text3 : w.tone).monospacedDigit()
+            }
+            UsageBar(window: w, height: 6)
+            HStack(spacing: 4) {
+                if let r = w.resetsAt { Text("Resets in \(Countdown.until(r)) · \(Countdown.clock(r))") }
+                if let out = w.runsOut {
+                    Spacer()
+                    Label("Runs out \(Countdown.clock(out))", systemImage: "exclamationmark.triangle.fill").foregroundStyle(T.orange)
+                }
+            }
+            .font(T.ui(11)).foregroundStyle(T.text3)
+        }
     }
 }
 
@@ -279,13 +388,14 @@ struct LocalStat: View {
     let acu: Bool
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(title).font(T.ui(11)).foregroundStyle(T.text3)
-            HStack(spacing: 10) {
+            Text("Through Bridge · \(title)").font(T.ui(11)).foregroundStyle(T.text3)
+            HStack(spacing: 4) {
                 Text(verbatim: "\(b["turns"].int) turns")
+                Text("·").foregroundStyle(T.text3)
                 Text(verbatim: "\(Fmt.tokens(b["tokens"].int)) tokens")
-                if acu { Text(String(format: "%.2f ACUs", b["acu"].double)) } else if b["cost"].double > 0 { Text(Fmt.money(b["cost"].double)) }
             }
             .font(T.ui(12, .medium)).foregroundStyle(T.text2).monospacedDigit()
+            if acu { Text(String(format: "%.2f ACUs", b["acu"].double)).font(T.ui(12, .medium)).foregroundStyle(T.text2).monospacedDigit() }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }

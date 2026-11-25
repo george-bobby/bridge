@@ -451,6 +451,15 @@ extension View {
 
     func shimmer(_ on: Bool = true) -> some View { modifier(Shimmer(on: on)) }
 
+    /// The grouped-card surface shared by Settings and Usage.
+    func card(radius: CGFloat = 12) -> some View {
+        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        return self
+            .background(T.raised.opacity(0.5), in: shape)
+            .clipShape(shape)
+            .overlay(shape.stroke(T.line, lineWidth: 1))
+    }
+
     func floatingPanel(radius: CGFloat = 14) -> some View {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         return self

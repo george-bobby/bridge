@@ -91,53 +91,51 @@ struct SidebarFooter: View {
     var body: some View {
         VStack(spacing: 6) {
             let providers = model.usageProviders.filter { $0.ok && $0.tightest != nil }
-            if !providers.isEmpty {
-                Button { usageOpen.v.toggle() } label: {
-                    HStack(spacing: 10) {
-                        ForEach(providers) { p in
-                            if let w = p.tightest { UsageGauge(provider: p, window: w) }
-                        }
-                        Spacer(minLength: 0)
-                    }
-                    .padding(.horizontal, 10).frame(height: 34)
-                    .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(usageOpen.v || model.route == .usage ? T.sideSelected : T.sideHover))
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(Pressable(scale: 0.98))
-                .help("Plan usage")
-                .popover(isPresented: $usageOpen.v, arrowEdge: .trailing) {
-                    VStack(alignment: .leading, spacing: 12) {
-                        UsageCard(providers: model.usageProviders)
-                        Button { usageOpen.v = false; model.route = .usage } label: {
-                            Label("Open Usage", systemImage: "arrow.right").frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(LButton())
-                        .padding([.horizontal, .bottom], 14)
-                    }
-                    .frame(width: 380)
-                }
-            }
+            if !providers.isEmpty { usageButton(providers) }
             HStack(spacing: 6) {
                 Circle().fill(model.connected ? T.green : T.red).frame(width: 7, height: 7)
                     .shadow(color: (model.connected ? T.green : T.red).opacity(0.6), radius: 3)
                 Text(model.connected ? "\(model.liveCount) running" : "Offline").font(T.ui(11.5)).foregroundStyle(T.text3)
                     .contentTransition(.numericText())
-                Text("·").foregroundStyle(T.text3)
-                Text(Fmt.money(model.cost["today"].double)).font(T.ui(11.5)).foregroundStyle(T.text3).monospacedDigit()
                 Spacer()
                 FooterButton(icon: "book.closed", help: "Memory (⌘7)", on: model.route == .memory) { model.route = .memory }
                 FooterButton(icon: "gauge.with.dots.needle.50percent", help: "Usage (⌘8)", on: model.route == .usage, fill: false) { model.route = .usage }
-                SettingsLink {
-                    Image(systemName: "gearshape").font(.system(size: 13)).foregroundStyle(T.text2).frame(width: 28, height: 28).contentShape(Rectangle())
-                }
-                .buttonStyle(Pressable(scale: 0.9))
-                .help("Settings (⌘,)")
+                FooterButton(icon: "gearshape", help: "Settings (⌘,)", on: model.route == .settings) { model.navigate(.settings) }
             }
             .padding(.horizontal, 4)
         }
         .padding(.horizontal, 12)
         .padding(.top, 10)
         .padding(.bottom, 12)
+    }
+
+    func usageButton(_ providers: [UsageProvider]) -> some View {
+        Button { usageOpen.v.toggle() } label: {
+            HStack(spacing: 10) {
+                ForEach(providers) { p in
+                    if let w = p.tightest { UsageGauge(provider: p, window: w) }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10).frame(height: 34)
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(usageOpen.v || model.route == .usage ? T.sideSelected : T.sideHover))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(Pressable(scale: 0.98))
+        .help("Plan usage")
+        .popover(isPresented: $usageOpen.v, arrowEdge: .trailing) {
+            UsageCard(providers: model.usageProviders) { usageOpen.v = false; model.route = .usage }
+        }
+    }
+}
+
+/// "Open Settings" at a given section, for setup screens elsewhere.
+struct OpenSettingsButton: View {
+    @Environment(AppModel.self) var model
+    var pane = "general"
+    var label = "Open Settings"
+    var body: some View {
+        Button { model.settingsPane = pane; model.navigate(.settings) } label: { Text(label) }.buttonStyle(LButton())
     }
 }
 
@@ -456,128 +454,16 @@ struct SlackSetup: View {
         VStack(alignment: .leading, spacing: 14) {
             Image(systemName: "number").font(.system(size: 26, weight: .light)).foregroundStyle(T.text3)
             Text("Connect Slack").font(T.ui(16, .semibold))
-            Text("Bridge reads Slack as you, with a user token: no bot to invite and nothing to add to any channel. Create a small Slack app from the manifest once, install it to yourself, and paste its User OAuth Token (xoxp-…) into Settings → Environment → SLACK_USER_TOKEN.")
+            Text("Bridge reads Slack as you, with a user token: no bot to invite and nothing to add to any channel. Create a small Slack app from the manifest once, install it to yourself, and paste its User OAuth Token (xoxp-…) into Settings → Integrations → Slack.")
                 .font(T.ui(13)).foregroundStyle(T.text2).fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 8) {
                 Button { openURL("https://api.slack.com/apps?new_app=1") } label: { Label("Create the app", systemImage: "arrow.up.right") }.buttonStyle(LButton(primary: true))
                 Button { openURL("https://github.com/george-bobby/bridge/blob/main/docs/slack.md") } label: { Label("Step-by-step guide", systemImage: "book") }.buttonStyle(LButton())
-                SettingsLink { Text("Open Settings") }.buttonStyle(LButton())
+                OpenSettingsButton(pane: "integrations")
             }
         }
         .frame(maxWidth: 520, alignment: .leading)
         .padding(40)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-}
-
-// MARK: - Settings: environment
-
-struct EnvironmentSettings: View {
-    @Environment(AppModel.self) var model
-    @StateObject private var entries = Box([JSON]())
-    @StateObject private var edits = Box([String: String]())
-    @StateObject private var file = Box("")
-
-    var body: some View {
-        VStack(spacing: 0) {
-            Form {
-                ForEach(sections, id: \.self) { section in
-                    Section(section) {
-                        ForEach(entries.v.filter { $0["section"].string == section }, id: \.self) { e in row(e) }
-                    }
-                }
-            }
-            .formStyle(.grouped)
-            HStack {
-                Text(file.v).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
-                Spacer()
-                Button("Discard") { edits.v = [:] }.disabled(edits.v.isEmpty)
-                Button("Save") { Task { if await model.saveEnv(edits.v, restart: false) { edits.v = [:]; load() } } }.disabled(edits.v.isEmpty)
-                Button("Save and Restart Server") { Task { if await model.saveEnv(edits.v, restart: true) { edits.v = [:]; load() } } }
-                    .keyboardShortcut(.defaultAction).disabled(edits.v.isEmpty)
-            }
-            .padding(12)
-        }
-        .onAppear(perform: load)
-    }
-
-    var sections: [String] {
-        var seen: [String] = []
-        for e in entries.v where !seen.contains(e["section"].string) { seen.append(e["section"].string) }
-        return seen
-    }
-
-    func load() {
-        Task {
-            let out = (try? await API.get("/api/env")) ?? .null
-            entries.v = out["entries"].array
-            file.v = out["file"].string
-        }
-    }
-
-    @ViewBuilder func row(_ e: JSON) -> some View {
-        let key = e["key"].string
-        let binding = Binding(get: { edits.v[key] ?? e["value"].string }, set: { edits.v[key] = $0 })
-        VStack(alignment: .leading, spacing: 3) {
-            LabeledContent {
-                if e["secret"].bool {
-                    SecureField(e["set"].bool ? "•••••••• (set; type to replace)" : "not set", text: Binding(get: { edits.v[key] ?? "" }, set: { edits.v[key] = $0 }))
-                        .textFieldStyle(.roundedBorder).frame(width: 300)
-                } else {
-                    TextField(e["example"].string, text: binding).textFieldStyle(.roundedBorder).frame(width: 300)
-                }
-            } label: {
-                HStack(spacing: 6) {
-                    Text(key).font(.system(size: 12, design: .monospaced))
-                    if edits.v[key] != nil { Circle().fill(T.accent).frame(width: 6, height: 6) }
-                }
-            }
-            if !e["hint"].string.isEmpty { Text(e["hint"].string).font(.caption).foregroundStyle(.secondary) }
-        }
-    }
-}
-
-// MARK: - Settings: develop Bridge with Bridge
-
-struct DevelopSettings: View {
-    @Environment(AppModel.self) var model
-
-    var body: some View {
-        let root = model.bridgeRoot
-        let bridgeProject = model.projects.first { $0.path == root }
-        Form {
-            Section("Bridge's own source") {
-                LabeledContent("Repository", value: root.isEmpty ? "unknown" : root)
-                Text("Bridge can work on itself: add its repo as a project, then start sessions on it like any other repo. When a change lands, rebuild the app from here.")
-                    .font(.caption).foregroundStyle(.secondary)
-                HStack {
-                    if let p = bridgeProject {
-                        Button("New Task on Bridge…") { bringMainWindow(); model.compose(in: p.id) }
-                        Button("Open Bridge's Orchestrator") { bringMainWindow(); model.openOrchestrator(p.id) }
-                    } else {
-                        Button("Add Bridge as a Project") { Task { await model.addProject(path: root, name: "bridge") } }.disabled(root.isEmpty)
-                    }
-                    Button("Reveal in Finder") { NSWorkspace.shared.open(URL(fileURLWithPath: root)) }.disabled(root.isEmpty)
-                }
-            }
-            Section("Apply changes") {
-                HStack {
-                    Button(model.building ? "Building…" : "Rebuild and Relaunch App") { model.rebuildApp() }.disabled(model.building || root.isEmpty)
-                    Button("Restart Server") { Task { await model.restartServer() } }
-                    if model.building { ProgressView().controlSize(.small) }
-                }
-                Text("Rebuild compiles native/macos, swaps the app in ~/Applications and reopens it. Restart Server reloads lib/, .env and the skill templates. Running workers are restarted with the server.")
-                    .font(.caption).foregroundStyle(.secondary)
-                if !model.buildLog.isEmpty {
-                    Text(model.buildLog).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary).textSelection(.enabled)
-                }
-            }
-        }
-        .formStyle(.grouped)
-    }
-
-    func bringMainWindow() {
-        NSApp.activate(ignoringOtherApps: true)
-        NSApp.windows.first { $0.identifier?.rawValue.hasPrefix("main") ?? false }?.makeKeyAndOrderFront(nil)
     }
 }
