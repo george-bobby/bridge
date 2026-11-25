@@ -182,6 +182,7 @@ struct Chip: View {
         .frame(height: 20)
         .background(RoundedRectangle(cornerRadius: 5).fill((tint ?? T.text3).opacity(tint == nil ? 0.0 : 0.10)))
         .overlay(RoundedRectangle(cornerRadius: 5).stroke(tint == nil ? T.line : (tint ?? T.line).opacity(0.25), lineWidth: 1))
+        .fixedSize()
     }
 }
 

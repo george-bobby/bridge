@@ -21,12 +21,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 8_000_000_000)
             var pages = routes
-            if let s = model.boardSessions.first(where: { $0.worked }) ?? model.orchestrator { pages.append(("chat", .session(s.id))) }
+            let chat = ProcessInfo.processInfo.environment["BRIDGE_SNAPSHOT_CHAT"]
+            if let s = model.sessions.first(where: { $0.id == chat }) ?? model.boardSessions.first(where: { $0.worked }) ?? model.orchestrator { pages.append(("chat", .session(s.id))) }
+            pages.append(("palette", .board))
             for (name, route) in pages {
+                model.paletteOpen = name == "palette"
                 if case .session(let id) = route { model.open(id) } else { model.route = route }
                 try? await Task.sleep(nanoseconds: 2_500_000_000)
                 guard let view = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil && $0.frame.width > 800 })?.contentView,
-                      let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { continue }
+                      let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(view.bounds.width * 2), pixelsHigh: Int(view.bounds.height * 2), bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { continue }
+                rep.size = view.bounds.size
                 view.cacheDisplay(in: view.bounds, to: rep)
                 try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: "\(dir)/\(name).png"))
             }
@@ -220,7 +224,7 @@ struct Sidebar: View {
             Hairline()
             HStack(spacing: 8) {
                 Circle().fill(model.connected ? T.green : T.red).frame(width: 7, height: 7)
-                Text(model.connected ? "\(model.running.count) running" : "Offline").font(T.ui(11.5)).foregroundStyle(T.text3)
+                Text(model.connected ? "\(model.liveCount) running" : "Offline").font(T.ui(11.5)).foregroundStyle(T.text3)
                 Text("·").foregroundStyle(T.text3)
                 Text(Fmt.money(model.cost["today"].double) + " today").font(T.ui(11.5)).foregroundStyle(T.text3)
                 Spacer()
@@ -385,7 +389,7 @@ struct MenuBarPanel: View {
                 Logo(size: 16)
                 Text("Bridge").font(T.ui(13, .semibold))
                 Spacer()
-                Text(verbatim: "\(model.running.count) running").font(T.ui(11.5)).foregroundStyle(T.text3)
+                Text(verbatim: "\(model.liveCount) running").font(T.ui(11.5)).foregroundStyle(T.text3)
             }
             .padding(12)
             Hairline()
