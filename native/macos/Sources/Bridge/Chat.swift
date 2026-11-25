@@ -144,10 +144,11 @@ struct AssistantMessage: View {
 
     var body: some View {
         let state = m["state"].string
+        let agent = AgentKind.of(m["agent"].string)
         HStack(alignment: .top, spacing: 12) {
-            ClaudeMark()
+            AgentMark(agent: agent)
             VStack(alignment: .leading, spacing: 8) {
-                MessageHead(name: "Claude", detail: [m["label"].string, m["model"].string].filter { !$0.isEmpty }.joined(separator: " · "), ts: m["ts"].double)
+                MessageHead(name: agent.label, detail: [m["label"].string, m["model"].string].filter { !$0.isEmpty }.joined(separator: " · "), ts: m["ts"].double)
                 let steps = m["steps"].array
                 if steps.isEmpty && !m["text"].string.isEmpty { MarkdownText(text: m["text"].string) }
                 ForEach(Array(steps.enumerated()), id: \.offset) { _, s in StepView(step: s, runId: runId) }
@@ -168,6 +169,7 @@ struct AssistantMessage: View {
                 if m["durationMs"].double > 0 { Text(duration(m["durationMs"].double)) }
                 if m["usage"]["output"].int > 0 { Text(verbatim: "\(Fmt.tokens(m["usage"]["output"].int)) out") }
                 if m["turns"].int > 0 { Text(verbatim: "\(m["turns"].int) turns") }
+                if m["acu"].double > 0 { Text(String(format: "%.2f ACUs", m["acu"].double)) }
                 if state == "stopped" { Text("stopped").foregroundStyle(T.orange) }
             }
             .font(T.ui(11.5)).foregroundStyle(T.text3).monospacedDigit()
@@ -525,7 +527,8 @@ struct Composer: View {
             }
             .padding(.horizontal, 10).padding(.top, 10)
             HStack(spacing: 4) {
-                ForEach(JobOption.all, id: \.key) { opt in optionMenu(opt) }
+                AgentPicker(runId: runId, current: AgentKind.of(value("agent").string))
+                ForEach(JobOption.all.filter { $0.key != "model" || AgentKind.of(value("agent").string) == .claude }, id: \.key) { opt in optionMenu(opt) }
                 contextToggle
                 repoButton
                 Spacer()
