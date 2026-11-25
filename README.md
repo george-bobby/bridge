@@ -71,7 +71,7 @@ real data.
 - Node 18+
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code), signed in. For Slack threads, its Slack and Linear connectors.
 - [`gh`](https://cli.github.com), signed in, for the PR views
-- Optional: a Linear personal API key for the Linear views; a Slack user token for the Slack view ([setup](docs/slack.md)); [cmux](https://cmux.com), iTerm or Terminal to continue a session by hand
+- Optional: a Linear personal API key for the Linear views; a Slack user token for the Slack view ([setup](docs/slack.md)); optionally iTerm or [cmux](https://cmux.com) to continue a session outside the app
 
 ## Quick start
 
@@ -210,9 +210,15 @@ transcript search), `⌘N` new task (a Slack link runs the pipeline; anything
 else goes to the orchestrator or straight to a worker), a menu bar item with
 what's running and waiting, native notifications, and a Dock badge.
 
-**Terminal.** "Open in cmux" continues a session in a new cmux tab
-(`TERMINAL_APP=cmux`, the default when cmux is installed; `Terminal` and
-`iTerm` also work).
+**Terminal.** The chat's Terminal tab (``⌃` ``, or the terminal button in the
+header) continues the session inside Bridge, in an embedded terminal in the
+session's folder. "Open in External Terminal" in the ⋯ menu hands it to
+Terminal instead (`TERMINAL_APP`: Terminal, the default, iTerm or cmux).
+
+**Split panes.** Drag a chat from the sidebar, or a tab (Chat, Changes,
+Terminal, a browser tab), onto the left or right edge of a chat to open it
+side by side; drop it in the middle to replace that pane. `⌘\` splits,
+`⌘⇧W` closes the focused pane, and the divider resizes.
 
 **Dev servers.** Ports your processes listen on (node, python, bun and the
 like) are matched to the worktree they run in and shown on the session and
@@ -267,7 +273,7 @@ beside **Send** set the next job's:
 | Model / Thinking / Capacity | model alias, `--effort`, 1M context |
 | Repo | the working directory |
 
-**Open in cmux** reopens the session in a cmux tab (`TERMINAL_APP`: cmux, Terminal or iTerm).
+**Terminal** reopens the session in the chat's embedded terminal; **Open in External Terminal** uses `TERMINAL_APP` (Terminal, iTerm or cmux).
 
 ## `bin/sb`
 

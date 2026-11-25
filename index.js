@@ -772,6 +772,14 @@ const server = http.createServer(async (req, res) => {
     // Same chat, same session, real terminal. The dashboard is the better
     // place to *watch* a run; it is a worse place to take one over, and until
     // now the only way out was to go digging for the session id by hand.
+    if (req.method === "GET" && verb === "terminal") {
+      try {
+        sendJson(res, 200, { ok: true, ...jobs.terminalInfo(id, { config: store.readConfig() }) });
+      } catch (e) {
+        sendJson(res, 404, { ok: false, error: String(e.message || e) });
+      }
+      return;
+    }
     if (req.method === "POST" && verb === "terminal") {
       try {
         sendJson(res, 200, { ok: true, ...(await jobs.openTerminal(id, { config: store.readConfig() })) });

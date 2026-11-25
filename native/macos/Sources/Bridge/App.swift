@@ -28,6 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             if let last = pages.first(where: { $0.0 == "chat" }) {
                 pages.append(("collapsed", last.1))
                 if browser != nil { pages.append(("browser", last.1)) }
+                pages += [("split", last.1), ("terminal", last.1)]
             }
             let hidden = model.sidebarHidden
             if let only = ProcessInfo.processInfo.environment["BRIDGE_SNAPSHOT_PAGES"]?.split(separator: ",").map(String.init) {
@@ -38,6 +39,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 model.sidebarHidden = name == "collapsed"
                 if name == "browser", case .session(let id) = route, let browser { model.open(id); model.openBrowser(id, url: browser) }
                 if case .session(let id) = route { model.open(id) } else { model.route = route }
+                if name == "split" { model.splitRight(); model.splitRight() }
+                if name == "terminal", case .session(let id) = route { model.openTerminalTab(id) }
                 if name == "slack", let m = model.mentions.first { model.openThread(m.permalink) }
                 try? await Task.sleep(nanoseconds: 2_500_000_000)
                 guard let view = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil && $0.frame.width > 800 })?.contentView,
@@ -81,7 +84,7 @@ struct BridgeApp: App {
         .windowStyle(.hiddenTitleBar)
         .windowBackgroundDragBehavior(.enabled)
         .defaultSize(width: 1480, height: 920)
-        .commands { BridgeCommands(model: delegate.model) }
+        .commands { BridgeCommands(model: delegate.model); PaneCommands(model: delegate.model) }
 
         Settings {
             SettingsView()
@@ -180,10 +183,10 @@ struct RootView: View {
             ZStack {
                 T.panel
                 detail
-                    .id(model.route)
+                    .id(model.pageId)
                     .transition(.page)
             }
-            .animation(M.page, value: model.route)
+            .animation(M.page, value: model.pageId)
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(T.line.opacity(0.9), lineWidth: 1))
             .shadow(color: .black.opacity(0.25), radius: 6, y: 1)
