@@ -195,6 +195,8 @@ struct RootView: View {
                     .transition(.page)
             }
             .animation(M.page, value: model.pageId)
+            // A page's own minimum width must never grow the window.
+            .frame(minWidth: 0, maxWidth: .infinity)
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(T.line.opacity(0.9), lineWidth: 1))
             .shadow(color: .black.opacity(0.25), radius: 6, y: 1)

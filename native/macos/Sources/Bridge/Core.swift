@@ -195,7 +195,8 @@ enum Fmt {
     }
 
     static func tokens(_ n: Int) -> String {
-        n >= 1_000_000 ? String(format: "%.1fM", Double(n) / 1_000_000) : n >= 1000 ? String(format: "%.1fk", Double(n) / 1000) : "\(n)"
+        let short = { (v: Double, u: String) in (v >= 100 || v.rounded() == v ? String(format: "%.0f", v) : String(format: "%.1f", v)) + u }
+        return n >= 1_000_000 ? short(Double(n) / 1_000_000, "M") : n >= 1000 ? short(Double(n) / 1000, "k") : "\(n)"
     }
 
     static func clock(_ seconds: Double) -> String {
