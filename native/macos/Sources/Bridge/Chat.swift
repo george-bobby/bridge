@@ -776,92 +776,25 @@ struct Composer: View {
 
     var items: [Attachment] { model.attachments[runId] ?? [] }
 
+    var live: Bool { model.sessions.first { $0.id == runId }.map(model.isLive) ?? false }
+    var trimmedEmpty: Bool { text.v.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    var slashOpen: Bool { text.v.hasPrefix("/") && !text.v.contains(" ") }
+    var draft: String { model.drafts[runId] ?? "" }
+
     var body: some View {
-        let live = model.sessions.first { $0.id == runId }.map(model.isLive) ?? false
         VStack(alignment: .leading, spacing: 0) {
-            if !items.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 10) {
-                        ForEach(items) { a in
-                            AttachmentChip(item: a) { remove(a) }
-                                .transition(.opacity.combined(with: .scale(scale: 0.85)))
-                        }
-                    }
-                    .padding(.horizontal, 12).padding(.top, 14).padding(.bottom, 2)
-                }
-                .transition(.opacity.combined(with: .move(edge: .bottom)))
-            }
-            if text.v.hasPrefix("/") && !text.v.contains(" ") && !text.v.contains("\n") {
+            attachmentStrip
+            if slashOpen && !text.v.contains("\n") {
                 SlashMenu(query: String(text.v.dropFirst())) { name in text.v = "/\(name) " }
                     .padding(.horizontal, 8).padding(.top, 8)
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
-            ZStack(alignment: .topLeading) {
-                if text.v.isEmpty {
-                    Text(live ? "Queue a follow-up for when this turn ends…" : "Reply, paste an image, or ⌘L to quote a selection…")
-                        .font(T.ui(13.5)).foregroundStyle(T.text3).padding(.horizontal, 5).padding(.top, 1)
-                }
-                TextEditor(text: $text.v)
-                    .font(T.ui(13.5))
-                    .scrollContentBackground(.hidden)
-                    .scrollIndicators(.never)
-                    .focused($focused)
-                    .frame(minHeight: 44, maxHeight: 180)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(.horizontal, 12).padding(.top, 12)
-            HStack(spacing: 4) {
-                Button { pickFiles() } label: { ComposerChip(icon: "paperclip", text: "") }
-                    .buttonStyle(.plain).help("Attach images or files (or paste / drop them here)")
-                let agent = AgentKind.of(value("agent").string)
-                AgentPicker(runId: runId, current: agent)
-                ModelPicker(runId: runId, agent: agent, current: value(agent == .claude ? "model" : "agentModel").string)
-                ForEach(JobOption.all.filter { $0.key != "model" && ($0.key != "effort" || agent == .claude || agent == .codex) }, id: \.key) { opt in optionMenu(opt) }
-                contextToggle
-                repoButton
-                Spacer()
-                ContextMeter(run: model.openRun)
-                if live && !text.v.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Button {
-                        let t = text.v
-                        sending.v = true
-                        Task {
-                            if await model.stopAndSend(t, to: runId), text.v == t { text.v = "" }
-                            sending.v = false
-                        }
-                    } label: { Label("Stop & send", systemImage: "bolt.fill").font(T.ui(11.5, .medium)) }
-                    .buttonStyle(LButton()).help("Interrupt the running turn and send this now (⌘↩ queues it instead)")
-                }
-                Text("⌘↩").font(T.ui(11)).foregroundStyle(T.text3)
-                Button {
-                    send()
-                } label: {
-                    let empty = text.v.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && items.isEmpty
-                    Image(systemName: "arrow.up").font(.system(size: 12, weight: .bold)).foregroundStyle(.white)
-                        .frame(width: 26, height: 26)
-                        .background(Circle().fill(empty ? T.text3.opacity(0.6) : T.accent))
-                        .shadow(color: T.accent.opacity(empty ? 0 : 0.5), radius: 6)
-                        .scaleEffect(empty ? 0.92 : 1)
-                        .animation(M.pop, value: empty)
-                }
-                .buttonStyle(Pressable(scale: 0.88))
-                .keyboardShortcut(.return, modifiers: .command)
-                // Covered by the New Task sheet or ⌘K: ⌘↩ belongs to them.
-                .disabled(sending.v || model.composeOpen || model.paletteOpen)
-            }
-            .padding(10)
+            editor
+            toolbar
         }
-        .animation(M.snappy, value: text.v.hasPrefix("/") && !text.v.contains(" "))
+        .animation(M.snappy, value: slashOpen)
         .animation(M.snappy, value: items.map(\.id))
-        .overlay {
-            if dropping.v {
-                RoundedRectangle(cornerRadius: 12, style: .continuous).fill(T.accent.opacity(0.12))
-                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(T.accent, style: StrokeStyle(lineWidth: 1.5, dash: [5, 4])))
-                    .overlay(Label("Drop to attach", systemImage: "paperclip").font(T.ui(13, .medium)).foregroundStyle(T.accent))
-                    .transition(.opacity)
-                    .allowsHitTesting(false)
-            }
-        }
+        .overlay { dropOverlay }
         .animation(M.hover, value: dropping.v)
         .dropDestination(for: URL.self) { urls, _ in
             for u in urls {
@@ -869,22 +802,108 @@ struct Composer: View {
             }
             return !urls.isEmpty
         } isTargeted: { dropping.v = $0 }
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(T.raised))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(focused ? T.accent.opacity(0.6) : T.line, lineWidth: 1))
-        .shadow(color: focused ? T.accent.opacity(0.18) : .black.opacity(0.2), radius: focused ? 10 : 6, y: 2)
-        .animation(M.hover, value: focused)
+        .modifier(ComposerFrame(focused: focused))
         .onChange(of: focused) { hasFocus.v = focused }
         .onAppear {
-            text.v = model.drafts[runId] ?? ""
+            text.v = draft
             installPasteMonitor()
         }
         .onDisappear { if let m = monitor.v { NSEvent.removeMonitor(m); monitor.v = nil } }
-        .onChange(of: text.v) { if model.drafts[runId] ?? "" != text.v { model.drafts[runId] = text.v } }
-        .onChange(of: model.drafts[runId] ?? "") { if text.v != model.drafts[runId] ?? "" { text.v = model.drafts[runId] ?? "" } }
+        .onChange(of: text.v) { if draft != text.v { model.drafts[runId] = text.v } }
+        .onChange(of: draft) { if text.v != draft { text.v = draft } }
         .onChange(of: model.focusComposer) { focused = true }
-        .padding(.horizontal, 32).padding(.bottom, 20).padding(.top, 8)
-        .frame(maxWidth: 920)
-        .frame(maxWidth: .infinity)
+    }
+
+    @ViewBuilder var attachmentStrip: some View {
+        if !items.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    ForEach(items) { a in
+                        AttachmentChip(item: a) { remove(a) }
+                            .transition(.opacity.combined(with: .scale(scale: 0.85)))
+                    }
+                }
+                .padding(.horizontal, 12).padding(.top, 14).padding(.bottom, 2)
+            }
+            .transition(.opacity.combined(with: .move(edge: .bottom)))
+        }
+    }
+
+    var editor: some View {
+        ZStack(alignment: .topLeading) {
+            if text.v.isEmpty {
+                Text(live ? "Queue a follow-up for when this turn ends…" : "Reply, paste an image, or ⌘L to quote a selection…")
+                    .font(T.ui(13.5)).foregroundStyle(T.text3).padding(.horizontal, 5).padding(.top, 1)
+            }
+            TextEditor(text: $text.v)
+                .font(T.ui(13.5))
+                .scrollContentBackground(.hidden)
+                .scrollIndicators(.never)
+                .focused($focused)
+                .frame(minHeight: 44, maxHeight: 180)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 12).padding(.top, 12)
+    }
+
+    var toolbar: some View {
+        let agent = AgentKind.of(value("agent").string)
+        let options = JobOption.all.filter { $0.key != "model" && ($0.key != "effort" || agent == .claude || agent == .codex) }
+        return HStack(spacing: 4) {
+            Button { pickFiles() } label: { ComposerChip(icon: "paperclip", text: "") }
+                .buttonStyle(.plain).help("Attach images or files (or paste / drop them here)")
+            AgentPicker(runId: runId, current: agent)
+            ModelPicker(runId: runId, agent: agent, current: value(agent == .claude ? "model" : "agentModel").string)
+            ForEach(options, id: \.key) { opt in optionMenu(opt) }
+            contextToggle
+            repoButton
+            Spacer()
+            ContextMeter(run: model.openRun)
+            if live && !trimmedEmpty { stopAndSendButton }
+            Text("⌘↩").font(T.ui(11)).foregroundStyle(T.text3)
+            sendButton
+        }
+        .padding(10)
+    }
+
+    var stopAndSendButton: some View {
+        Button {
+            let t = text.v
+            sending.v = true
+            Task {
+                if await model.stopAndSend(t, to: runId), text.v == t { text.v = "" }
+                sending.v = false
+            }
+        } label: { Label("Stop & send", systemImage: "bolt.fill").font(T.ui(11.5, .medium)) }
+        .buttonStyle(LButton()).help("Interrupt the running turn and send this now (⌘↩ queues it instead)")
+    }
+
+    var sendButton: some View {
+        let empty = trimmedEmpty && items.isEmpty
+        return Button {
+            send()
+        } label: {
+            Image(systemName: "arrow.up").font(.system(size: 12, weight: .bold)).foregroundStyle(.white)
+                .frame(width: 26, height: 26)
+                .background(Circle().fill(empty ? T.text3.opacity(0.6) : T.accent))
+                .shadow(color: T.accent.opacity(empty ? 0 : 0.5), radius: 6)
+                .scaleEffect(empty ? 0.92 : 1)
+                .animation(M.pop, value: empty)
+        }
+        .buttonStyle(Pressable(scale: 0.88))
+        .keyboardShortcut(.return, modifiers: .command)
+        // Covered by the New Task sheet or ⌘K: ⌘↩ belongs to them.
+        .disabled(sending.v || model.composeOpen || model.paletteOpen)
+    }
+
+    @ViewBuilder var dropOverlay: some View {
+        if dropping.v {
+            RoundedRectangle(cornerRadius: 12, style: .continuous).fill(T.accent.opacity(0.12))
+                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(T.accent, style: StrokeStyle(lineWidth: 1.5, dash: [5, 4])))
+                .overlay(Label("Drop to attach", systemImage: "paperclip").font(T.ui(13, .medium)).foregroundStyle(T.accent))
+                .transition(.opacity)
+                .allowsHitTesting(false)
+        }
     }
 
     func value(_ key: String) -> JSON {
@@ -1284,3 +1303,18 @@ struct MarkdownText: View {
     }
 }
 
+
+private struct ComposerFrame: ViewModifier {
+    let focused: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(T.raised))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(focused ? T.accent.opacity(0.6) : T.line, lineWidth: 1))
+            .shadow(color: focused ? T.accent.opacity(0.18) : .black.opacity(0.2), radius: focused ? 10 : 6, y: 2)
+            .animation(M.hover, value: focused)
+            .padding(.horizontal, 32).padding(.bottom, 20).padding(.top, 8)
+            .frame(maxWidth: 920)
+            .frame(maxWidth: .infinity)
+    }
+}
