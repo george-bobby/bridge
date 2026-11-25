@@ -8,7 +8,9 @@ struct Sidebar: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Color.clear.frame(height: 44)
+            // Clears the traffic lights and the sidebar/back/forward row, so the
+            // first item starts just under the page header's bottom edge.
+            Color.clear.frame(height: T.panelInset + T.headerHeight - 4)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 2) {
@@ -23,7 +25,7 @@ struct Sidebar: View {
 
                     SideLabel("Sources")
                     NavItem(icon: "number", label: "Slack", route: .slack, count: model.mentions.filter { model.session(forPermalink: $0.permalink) == nil }.count)
-                    NavItem(icon: "arrow.triangle.pull", label: "Pull requests", route: .pulls, count: model.openPulls.count, hot: model.openPulls.contains(where: \.needsAttention))
+                    NavItem(icon: "arrow.triangle.pull", label: "GitHub", route: .pulls, count: model.openPulls.count, hot: model.openPulls.contains(where: \.needsAttention))
                     NavItem(icon: "circle.lefthalf.filled", label: "Linear", route: .linear, count: model.issues.filter(\.active).count)
 
                     let pinned = model.boardSessions.filter(\.pinned).sorted { $0.updatedAt > $1.updatedAt }
@@ -42,7 +44,7 @@ struct Sidebar: View {
                     }
                     ForEach(model.projects) { p in ProjectSection(project: p) }
                     if model.projects.isEmpty {
-                        Button("Add a project…") { model.addProject() }.buttonStyle(.plain).font(T.ui(13)).foregroundStyle(T.text3).padding(.horizontal, 10)
+                        ActionRow(icon: "plus.rectangle.on.folder", label: "Add a project…", keys: "⇧⌘P") { model.addProject() }
                     }
                 }
                 .padding(.horizontal, 10)
@@ -259,31 +261,41 @@ struct ProjectMenu: View {
     @Environment(AppModel.self) var model
     let project: Project
     var body: some View {
-        Button("New Task in \(project.name)…") { model.compose(in: project.id) }
-        Button("Open Orchestrator") { model.openOrchestrator(project.id) }
-        Button(model.projectFilter == project.id ? "Show All Projects" : "Show Only \(project.name)") {
-            model.projectFilter = model.projectFilter == project.id ? nil : project.id
-            if model.route != .board && model.route != .sessions { model.navigate(.sessions) }
+        Section {
+            Button { model.compose(in: project.id) } label: { Label("New Task in \(project.name)…", systemImage: "square.and.pencil") }
+            Button { model.openOrchestrator(project.id) } label: { Label("Open Orchestrator", systemImage: "sparkles") }
         }
-        Divider()
-        Button("Reveal in Finder") { NSWorkspace.shared.open(URL(fileURLWithPath: project.path)) }
-        Button("Copy Path") { copyToPasteboard(project.path) }
-        if project.id != model.defaultProject?.id {
-            Button("Make Default") { Task { await model.updateProject(project.id, ["makeDefault": true]) } }
+        Section {
+            let only = model.projectFilter == project.id
+            Button {
+                model.projectFilter = only ? nil : project.id
+                if model.route != .board && model.route != .sessions { model.navigate(.sessions) }
+            } label: { Label(only ? "Show All Projects" : "Show Only \(project.name)", systemImage: only ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle") }
+            Button { model.projectFilter = project.id; model.navigate(.sessions) } label: { Label("View Sessions", systemImage: "rectangle.stack") }
         }
-        Button("Rename…") {
-            let a = NSAlert()
-            a.messageText = "Rename \(project.name)"
-            let f = NSTextField(string: project.name)
-            f.frame = NSRect(x: 0, y: 0, width: 240, height: 24)
-            a.accessoryView = f
-            a.addButton(withTitle: "Rename")
-            a.addButton(withTitle: "Cancel")
-            if a.runModal() == .alertFirstButtonReturn, !f.stringValue.isEmpty { Task { await model.updateProject(project.id, ["name": f.stringValue]) } }
+        Section {
+            Button { NSWorkspace.shared.open(URL(fileURLWithPath: project.path)) } label: { Label("Reveal in Finder", systemImage: "folder") }
+            Button { copyToPasteboard(project.path) } label: { Label("Copy Path", systemImage: "doc.on.doc") }
         }
-        Divider()
-        Button("Remove from Bridge", role: .destructive) { Task { await model.removeProject(project.id) } }
-            .disabled(model.projects.count <= 1)
+        Section {
+            if project.id != model.defaultProject?.id {
+                Button { Task { await model.updateProject(project.id, ["makeDefault": true]) } } label: { Label("Make Default", systemImage: "star") }
+            }
+            Button {
+                let a = NSAlert()
+                a.messageText = "Rename \(project.name)"
+                let f = NSTextField(string: project.name)
+                f.frame = NSRect(x: 0, y: 0, width: 240, height: 24)
+                a.accessoryView = f
+                a.addButton(withTitle: "Rename")
+                a.addButton(withTitle: "Cancel")
+                if a.runModal() == .alertFirstButtonReturn, !f.stringValue.isEmpty { Task { await model.updateProject(project.id, ["name": f.stringValue]) } }
+            } label: { Label("Rename…", systemImage: "pencil") }
+        }
+        Section {
+            Button(role: .destructive) { Task { await model.removeProject(project.id) } } label: { Label("Remove from Bridge", systemImage: "trash") }
+                .disabled(model.projects.count <= 1)
+        }
     }
 }
 
@@ -293,13 +305,15 @@ struct ProjectFilterMenu: View {
     var body: some View {
         if model.projects.count > 1 {
             Menu {
-                Button("All projects") { model.projectFilter = nil }
+                Button { model.projectFilter = nil } label: { Label("All Projects", systemImage: model.projectFilter == nil ? "checkmark" : "square.stack.3d.up") }
                 Divider()
-                ForEach(model.projects) { p in Button(p.name) { model.projectFilter = p.id } }
+                ForEach(model.projects) { p in
+                    Button { model.projectFilter = p.id } label: { Label(p.name, systemImage: model.projectFilter == p.id ? "checkmark" : "folder") }
+                }
             } label: {
-                ComposerChip(icon: "folder", text: model.projectFilter.flatMap { model.project($0)?.name } ?? "All projects")
+                HeaderPill(icon: "folder", text: model.projectFilter.flatMap { model.project($0)?.name } ?? "All projects", active: model.projectFilter != nil, chevron: true)
             }
-            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+            .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
         }
     }
 }
