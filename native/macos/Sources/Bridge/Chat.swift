@@ -17,7 +17,7 @@ struct ChatView: View {
     var body: some View {
         VStack(spacing: 0) {
             // Side by side, each pane carries its own header and tabs; the
-            // page keeps the chat stepper and the layout controls.
+            // page keeps the layout controls.
             if model.isSplit {
                 splitHeader.transition(.opacity)
             } else {
@@ -59,31 +59,13 @@ struct ChatView: View {
                            perform: { raw, _ in model.landDrop(raw, at: target, edge: .trailing) })
     }
 
-    var stepper: some View {
-        let order = model.chatOrder
-        let index = order.firstIndex(of: id)
-        let prev = index.flatMap { $0 > 0 ? order[$0 - 1] : nil }
-        let next = index.flatMap { $0 + 1 < order.count ? order[$0 + 1] : nil }
-        return HStack(spacing: 10) {
-            HStack(spacing: 0) {
-                StepButton(icon: "chevron.up", help: "Previous chat (⌥⌘↑)" + (prev.map { ": " + title(of: $0) } ?? ""), enabled: prev != nil) { model.stepChat(-1) }
-                StepButton(icon: "chevron.down", help: "Next chat (⌥⌘↓)" + (next.map { ": " + title(of: $0) } ?? ""), enabled: next != nil) { model.stepChat(1) }
-            }
-            .padding(2)
-            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(T.raised.opacity(0.7)))
-            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(T.lineSoft, lineWidth: 1))
-            if let index { Text(verbatim: "\(index + 1) of \(order.count)").font(T.ui(11.5)).foregroundStyle(T.text3).monospacedDigit().contentTransition(.numericText()) }
-        }
-    }
-
     /// Panes side by side: every pane has its own header, so the page only
-    /// steps through chats (in the focused pane) and arranges the panes.
+    /// arranges the panes. (Chats step with ⌥⌘↑ / ⌥⌘↓; messages with the
+    /// transcript's own stepper.)
     var splitHeader: some View {
         let n = model.panes.count
         let even = Set(model.panes.filter { !$0.collapsed }.map(\.weight)).count <= 1
         return HStack(spacing: 10) {
-            stepper
-            Rectangle().fill(T.line).frame(width: 1, height: 18).padding(.horizontal, 2)
             HStack(spacing: 6) {
                 Image(systemName: n >= 3 ? "rectangle.split.3x1" : "rectangle.split.2x1").font(.system(size: 12, weight: .medium))
                 Text(verbatim: "\(n) panes").font(T.ui(13, .medium)).contentTransition(.numericText())
@@ -111,8 +93,6 @@ struct ChatView: View {
 
     var header: some View {
         HStack(spacing: 10) {
-            stepper
-            Rectangle().fill(T.line).frame(width: 1, height: 18).padding(.horizontal, 2)
             if let s = session, !s.isOrchestrator, let p = model.project(s.project), model.projects.count > 1 {
                 Button { model.projectFilter = p.id; model.navigate(.sessions) } label: { Text(p.name).font(T.ui(13.5)).foregroundStyle(T.text2) }.buttonStyle(.plain)
                 Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold)).foregroundStyle(T.text3)
@@ -340,31 +320,55 @@ struct LiveBadge: View {
 }
 
 struct Transcript: View {
+    @Environment(AppModel.self) var model
     let run: JSON
     let runId: String
+    @StateObject private var holder = NavHolder()
 
     var body: some View {
         let messages = run["messages"].array
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 26) {
-                if run.isNull {
-                    ProgressView().controlSize(.small).frame(maxWidth: .infinity).padding(40)
-                } else if messages.isEmpty {
-                    EmptyState(icon: "bubble.left", title: "Nothing here yet", detail: "Send a message below to start the session.")
+        let nav = holder.nav
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 26) {
+                    if run.isNull {
+                        ProgressView().controlSize(.small).frame(maxWidth: .infinity).padding(40)
+                    } else if messages.isEmpty {
+                        EmptyState(icon: "bubble.left", title: "Nothing here yet", detail: "Send a message below to start the session.")
+                    }
+                    ForEach(Array(messages.enumerated()), id: \.offset) { i, m in
+                        MessageView(m: m, run: run, runId: runId)
+                            .background(FlashMark(flash: nav.flash, index: i))
+                            .transition(.opacity.combined(with: .offset(y: 10)))
+                    }
+                    Color.clear.frame(height: 8).id("end")
                 }
-                ForEach(Array(messages.enumerated()), id: \.offset) { _, m in
-                    MessageView(m: m, run: run, runId: runId)
-                        .transition(.opacity.combined(with: .offset(y: 10)))
-                }
-                Color.clear.frame(height: 8).id("end")
+                .scrollTargetLayout()
+                .animation(M.snappy, value: messages.count)
+                .padding(.horizontal, 40).padding(.vertical, 28)
+                .frame(maxWidth: 920, alignment: .leading)
+                .frame(maxWidth: .infinity)
             }
-            .animation(M.snappy, value: messages.count)
-            .padding(.horizontal, 40).padding(.vertical, 28)
-            .frame(maxWidth: 920, alignment: .leading)
-            .frame(maxWidth: .infinity)
+            .defaultScrollAnchor(.bottom)
+            .scrollIndicators(.never)
+            .scrollPosition(id: Binding(get: { nav.top }, set: { v in if nav.top != v { nav.top = v } }), anchor: .top)
+            .onScrollGeometryChange(for: Bool.self) { g in
+                g.contentOffset.y + g.containerSize.height >= g.contentSize.height - 24
+            } action: { _, bottom in
+                if nav.atBottom != bottom { nav.atBottom = bottom }
+            }
+            .onScrollPhaseChange { _, phase in if phase == .interacting { nav.scrolledByHand() } }
+            .overlay(alignment: .topTrailing) {
+                MessageStepper(nav: nav, messages: messages)
+                    .padding(.top, 14).padding(.trailing, 10)
+            }
+            .onAppear {
+                nav.proxy = proxy
+                model.messageNavs[runId] = nav
+            }
+            .onDisappear { if model.messageNavs[runId] === nav { model.messageNavs[runId] = nil } }
+            .onChange(of: messages.count, initial: true) { nav.update(messages) }
         }
-        .defaultScrollAnchor(.bottom)
-        .scrollIndicators(.never)
     }
 }
 
