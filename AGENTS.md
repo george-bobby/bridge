@@ -21,3 +21,10 @@ Zero-dependency Node dashboard (no `npm install`) plus a Swift WKWebView shell.
 - Styling lives in `Theme.swift` (Linear palette, StatusIcon, PriorityIcon, Chip, HoverRow); follow it rather than adding ad-hoc colors
 - The old web UI is kept, untouched, in `legacy/`
 - "Open in cmux" goes through cmux's AppleScript dictionary: its CLI socket only accepts processes started inside cmux
+
+## Server pieces added with the native app
+
+- `lib/projects.js`: projects (data/projects.json), session-to-project inference, per-project orchestrator ids (`orchestrator` for the default, `orchestrator-<id>` otherwise)
+- `lib/envfile.js`: `.env` read/write for Settings, schema from `.env.example`; secrets are write-only
+- `lib/slack.js`: native Slack connector on a user token (`SLACK_USER_TOKEN`); `lib/demo.js` has a fixture Slack for `npm run demo`
+- `POST /api/restart` exits the server; launchd (KeepAlive) restarts it after re-rendering the skill

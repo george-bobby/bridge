@@ -97,8 +97,10 @@ enum API {
             req.httpBody = try JSONSerialization.data(withJSONObject: body)
         }
         let (data, res) = try await URLSession.shared.data(for: req)
-        let json = (try? JSONDecoder().decode(JSON.self, from: data)) ?? .null
         let status = (res as? HTTPURLResponse)?.statusCode ?? 0
+        guard let json = try? JSONDecoder().decode(JSON.self, from: data) else {
+            throw APIError(message: status >= 400 ? "HTTP \(status)" : "The server sent something that isn't Bridge's API (is another app on port \(port)?)")
+        }
         if status >= 400 || json["ok"] == .bool(false) {
             throw APIError(message: json["error"].nonEmpty ?? "HTTP \(status)")
         }
@@ -128,7 +130,11 @@ final class EventStream {
                 do {
                     var req = URLRequest(url: API.url("/api/events"))
                     req.timeoutInterval = .infinity
-                    let (bytes, _) = try await URLSession.shared.bytes(for: req)
+                    let (bytes, res) = try await URLSession.shared.bytes(for: req)
+                    let http = res as? HTTPURLResponse
+                    guard http?.statusCode == 200, (http?.value(forHTTPHeaderField: "Content-Type") ?? "").contains("event-stream") else {
+                        throw APIError(message: "no event stream at /api/events")
+                    }
                     await onConnect(true)
                     var event = "message"
                     for try await line in bytes.lines {

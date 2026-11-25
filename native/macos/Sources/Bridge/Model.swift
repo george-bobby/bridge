@@ -10,7 +10,7 @@ struct Session: Identifiable, Hashable {
     var id: String { j["runId"].string }
     var kind: String { j["kind"].nonEmpty ?? "slack" }
     var isTask: Bool { kind == "task" }
-    var isOrchestrator: Bool { kind == "orchestrator" || id == "orchestrator" }
+    var isOrchestrator: Bool { kind == "orchestrator" || id == "orchestrator" || id.hasPrefix("orchestrator-") }
     var task: JSON { j["task"] }
     var taskStatus: String { task["status"].string }
     var branch: String { task["branch"].string }
@@ -23,7 +23,9 @@ struct Session: Identifiable, Hashable {
     var prUrl: String { j["prUrl"].string }
     var linearUrl: String { j["linearUrl"].string }
     var permalink: String { j["permalink"].string }
-    var pinned: String { j["board"].string }
+    var boardPin: String { j["board"].string }
+    var pinned: Bool { j["pinned"].bool }
+    var project: String { j["project"].string }
     var cost: Double { j["cost"].double }
     var updatedAt: Double { j["updatedAt"].double > 0 ? j["updatedAt"].double : j["createdAt"].double }
     var createdAt: Double { j["createdAt"].double }
@@ -59,6 +61,25 @@ struct Session: Identifiable, Hashable {
         t = t.replacingOccurrences(of: #"(\*\*|__|`)"#, with: "", options: .regularExpression)
         return t.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression).trimmingCharacters(in: .whitespaces)
     }
+}
+
+struct Project: Identifiable, Hashable {
+    let j: JSON
+    var id: String { j["id"].string }
+    var name: String { j["name"].nonEmpty ?? id }
+    var path: String { j["path"].string }
+}
+
+struct Mention: Identifiable, Hashable {
+    let j: JSON
+    var id: String { j["ts"].string + j["channelId"].string }
+    var who: String { j["who"].string }
+    var avatar: String { j["avatar"].string }
+    var channel: String { j["channel"].string }
+    var text: String { j["text"].string }
+    var permalink: String { j["permalink"].string }
+    var threadTs: String { j["threadTs"].string }
+    var ts: Double { j["ts"].double }
 }
 
 struct PullRequest: Identifiable, Hashable {
@@ -177,13 +198,14 @@ let statusLabels: [String: String] = [
 // MARK: - Routes
 
 enum Route: Hashable {
-    case home, inbox, board, sessions, pulls, linear, memory
+    case home, inbox, slack, board, sessions, pulls, linear, memory
     case session(String)
 
     var title: String {
         switch self {
         case .home: return "Home"
         case .inbox: return "Inbox"
+        case .slack: return "Slack"
         case .board: return "Board"
         case .sessions: return "Sessions"
         case .pulls: return "Pull requests"
@@ -209,6 +231,16 @@ final class AppModel {
     var awaiting: Set<String> = []
     var defaultWorkdir = ""
     var terminalName = "Terminal"
+    var bridgeRoot = ""
+    var projects: [Project] = []
+    /// The project the Board and Sessions show; nil is every project.
+    var projectFilter: String? = nil
+    var composeProject: String? = nil
+
+    var slack: JSON = .null
+    var mentions: [Mention] = []
+    var slackThread: JSON = .null
+    var slackSelected = ""
     var sessions: [Session] = []
     var inbox: JSON = .null
 
@@ -231,6 +263,8 @@ final class AppModel {
     private let events = EventStream()
     private var refreshPending = false
     private var startedServer = false
+    private var lastStartAttempt = Date.distantPast
+    var serverError = ""
 
     // MARK: derived
 
@@ -267,14 +301,199 @@ final class AppModel {
         if isAwaiting(s) || needsStatuses.contains(st) { return .needs }
         if isLive(s) || st == "working" || st == "queued" { return .doing }
         if st == "cleaned" || st == "stopped" { return .done }
-        if !s.prUrl.isEmpty { return (!pulls.isNull && p == nil) ? .done : .review }
+        // A PR missing from the feed is unknown, not closed: the feed holds only
+        // your PRs and reviews asked of you, so stay in review until it's seen.
+        // Past the feed's 14-day merged window, an unseen PR is taken as landed.
+        if !s.prUrl.isEmpty { return Date().timeIntervalSince1970 - s.updatedAt > 14 * 86400 ? .done : .review }
         if st == "ready-for-review" || st == "pushed-follow-up" { return .review }
         if ["acted", "skipped", "error"].contains(s.action) { return .done }
         if !s.worked || s.j["messages"].int == 0 { return .backlog }
         return .needs
     }
 
-    func column(of s: Session) -> Column { Column(rawValue: s.pinned) ?? autoColumn(s) }
+    func column(of s: Session) -> Column { Column(rawValue: s.boardPin) ?? autoColumn(s) }
+
+    // MARK: projects
+
+    var defaultProject: Project? { projects.first }
+    func project(_ id: String) -> Project? { projects.first { $0.id == id } }
+    func inFilter(_ s: Session) -> Bool { projectFilter == nil || s.project == projectFilter }
+    func sessions(in projectId: String) -> [Session] { boardSessions.filter { $0.project == projectId } }
+    func orchestratorId(_ projectId: String?) -> String {
+        guard let p = projectId, p != defaultProject?.id else { return "orchestrator" }
+        return "orchestrator-\(p)"
+    }
+
+    func openOrchestrator(_ projectId: String?) {
+        let pid = projectId ?? defaultProject?.id ?? ""
+        let id = orchestratorId(pid)
+        if sessions.contains(where: { $0.id == id }) || pid.isEmpty { return open(id) }
+        Task {
+            await act {
+                let out = try await API.post("/api/projects/\(pid)/orchestrator")
+                self.open(out["runId"].string)
+            }
+        }
+    }
+
+    func addProject() {
+        let p = NSOpenPanel()
+        p.canChooseDirectories = true
+        p.canChooseFiles = false
+        p.prompt = "Add project"
+        p.message = "Choose a git checkout"
+        guard p.runModal() == .OK, let u = p.url else { return }
+        Task { await addProject(path: u.path) }
+    }
+
+    @discardableResult
+    func addProject(path: String, name: String = "") async -> String? {
+        var id: String? = nil
+        await act {
+            var body: [String: Any] = ["path": path]
+            if !name.isEmpty { body["name"] = name }
+            let out = try await API.post("/api/projects", body)
+            id = out["project"]["id"].string
+            self.say("Added \(out["project"]["name"].string)")
+        }
+        return id
+    }
+
+    func updateProject(_ id: String, _ patch: [String: Any]) async { await act { try await API.post("/api/projects/\(id)", patch) } }
+    func removeProject(_ id: String) async {
+        await act { try await API.delete("/api/projects/\(id)") }
+        if projectFilter == id { projectFilter = nil }
+    }
+
+    func setProject(_ sessionId: String, _ projectId: String) async {
+        if let i = sessions.firstIndex(where: { $0.id == sessionId }) {
+            var o = sessions[i].j.object
+            o["project"] = .str(projectId)
+            sessions[i] = Session(j: .obj(o))
+        }
+        await act { try await API.post("/api/runs/\(API.q(sessionId))/project", ["project": projectId]) }
+    }
+
+    func setPinned(_ id: String, _ on: Bool) async {
+        if let i = sessions.firstIndex(where: { $0.id == id }) {
+            var o = sessions[i].j.object
+            o["pinned"] = .bool(on)
+            sessions[i] = Session(j: .obj(o))
+        }
+        await act { try await API.post("/api/runs/\(API.q(id))/pin", ["pinned": on]) }
+    }
+
+    func compose(in projectId: String?) {
+        composeProject = projectId
+        composeOpen = true
+    }
+
+    // MARK: Slack
+
+    func loadSlack() async {
+        slack = (try? await API.get("/api/slack/status")) ?? .null
+        guard slack["configured"].bool else { return }
+        do { mentions = try await API.get("/api/slack/mentions")["mentions"].array.map(Mention.init) } catch { say(error.localizedDescription, bad: true) }
+    }
+
+    func openThread(_ permalink: String) {
+        slackSelected = permalink
+        slackThread = .null
+        route = .slack
+        Task {
+            do { slackThread = try await API.get("/api/slack/thread?url=\(API.q(permalink))") } catch { say(error.localizedDescription, bad: true) }
+        }
+    }
+
+    func replyInThread(_ text: String) async -> Bool {
+        var ok = false
+        let link = slackSelected
+        await act {
+            try await API.post("/api/slack/reply", ["url": link, "text": text])
+            ok = true
+            self.say("Replied in the thread")
+            self.slackThread = try await API.get("/api/slack/thread?url=\(API.q(link))")
+        }
+        return ok
+    }
+
+    func session(forPermalink link: String) -> Session? {
+        var ts = ""
+        if let r = link.range(of: #"thread_ts=\d+\.\d+"#, options: .regularExpression) {
+            ts = String(link[r].dropFirst(10))
+        } else if let r = link.range(of: #"/p\d{16}"#, options: .regularExpression) {
+            let d = String(link[r].dropFirst(2))
+            ts = d.prefix(10) + "." + d.suffix(6)
+        }
+        return ts.isEmpty ? nil : sessions.first { $0.id == ts }
+    }
+
+    func runPipeline(_ permalink: String, project: String? = nil) async {
+        await act {
+            var body: [String: Any] = ["url": permalink, "start": true]
+            if let project { body["project"] = project }
+            let out = try await API.post("/api/runs", body)
+            self.open(out["runId"].string)
+        }
+    }
+
+    // MARK: environment + self-development
+
+    func saveEnv(_ values: [String: String], restart: Bool) async -> Bool {
+        var ok = false
+        await act {
+            try await API.post("/api/env", ["values": values])
+            if restart {
+                try? await API.post("/api/restart")
+                self.say("Saved. The server is restarting")
+            } else {
+                self.say("Saved to .env. Restart the server to apply it")
+            }
+            ok = true
+        }
+        return ok
+    }
+
+    func restartServer() async {
+        _ = try? await API.post("/api/restart")
+        say("The server is restarting")
+    }
+
+    var building = false
+    var buildLog = ""
+
+    /// Rebuild Bridge.app from its own source, then swap it in and relaunch.
+    func rebuildApp() {
+        guard !bridgeRoot.isEmpty, !building else { return }
+        building = true
+        buildLog = "Building…"
+        let root = bridgeRoot
+        Task.detached {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/bin/zsh")
+            p.arguments = ["-lc", "cd \"$BRIDGE_ROOT\" && ./scripts/build-app.sh 2>&1"]
+            p.environment = ProcessInfo.processInfo.environment.merging(["BRIDGE_ROOT": root]) { $1 }
+            let pipe = Pipe()
+            p.standardOutput = pipe
+            p.standardError = pipe
+            try? p.run()
+            let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            p.waitUntilExit()
+            let ok = p.terminationStatus == 0
+            await MainActor.run {
+                self.building = false
+                self.buildLog = out.split(separator: "\n").suffix(12).joined(separator: "\n")
+                guard ok else { return self.say("The build failed: see the log in Settings", bad: true) }
+                let swap = Process()
+                swap.executableURL = URL(fileURLWithPath: "/bin/sh")
+                swap.arguments = ["-c", "sleep 1; rm -rf \"$HOME/Applications/Bridge.app\" && mkdir -p \"$HOME/Applications\" && cp -R \"$BRIDGE_ROOT/dist/Bridge.app\" \"$HOME/Applications/\" && open \"$HOME/Applications/Bridge.app\""]
+                swap.environment = ProcessInfo.processInfo.environment.merging(["BRIDGE_ROOT": root]) { $1 }
+                try? swap.run()
+                NSApp.terminate(nil)
+            }
+        }
+    }
+
 
     func session(forPR p: PullRequest) -> Session? {
         let n = norm(p.url)
@@ -307,9 +526,12 @@ final class AppModel {
             self.connected = up
             if up {
                 self.everConnected = true
+                self.startedServer = false
+                self.serverError = ""
                 Task { await self.loadAll() }
-            } else if !self.startedServer {
+            } else if !self.startedServer && Date().timeIntervalSince(self.lastStartAttempt) > 15 {
                 self.startedServer = true
+                self.lastStartAttempt = Date()
                 self.startServer()
             }
         })
@@ -336,11 +558,26 @@ final class AppModel {
         p.environment = ProcessInfo.processInfo.environment.merging(["BRIDGE_ROOT": API.root]) { $1 }
         p.standardOutput = FileHandle.nullDevice
         p.standardError = FileHandle.nullDevice
-        try? p.run()
+        // A failed start allows another attempt (after a pause) instead of
+        // leaving the app on "Starting Bridge…" for good.
+        p.terminationHandler = { proc in
+            let status = proc.terminationStatus
+            Task { @MainActor in
+                if status != 0 {
+                    self.startedServer = false
+                    self.serverError = "npm start failed (exit \(status)). See \(API.root)/logs/dashboard.err.log"
+                }
+            }
+        }
+        do { try p.run() } catch {
+            startedServer = false
+            serverError = "Couldn't run npm start: \(error.localizedDescription)"
+        }
     }
 
     func loadAll() async {
         if let s = try? await API.get("/api/state") { applyState(s) }
+        Task { await loadSlack() }
         if let r = try? await API.get("/api/runs") { sessions = r["runs"].array.map(Session.init) }
         if let i = try? await API.get("/api/inbox") { inbox = i }
         await loadSources(refresh: false)
@@ -379,6 +616,8 @@ final class AppModel {
         awaiting = Set(s["jobs"]["awaiting"].array.map(\.string))
         defaultWorkdir = s["meta"]["workdir"].string
         terminalName = s["meta"]["terminal"].nonEmpty ?? "Terminal"
+        bridgeRoot = s["meta"]["root"].string
+        if !s["meta"]["projects"].isNull { projects = s["meta"]["projects"].array.map(Project.init) }
     }
 
     private func handle(_ name: String, _ d: JSON) {
@@ -389,6 +628,7 @@ final class AppModel {
             running = Set(d["running"].array.map(\.string))
             awaiting = Set(d["awaiting"].array.map(\.string))
         case "inbox": inbox = d
+        case "projects": projects = d["projects"].array.map(Project.init)
         case "message", "delta", "run-updated":
             if d["runId"].string == openId { scheduleRefresh() }
         case "ask":
@@ -428,25 +668,31 @@ final class AppModel {
         }
     }
 
+    /// Every result is checked against the chat that asked for it: switching
+    /// chats mid-request must never show one chat's run or report in another.
     func refreshOpen() async {
         let id = openId
-        guard !id.isEmpty else { return }
-        if let r = try? await API.get("/api/runs/\(API.q(id))"), id == openId { openRun = r["run"] }
-        let kind = openRun["kind"].string
-        if kind == "task" || kind == "slack" || kind.isEmpty {
-            openTask = (try? await API.get("/api/tasks/\(API.q(id))")) ?? .null
-        }
+        guard !id.isEmpty, let r = try? await API.get("/api/runs/\(API.q(id))"), id == openId else { return }
+        openRun = r["run"]
+        let kind = r["run"]["kind"].string
+        guard kind == "task" || kind == "slack" || kind.isEmpty else { return }
+        let task = (try? await API.get("/api/tasks/\(API.q(id))")) ?? .null
+        if id == openId { openTask = task }
     }
 
-    func send(_ text: String, to id: String) async {
+    @discardableResult
+    func send(_ text: String, to id: String) async -> Bool {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !t.isEmpty else { return }
+        guard !t.isEmpty else { return false }
         let live = sessions.first { $0.id == id }.map(isLive) ?? false
+        var ok = false
         await act {
-            let out = try await API.post("/api/runs/\(API.q(id))/followup", ["text": t, "queue": live || id == "orchestrator"])
+            let out = try await API.post("/api/runs/\(API.q(id))/followup", ["text": t, "queue": live || id.hasPrefix("orchestrator")])
+            ok = true
             if out["queued"].bool { self.say("Queued: it's mid-turn.") }
         }
         await refreshOpen()
+        return ok
     }
 
     func answer(run: String, askId: String, behavior: String, message: String = "", answers: [String: String]? = nil) async {
@@ -500,13 +746,16 @@ final class AppModel {
     /// The one box work starts from: a Slack thread link opens a chat and runs
     /// the pipeline; anything else becomes a task, written up either by the
     /// orchestrator or handed straight to a worker.
-    func create(_ text: String, direct: Bool, repo: String) async -> Bool {
+    func create(_ text: String, direct: Bool, project: String?) async -> Bool {
+        let repo = project.flatMap { self.project($0)?.path } ?? ""
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return false }
         var ok = false
         await act {
             if t.range(of: #"^https://[^/]*slack\.com/archives/"#, options: .regularExpression) != nil {
-                let out = try await API.post("/api/runs", ["url": t, "start": true])
+                var body: [String: Any] = ["url": t, "start": true]
+                if let project { body["project"] = project }
+                let out = try await API.post("/api/runs", body)
                 self.open(out["runId"].string)
             } else if direct {
                 var body: [String: Any] = ["brief": t]
@@ -515,8 +764,12 @@ final class AppModel {
                 self.say(out["state"].string == "queued" ? "Queued: every worker slot is busy." : "Worker started on \(out["branch"].string)")
                 self.open(out["taskId"].string)
             } else {
-                try await API.post("/api/runs/orchestrator/followup", ["text": t, "queue": true])
-                self.open("orchestrator")
+                var orch = self.orchestratorId(project)
+                if !self.sessions.contains(where: { $0.id == orch }), let pid = project {
+                    orch = try await API.post("/api/projects/\(pid)/orchestrator")["runId"].string
+                }
+                try await API.post("/api/runs/\(API.q(orch))/followup", ["text": t, "queue": true])
+                self.open(orch)
             }
             ok = true
         }

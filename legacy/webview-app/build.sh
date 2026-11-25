@@ -18,7 +18,7 @@ PORT="$(node -e 'process.stdout.write(String(require(process.argv[1]).port))' "$
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
-echo "compiling native/macos/Bridge.swift"
+echo "compiling legacy/webview-app/Bridge.swift"
 swiftc -O -swift-version 5 "$PROJ/legacy/webview-app/Bridge.swift" -o "$APP/Contents/MacOS/$NAME" \
   -framework Cocoa -framework WebKit -framework UserNotifications
 

@@ -37,7 +37,8 @@ struct ChatView: View {
             }
             Spacer()
             if let s = session {
-                if !s.permalink.isEmpty { IconButton(icon: "number", help: "Open the Slack thread") { openURL(s.permalink) } }
+                if !s.permalink.isEmpty { IconButton(icon: "number", help: "Read the Slack thread") { model.openThread(s.permalink) } }
+                IconButton(icon: s.pinned ? "star.fill" : "star", help: s.pinned ? "Unpin" : "Pin to the sidebar") { Task { await model.setPinned(s.id, !s.pinned) } }
                 if !s.linearUrl.isEmpty { IconButton(icon: "circle.lefthalf.filled", help: "Open in Linear") { openURL(s.linearUrl) } }
                 if !s.prUrl.isEmpty { IconButton(icon: "arrow.triangle.pull", help: "Open the pull request") { openURL(s.prUrl) } }
                 IconButton(icon: "terminal", help: "Continue this session in \(model.terminalName)") { Task { await model.terminal(id) } }
@@ -411,6 +412,9 @@ struct AskCard: View {
             ForEach(Array(qs.enumerated()), id: \.offset) { _, q in
                 let question = q["question"].string
                 let multi = q["multiSelect"].bool
+                // With several questions, every pick is held until Send, so one
+                // click can't submit half the answers.
+                let hold = multi || qs.count > 1
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 8) {
                         if !q["header"].string.isEmpty { Chip(text: q["header"].string, tint: T.accent) }
@@ -424,12 +428,14 @@ struct AskCard: View {
                                 var set = picked.v[question] ?? []
                                 if set.contains(label) { set.remove(label) } else { set.insert(label) }
                                 picked.v[question] = set
+                            } else if hold {
+                                picked.v[question] = [label]
                             } else {
                                 send([question: label])
                             }
                         } label: {
                             HStack(alignment: .top, spacing: 10) {
-                                Image(systemName: multi ? (on ? "checkmark.square.fill" : "square") : "circle")
+                                Image(systemName: multi ? (on ? "checkmark.square.fill" : "square") : (on ? "largecircle.fill.circle" : "circle"))
                                     .font(.system(size: 12)).foregroundStyle(on ? T.accent : T.text3).padding(.top, 1)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(label).font(T.ui(12.5, .medium)).foregroundStyle(T.text)
@@ -454,6 +460,9 @@ struct AskCard: View {
     }
 
     func sendTyped(_ qs: [JSON]) {
+        if qs.count > 1, let missing = qs.first(where: { (picked.v[$0["question"].string] ?? []).isEmpty }), note.v.trimmingCharacters(in: .whitespaces).isEmpty {
+            return model.say("Answer \"\(missing["question"].string.prefix(60))\" too", bad: true)
+        }
         var answers: [String: String] = [:]
         for q in qs {
             let question = q["question"].string
@@ -530,7 +539,8 @@ struct Composer: View {
                 }
                 .buttonStyle(.plain)
                 .keyboardShortcut(.return, modifiers: .command)
-                .disabled(sending.v)
+                // Covered by the New Task sheet or ⌘K: ⌘↩ belongs to them.
+                .disabled(sending.v || model.composeOpen || model.paletteOpen)
             }
             .padding(8)
         }
@@ -585,12 +595,16 @@ struct Composer: View {
         .buttonStyle(.plain).help(dir.isEmpty ? "Working directory" : dir)
     }
 
+    /// The draft is cleared only once the server has taken it, and only if
+    /// you haven't typed something new in the meantime.
     func send() {
         let t = text.v
         guard !t.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        text.v = ""
         sending.v = true
-        Task { await model.send(t, to: runId); sending.v = false }
+        Task {
+            if await model.send(t, to: runId), text.v == t { text.v = "" }
+            sending.v = false
+        }
     }
 }
 
@@ -632,12 +646,18 @@ struct PropertiesPanel: View {
                                 Divider()
                                 Button("Automatic") { Task { await model.move(id, to: nil) } }
                             } label: {
-                                Text(model.column(of: s).label + (s.pinned.isEmpty ? "" : " · pinned")).font(T.ui(12.5)).foregroundStyle(T.text)
+                                Text(model.column(of: s).label + (s.boardPin.isEmpty ? "" : " · pinned")).font(T.ui(12.5)).foregroundStyle(T.text)
                             }
                             .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                         }
                         if let st = statusLabels[s.taskStatus] { PropRow(label: "Worker") { Text(st).font(T.ui(12.5)) } }
                         PropRow(label: "Source") { Text(s.isTask ? "Task" : "Slack thread").font(T.ui(12.5)) }
+                        PropRow(label: "Project") {
+                            Menu {
+                                ForEach(model.projects) { p in Button(p.name) { Task { await model.setProject(id, p.id) } } }
+                            } label: { Text(model.project(s.project)?.name ?? "—").font(T.ui(12.5)).foregroundStyle(T.text) }
+                            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                        }
                         if !s.channel.isEmpty { PropRow(label: "Channel") { Text(s.channel).font(T.ui(12.5)) } }
                         if !s.branch.isEmpty {
                             PropRow(label: "Branch") {

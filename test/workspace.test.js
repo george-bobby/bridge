@@ -113,4 +113,14 @@ test(".worktreeinclude copies the listed untracked files into a new worktree", a
   assert.strictEqual(fs.readFileSync(path.join(wt, ".env"), "utf8"), "A=1\n");
   assert.ok(fs.existsSync(path.join(wt, "certs", "dev.pem")));
   assert.ok(!fs.existsSync(path.join(wt, "build")), "only what .worktreeinclude lists");
+
+  // A link in the worktree (say a tracked symlink) is never written through.
+  const outside = path.join(tmp, "outside");
+  fs.mkdirSync(outside);
+  fs.rmSync(path.join(wt, ".env"));
+  fs.symlinkSync(path.join(outside, "stolen"), path.join(wt, ".env"));
+  fs.rmSync(path.join(wt, "certs"), { recursive: true });
+  fs.symlinkSync(outside, path.join(wt, "certs"));
+  assert.strictEqual(await tasks.copyIncludes(repo, wt), 0);
+  assert.deepStrictEqual(fs.readdirSync(outside), []);
 });

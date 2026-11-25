@@ -27,9 +27,16 @@ the questions workers are waiting on.
   Linear issues with sub-issues as a tree; each linked to the session working
   on it. Start a worker on an issue, or ask Claude to fix CI or resolve review
   comments, in one click.
-- **Slack threads to PRs.** Paste a thread link: a session reads it,
-  root-causes it, drafts a Linear ticket, builds, opens a PR, waits for review
-  bots and drafts the reply.
+- **Several projects at once.** Each repo is a project in the sidebar with its
+  own sessions and its own orchestrator. Drag a session onto a project to move
+  it; pin the ones you keep coming back to.
+- **Slack, natively.** Connect your own account with a user token (no bot, no
+  channel installs) to see every thread you're mentioned in, read it, reply
+  as yourself, or hand it to Claude: a session reads it, root-causes it,
+  drafts a Linear ticket, builds, opens a PR and drafts the reply.
+- **Configured and developed from the app.** `.env` is editable in Settings,
+  and Bridge can work on its own source: add it as a project, start sessions on
+  it, then rebuild and relaunch the app from Settings.
 - **You stay in control.** Workers run with a guard: destructive git, Slack
   posts, ticket and PR writes come to you as exact-payload Allow/Deny cards.
   Nothing runs on a timer.
@@ -42,7 +49,8 @@ the questions workers are waiting on.
 | --- | --- |
 | ![Home](docs/screenshots/home.png) **Home**: what's running, what needs you, PRs and issues | ![Session](docs/screenshots/chat.png) **Session**: the transcript, a question Claude is waiting on, the composer |
 | ![Linear](docs/screenshots/linear.png) **Linear**: your issues with sub-issues as a tree | ![Pull requests](docs/screenshots/pulls.png) **Pull requests**: what needs attention first |
-| ![Command menu](docs/screenshots/palette.png) **⌘K**: commands and full-text search | ![Inbox](docs/screenshots/inbox.png) **Inbox**: workers' questions, to-dos, activity |
+| ![Slack](docs/screenshots/slack.png) **Slack**: your mentions and their threads, read and replied to in place | ![Inbox](docs/screenshots/inbox.png) **Inbox**: workers' questions, to-dos, activity |
+| ![Command menu](docs/screenshots/palette.png) **⌘K**: commands and full-text search | ![Sessions](docs/screenshots/sessions.png) **Sessions**: every session, grouped by status |
 
 Every screenshot is the built-in demo (`npm run demo`): a fictional team, no
 real data.
@@ -53,14 +61,14 @@ real data.
 - Node 18+
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code), signed in. For Slack threads, its Slack and Linear connectors.
 - [`gh`](https://cli.github.com), signed in, for the PR views
-- Optional: a Linear personal API key for the Linear views; [cmux](https://cmux.com), iTerm or Terminal to continue a session by hand
+- Optional: a Linear personal API key for the Linear views; a Slack user token for the Slack view ([setup](docs/slack.md)); [cmux](https://cmux.com), iTerm or Terminal to continue a session by hand
 
 ## Quick start
 
 ```bash
 git clone https://github.com/george-bobby/bridge.git
 cd bridge
-cp .env.example .env      # fill it in: every key is described there
+cp .env.example .env      # fill it in (or later, in the app: Settings → Environment)
 npm start                 # the server, in the background under launchd
 npm run app               # build Bridge.app, install it to ~/Applications, open it
 ```
@@ -147,6 +155,7 @@ keyboard first. Everything is reachable from `⌘K`.
 
 | | |
 | --- | --- |
+| **Sidebar** | Pinned sessions, then your **projects**: each repo with its orchestrator and live sessions. Drag a session (from the sidebar, the Board or Sessions) onto a project to move it; right-click a project to start a task in it, filter to it, rename it or make it the default |
 | **Home** `⌘1` | Running, needs-you, open PRs, reviews for you, issues in progress, spend; then what needs you, what's running, PRs needing attention, your Linear issues, dev servers and a spend chart |
 | **Inbox** `⌘2` | Workers' questions and action requests (answer, approve, defer to tomorrow, dismiss), to-dos, workers, activity; normal / quiet / away |
 | **Board** `⌘3` | Every session as a card in Backlog, In Progress, Needs You, In Review, Done. Cards follow their session (running, blocked, PR open, PR merged); drag one to pin it, click the pin to release it |
@@ -154,6 +163,8 @@ keyboard first. Everything is reachable from `⌘K`.
 | **Pull requests** `⌘5` | Needs attention (failing checks, changes requested, conflicts), review requested, open, merged in the last 14 days; right-click for Fix CI, Resolve comments, Fix conflicts or Review with Claude |
 | **Linear** `⌘6` | Your issues by state, with **sub-issues** as a tree under their parent (a done/total ring on the parent, each child with its own status, PR and assignee). **Start** runs a Claude worker on the issue in its own worktree, on Linear's branch name |
 | **Memory** `⌘7` | The target repo's Claude Code memory, editable (`⌘S`) |
+| **Slack** `⌘8` | Messages that mention you, newest first. Open one to read the whole thread, reply in it as yourself, or **Hand to Claude** to run the pipeline on it in a project you pick |
+| **Settings** `⌘,` | Pipeline gates, session defaults, harness caps; **Environment** edits `.env` (secrets are write-only) and restarts the server to apply it; **Develop** adds Bridge's own repo as a project and rebuilds and relaunches the app |
 
 A session opens as a chat with Claude's transcript (thinking, tool calls with
 their output, answers), permission, question and plan cards you answer in place, a
@@ -174,14 +185,25 @@ what's running and waiting, native notifications, and a Dock badge.
 like) are matched to the worktree they run in and shown on the session and
 the PR.
 
+**Slack connector.** A user token (`xoxp-…`) from a small Slack app you
+install to yourself once ([guide](docs/slack.md),
+[manifest](docs/slack-app-manifest.json)). It acts as you: nothing to invite,
+nothing to add to channels. Without it, Slack still works through Claude Code's
+connector inside sessions; the token adds Bridge's own Slack view.
+
+**Projects.** Stored in `data/projects.json`; the first is seeded from
+`TARGET_REPO`. A session belongs to the project you moved it to, else the one
+whose checkout or worktree it runs in. A worker's outcome is relayed to its own
+project's orchestrator.
+
 **`.worktreeinclude`.** A file at the target repo's root, in .gitignore
 syntax, listing untracked files a new worktree should get from the main
 checkout (`.env`, local certs).
 
 The app never owns the server: it runs under launchd, so quitting the app
 never stops a worker. If the server isn't running, the app starts it with
-`npm start`. `LINEAR_API_KEY` stays on the server and is removed from the
-environment sessions inherit.
+`npm start`. `LINEAR_API_KEY` and `SLACK_USER_TOKEN` stay on the server and
+are removed from the environment sessions inherit.
 
 ## Safety
 

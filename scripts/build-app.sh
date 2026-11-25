@@ -19,7 +19,9 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 echo "building native/macos (swift build -c release)"
-(cd "$PROJ/native/macos" && swift build -c release 2>&1 | grep -E "error|warning: |Compiling|Build complete" || true)
+# pipefail (set above) makes a failed compile fatal here, so a stale binary
+# from an earlier build is never packaged.
+(cd "$PROJ/native/macos" && swift build -c release 2>&1 | grep -E "error|warning: |Compiling|Build complete")
 BIN="$(cd "$PROJ/native/macos" && swift build -c release --show-bin-path)/Bridge"
 [[ -x "$BIN" ]] || { echo "error: build failed" >&2; exit 1; }
 cp "$BIN" "$APP/Contents/MacOS/$NAME"
