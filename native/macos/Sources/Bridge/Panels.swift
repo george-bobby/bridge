@@ -293,7 +293,6 @@ struct SettingsView: View {
                             ForEach(opt.choices, id: \.0) { Text($0.1).tag($0.0) }
                         }
                     }
-                    Toggle("1M context", isOn: Binding(get: { model.config["followup"]["context1m"].bool }, set: { v in save(["followup": ["context1m": v]]) }))
                     LabeledContent("Repository") {
                         HStack {
                             Text(model.config["followup"]["workdir"].nonEmpty ?? "Not set").foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
@@ -484,87 +483,4 @@ struct CommandPalette: View {
 
 // MARK: - New task
 
-struct ComposeSheet: View {
-    @Environment(AppModel.self) var model
-    @StateObject private var text = Box("")
-    @StateObject private var direct = Box(false)
-    @StateObject private var project = Box("")
-    @StateObject private var busy = Box(false)
-    @FocusState private var focused: Bool
-
-    var isSlack: Bool { text.v.trimmingCharacters(in: .whitespaces).range(of: #"^https://[^/]*slack\.com/archives/"#, options: .regularExpression) != nil }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: 8) {
-                    Logo(size: 16)
-                    Text(verbatim: "New task" + (model.project(project.v).map { " in \($0.name)" } ?? "")).font(T.ui(13, .medium))
-                    Spacer()
-                    IconButton(icon: "xmark", help: "Close (Esc)") { model.composeOpen = false }
-                }
-                .padding(.horizontal, 16).padding(.top, 14)
-                ZStack(alignment: .topLeading) {
-                    if text.v.isEmpty {
-                        Text("Describe what you want built, or paste a Slack thread link…").font(T.ui(15)).foregroundStyle(T.text3).padding(.horizontal, 5)
-                    }
-                    TextEditor(text: $text.v).font(T.ui(15)).scrollContentBackground(.hidden).focused($focused)
-                }
-                .frame(height: 150)
-                .padding(.horizontal, 12).padding(.top, 12)
-                Hairline()
-                HStack(spacing: 8) {
-                    if model.projects.count > 0 {
-                        Menu {
-                            ForEach(model.projects) { p in Button(p.name) { project.v = p.id } }
-                            Divider()
-                            Button("Add Project…") { model.addProject() }
-                        } label: {
-                            ComposerChip(icon: "folder", text: model.project(project.v)?.name ?? "Project")
-                        }
-                        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-                    }
-                    if isSlack {
-                        Chip(text: "Slack thread: runs the pipeline", icon: "number", tint: T.slack)
-                    } else {
-                        Picker("", selection: $direct.v) {
-                            Text("Orchestrator writes the brief").tag(false)
-                            Text("Start a worker now").tag(true)
-                        }
-                        .pickerStyle(.segmented).controlSize(.small).fixedSize()
-                        .transition(.opacity)
-                    }
-                    Spacer()
-                    Button {
-                        busy.v = true
-                        Task {
-                            if await model.create(text.v, direct: direct.v, project: project.v.isEmpty ? nil : project.v) { model.composeOpen = false }
-                            busy.v = false
-                        }
-                    } label: {
-                        HStack(spacing: 6) {
-                            if busy.v { ProgressView().controlSize(.mini) }
-                            Text(isSlack ? "Run" : direct.v ? "Start worker" : "Send")
-                            Text("⌘↩").opacity(0.6)
-                        }
-                    }
-                    .buttonStyle(LButton(primary: true))
-                    .keyboardShortcut(.return, modifiers: .command)
-                    .disabled(busy.v || text.v.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-                .padding(12)
-            }
-            .frame(width: 680)
-            .floatingPanel()
-            .padding(.top, 110)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .onAppear {
-            focused = true
-            text.v = model.composeText
-            model.composeText = ""
-            project.v = model.composeProject ?? model.projectFilter ?? model.defaultProject?.id ?? ""
-        }
-        .onKeyPress(.escape) { model.composeOpen = false; return .handled }
-    }
-}
+// ComposeSheet lives in Composer.swift.
