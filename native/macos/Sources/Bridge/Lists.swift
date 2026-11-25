@@ -90,7 +90,7 @@ struct SessionMenu: View {
         if !session.prUrl.isEmpty { Button("Open Pull Request") { openURL(session.prUrl) } }
         if !session.linearUrl.isEmpty { Button("Open in Linear") { openURL(session.linearUrl) } }
         if !session.permalink.isEmpty { Button("Open Slack Thread") { openURL(session.permalink) } }
-        Button("Open in Terminal") { Task { await model.terminal(session.id) } }
+        Button("Open in \(model.terminalName)") { Task { await model.terminal(session.id) } }
         if model.isLive(session) { Button("Stop") { Task { await model.stop(session.id) } } }
         Divider()
         Button("Delete", role: .destructive) { Task { await model.delete(session.id) } }.disabled(model.isLive(session))
@@ -388,12 +388,16 @@ struct BoardView: View {
                 LField(placeholder: "Filter", text: $query.v).frame(width: 200)
                 IconButton(icon: "plus", help: "New task (⌘N)") { model.composeOpen = true }
             }
-            ScrollView(.horizontal) {
-                HStack(alignment: .top, spacing: 10) {
-                    ForEach(Column.allCases) { c in BoardColumn(column: c, sessions: sessions(in: c)) }
+            GeometryReader { g in
+                // Columns share the width, down to 210pt each; below that the board scrolls.
+                let width = max(210, (g.size.width - 24 - 40) / 5)
+                ScrollView(.horizontal) {
+                    HStack(alignment: .top, spacing: 10) {
+                        ForEach(Column.allCases) { c in BoardColumn(column: c, sessions: sessions(in: c)).frame(width: width) }
+                    }
+                    .padding(12)
+                    .frame(height: g.size.height, alignment: .top)
                 }
-                .padding(12)
-                .frame(maxHeight: .infinity, alignment: .top)
             }
         }
     }
@@ -440,7 +444,6 @@ struct BoardColumn: View {
                 .padding(.horizontal, 4).padding(.bottom, 12)
             }
         }
-        .frame(width: 292)
         .frame(maxHeight: .infinity, alignment: .top)
         .background(RoundedRectangle(cornerRadius: 10).fill(targeted.v ? T.accentSoft : T.raised.opacity(0.28)))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(targeted.v ? T.accent.opacity(0.6) : Color.clear, lineWidth: 1))

@@ -1,8 +1,8 @@
 # Bridge
 
-A local command center for Claude Code: a native macOS app (or a browser tab)
-where every session, PR, Linear issue and Slack thread you have in flight sits
-on one screen. Hand it a Slack thread or a task, and a headless Claude worker
+A native macOS command center for Claude Code: every session, PR, Linear
+issue and Slack thread you have in flight, on one screen, in a desktop app
+styled like Linear. Hand it a Slack thread or a task, and a headless Claude worker
 does the work in its own git worktree, opens the PR, and stops to ask you only
 where a decision is yours.
 
@@ -11,10 +11,10 @@ where a decision is yours.
   comments, and drafts the reply.
 - **Tasks.** Type what you want. The orchestrator writes a brief and spawns a
   worker for it.
-- **Overview, Board, Chats, Pull requests, Linear.** Five views in the top bar
-  (`1`-`5` or `⌘1`-`⌘5`). The Board is a Kanban of every session; PRs and Linear
-  are live from `gh` and your Linear API key, cross-linked to the sessions
-  working on them.
+- **Home, Inbox, Board, Sessions, Pull requests, Linear, Memory.** `⌘1`-`⌘7`.
+  The Board is a Kanban of every session; PRs and Linear (with sub-issues) are
+  live from `gh` and your Linear API key, cross-linked to the sessions working
+  on them.
 - **Nothing runs on its own.** No poller, no timer, no Slack app or token.
   Slack and Linear go through the connectors your Claude session already has.
 
@@ -25,14 +25,15 @@ No `npm install` needed.
 
 ```bash
 cp .env.example .env      # fill it in (every key is described there)
-npm start
-open http://localhost:4319
+npm start                 # the server, under launchd
+npm run app               # build Bridge.app, install it to ~/Applications, open it
 ```
 
-For the native app, run `npm run app` once. It builds `Bridge.app` with
-`swiftc` (Xcode command line tools, nothing else), copies it to
+`npm run app` builds the SwiftUI app in `native/macos` with `swift build`
+(the Xcode command line tools; full Xcode isn't needed), copies it to
 `~/Applications` and opens it. Rebuild it after moving the repo, because the
-path is baked in.
+repo path is baked in. The old browser UI is still served at
+http://localhost:4319 (see `legacy/`).
 
 `npm start` renders the skill, links it into `~/.claude/skills/`, and runs
 the dashboard in the background under launchd, so it comes back after a login.
@@ -87,57 +88,49 @@ until a slot frees.
 mid-task shows a **Resume** button, and reports written while the server was
 down are picked up.
 
-## Workspace views
+## The app
 
-**Overview** (`1`). Tiles for running sessions, what needs you, open PRs and how
-many need attention, reviews asked of you, Linear in progress, and today's
-spend. Below them: what needs you, what's running, dev servers, Slack threads,
-your PRs ranked by attention, and your Linear issues.
+A SwiftUI desktop app in Linear's visual language: dense rows, hairline
+borders, Linear's workflow circles and priority bars, one indigo accent,
+keyboard first.
 
-**Board** (`2`). Every session as a card in **Backlog**, **In progress**,
-**Needs you**, **In review** and **Done**. A card follows its session: running
-means In progress, a question or a stalled worker means Needs you, an open PR
-means In review, and a merged or closed PR means Done. Drag a card to pin it to
-a column; the card shows **pinned**, and clicking that, or dropping the card back
-where it would land on its own, lets it follow the session again. Moving a
-card isn't activity, so it never marks a chat unread. The box at the top of
-Backlog starts a new task directly (`⌘↵`).
+| | |
+| --- | --- |
+| **Home** `⌘1` | Running, needs-you, open PRs, reviews for you, issues in progress, spend; then what needs you, what's running, PRs needing attention, your Linear issues, dev servers and a spend chart |
+| **Inbox** `⌘2` | Workers' questions and action requests (answer, approve, defer to tomorrow, dismiss), to-dos, workers, activity; normal / quiet / away |
+| **Board** `⌘3` | Every session as a card in Backlog, In Progress, Needs You, In Review, Done. Cards follow their session (running, blocked, PR open, PR merged); drag one to pin it, click the pin to release it |
+| **Sessions** `⌘4` | The same sessions as a grouped list, plus the Orchestrator |
+| **Pull requests** `⌘5` | Needs attention (failing checks, changes requested, conflicts), review requested, open, merged in the last 14 days; right-click for Fix CI, Resolve comments, Fix conflicts or Review with Claude |
+| **Linear** `⌘6` | Your issues by state, with **sub-issues** as a tree under their parent (a done/total ring on the parent, each child with its own status, PR and assignee). **Start** runs a Claude worker on the issue in its own worktree, on Linear's branch name |
+| **Memory** `⌘7` | The target repo's Claude Code memory, editable (`⌘S`) |
 
-**Pull requests** (`4`). Your open PRs (failing checks, changes requested and
-conflicts first), reviews requested of you, and what merged in the last 14
-days, with check and review state, diff size, linked Linear key and any dev
-server running in the PR's worktree. **Fix CI**, **Resolve comments**, **Fix
-conflicts** and **Review** ask the orchestrator to spawn a worker for it.
+A session opens as a chat with Claude's transcript (thinking, tool calls with
+their output, answers), permission, question and plan cards you answer in place, a
+composer with mode / model / thinking / context / repo, and a properties panel
+with status, branch, worktree, PR, Linear issue, dev servers and the worker's
+report.
 
-**Linear** (`5`). Issues assigned to you, grouped by state, with their PRs.
-**Start session** spawns a worker on the issue in a worktree on Linear's branch
-name, with the issue text as its brief. Needs `LINEAR_API_KEY` in `.env`. The
-key stays in the server and is removed from the environment sessions inherit.
+Also: `⌘K` command menu (commands, sessions, PRs, issues and full-text
+transcript search), `⌘N` new task (a Slack link runs the pipeline; anything
+else goes to the orchestrator or straight to a worker), a menu bar item with
+what's running and waiting, native notifications, and a Dock badge.
+
+**Terminal.** "Open in cmux" continues a session in a new cmux tab
+(`TERMINAL_APP=cmux`, the default when cmux is installed; `Terminal` and
+`iTerm` also work).
 
 **Dev servers.** Ports your processes listen on (node, python, bun and the
-like) are matched to the worktree they run in, and appear as `:3000` chips on
-the session's card and the PR's row.
-
-**Search** (`⌘K`). Commands, views, chats, and full-text search across every
-transcript.
+like) are matched to the worktree they run in and shown on the session and
+the PR.
 
 **`.worktreeinclude`.** A file at the target repo's root, in .gitignore
 syntax, listing untracked files a new worktree should get from the main
-checkout (`.env`, local certs). Each worker's worktree gets copies.
+checkout (`.env`, local certs).
 
-## The native app
-
-`Bridge.app` is a WKWebView around the dashboard, plus:
-
-- a hidden title bar, so the top bar is the window chrome and drags it
-- a Dock badge counting sessions waiting on you
-- native notifications for asks and outcomes (click to jump to the chat)
-- a menu bar: `⌘1`-`⌘5` views, `⌘N` new task, `⌘L` paste a Slack thread,
-  `⌘K` search, `⌘O` orchestrator, `⌘⇧I` inbox, `⌘,` settings, `⌘R` reload
-- external links open in your browser
-
-The server stays under launchd, so closing or quitting the app never stops a
-worker. If the dashboard isn't running, the app starts it with `npm start`.
+The app never owns the server: it runs under launchd, so quitting the app
+never stops a worker. If the server isn't running, the app starts it with
+`npm start`. `LINEAR_API_KEY` stays on the server and is removed from the
+environment sessions inherit.
 
 ## Safety
 
@@ -168,7 +161,7 @@ beside **Send** set the next job's:
 | Model / Thinking / Capacity | model alias, `--effort`, 1M context |
 | Repo | the working directory |
 
-**Terminal** reopens the session in Terminal or iTerm (set by `TERMINAL_APP`).
+**Open in cmux** reopens the session in a cmux tab (`TERMINAL_APP`: cmux, Terminal or iTerm).
 
 ## `bin/sb`
 
@@ -206,12 +199,11 @@ instructions.
 index.js            dashboard server (Node stdlib only)
 lib/                env, store, jobs (sessions), harness (watcher), tasks, policy, memory,
                     sources (GitHub PRs, Linear issues, dev-server ports)
-native/macos/       Bridge.swift, the native app (scripts/build-app.sh builds it)
+native/macos/       the desktop app (SwiftPM, SwiftUI); scripts/build-app.sh packages it
 bin/sb              harness CLI
 harness/            worker.md, orchestrator.md, hooks/guard.js
 templates/          the pipeline skill, rendered with values from .env
-public/             dashboard UI: app.js (chats), harness.js (inbox, tasks), workspace.js
-                    (overview, board, PRs, Linear); vendored Milkdown editor in vendor/
+legacy/             the previous browser UI (still served at :4319) and its WKWebView wrapper
 scripts/            install.sh, build-app.sh, emit.sh (run narration), launchd template
 test/               npm test: policy, report parsing, end-to-end with a stub agent
 data/               runtime state (gitignored)

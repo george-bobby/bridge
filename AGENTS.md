@@ -9,22 +9,14 @@ Zero-dependency Node dashboard (no `npm install`) plus a Swift WKWebView shell.
 - `LINEAR_API_KEY` lives in `.env` only; `lib/env.js` deletes it from `process.env` so sessions never inherit it
 - UI layers wrap app.js globals in load order: `app.js` → `harness.js` → `workspace.js`
 
-## Status: native app rewrite (in progress, 2026-11-25)
 
-The user wants a real native desktop app styled like Linear (not the vibe-coded web look), with Linear sub-issues shown as a tree.
-The old web UI is kept untouched in `legacy/` (server still serves `legacy/web` at :4319).
+## Native app (native/macos)
 
-Done:
-- `native/macos/` SwiftPM app (SwiftUI, macOS 15, no Xcode needed): Core (JSON/API/SSE), Theme (Linear palette, status/priority icons),
-  Model (AppModel, board-column logic), App (window, sidebar, commands, menu-bar extra), Lists (Home, Board drag-drop, Sessions, PRs, Linear tree),
-  Chat (transcript, tool steps, ask cards, composer, properties), Panels (Inbox, Memory, Settings, ⌘K, New task)
-- `lib/sources.js` Linear feed now returns `parent` and `children` (sub-issues with assignee/state)
-- `scripts/build-app.sh` builds the SwiftPM app into dist/Bridge.app (`npm run app` installs to ~/Applications)
-- `@State` is unavailable with Command Line Tools (macro plugin missing): use `@StateObject private var x = Box(value)`
-- Snapshot every page without screen-recording permission: `BRIDGE_SNAPSHOT_DIR=/tmp/shots native/macos/.build/release/Bridge`
-
-Next:
-1. `npm restart` the server (new sources.js), re-snapshot, check the Linear sub-issue tree and number formatting (`Text(verbatim:)` fix applied)
-2. Verify Board/Sessions/Chat with demo data: `SB_DATA_DIR=/tmp/bridge-demo PORT=4400 node index.js` + `BRIDGE_PORT=4400` for the app
-3. `npm run app` to install the native app; run `npm test`; update README (native app, legacy/)
-4. Rename the GitHub repo to `bridge` (user approved): `gh repo rename bridge` + update the origin remote
+- SwiftPM + SwiftUI, macOS 15, built with the Command Line Tools: `cd native/macos && swift build -c release`; `npm run app` packages and installs it
+- `@State` is unavailable without full Xcode (its macro plugin isn't shipped): keep view state in `@StateObject private var x = Box(value)`
+- Use `Text(verbatim:)` for interpolated numbers (plain `Text("\(n)")` adds locale grouping: "#35,749")
+- Check the UI without screen-recording permission: `BRIDGE_SNAPSHOT_DIR=/tmp/shots native/macos/.build/release/Bridge` writes a PNG per page
+- Demo data: `SB_DATA_DIR=/tmp/bridge-demo PORT=4400 node index.js`, then run the app with `BRIDGE_PORT=4400`
+- Styling lives in `Theme.swift` (Linear palette, StatusIcon, PriorityIcon, Chip, HoverRow); follow it rather than adding ad-hoc colors
+- The old web UI is kept, untouched, in `legacy/`
+- "Open in cmux" goes through cmux's AppleScript dictionary: its CLI socket only accepts processes started inside cmux
