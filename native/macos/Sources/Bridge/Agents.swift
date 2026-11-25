@@ -66,7 +66,7 @@ struct AgentPicker: View {
             ForEach(AgentKind.allCases.filter { model.installed($0) || $0 == current }) { a in
                 Button {
                     Task { await model.setOpts(runId, ["agent": a.rawValue]) }
-                    if a != current && model.openRun["messages"].array.contains(where: { $0["role"].string == "assistant" }) {
+                    if a != current && model.runData(runId)["messages"].array.contains(where: { $0["role"].string == "assistant" }) {
                         model.say("Next turn goes to \(a.label), with a handoff briefing")
                     }
                 } label: {

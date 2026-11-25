@@ -30,25 +30,43 @@ struct ChangesView: View {
             if !s["repo"].bool && !s.isNull {
                 EmptyState(icon: "folder.badge.questionmark", title: "Not a git checkout", detail: s["dir"].string)
             } else {
-                HSplitView {
-                    VStack(spacing: 0) {
-                        ScrollView {
-                            LazyVStack(spacing: 0) {
-                                if s["files"].array.isEmpty { Text("Nothing uncommitted").font(T.ui(12)).foregroundStyle(T.text3).padding(14) }
-                                ForEach(s["files"].array, id: \.self) { f in fileRow(f) }
-                            }
+                // Side by side when there's room; stacked in a narrow split pane.
+                GeometryReader { g in
+                    if g.size.width >= 620 {
+                        HSplitView {
+                            files.frame(minWidth: 240, idealWidth: 300, maxWidth: 380)
+                            diffView.frame(minWidth: 300, maxWidth: .infinity, maxHeight: .infinity)
                         }
-                        Hairline()
-                        actions
+                    } else {
+                        VSplitView {
+                            files.frame(minHeight: 200, idealHeight: min(g.size.height * 0.45, 380), maxHeight: .infinity)
+                            diffView.frame(maxWidth: .infinity, minHeight: 160, maxHeight: .infinity)
+                        }
                     }
-                    .frame(minWidth: 240, idealWidth: 300, maxWidth: 380)
-                    ScrollView([.vertical, .horizontal]) { DiffText(diff: diff.v).padding(12) }
-                        .frame(minWidth: 300, maxWidth: .infinity, maxHeight: .infinity)
-                        .background(T.bg)
                 }
             }
         }
         .onAppear(perform: load)
+    }
+
+    var files: some View {
+        let s = status.v
+        return VStack(spacing: 0) {
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    if s["files"].array.isEmpty { Text("Nothing uncommitted").font(T.ui(12)).foregroundStyle(T.text3).padding(14) }
+                    ForEach(s["files"].array, id: \.self) { f in fileRow(f) }
+                }
+            }
+            Hairline()
+            actions
+        }
+    }
+
+    var diffView: some View {
+        ScrollView([.vertical, .horizontal]) { DiffText(diff: diff.v).padding(12) }
+            .defaultScrollAnchor(.topLeading)
+            .background(T.bg)
     }
 
     func fileRow(_ f: JSON) -> some View {

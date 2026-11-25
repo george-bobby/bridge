@@ -28,8 +28,10 @@ Zero-dependency Node dashboard (no `npm install`) plus a Swift WKWebView shell.
 - Keep `.scrollIndicators(.never)` on the chat transcript: with always-visible scroll bars, wrapped text near the fold makes the scroller appear/disappear forever and hangs the main thread in layout
 - Sidebar groups: actions (New task, Search), Overview (Home, Inbox, Sessions), Sources (Slack, PRs, Linear), Pinned, Projects; Memory/Usage/Settings live in the footer. Board and list are one "Sessions" page (`model.sessionsRoute` remembers the layout; use `model.navigate(.sessions)`)
 - Chat container: prev/next chat follows `model.chatOrder` (sidebar order); tabs are Chat, Changes and browser tabs (`Browser.swift`, live `WKWebView`s kept in `model.web`); drafts and attachments are per chat in the model. Pasted images/files and big pastes become attachment chips, saved under `~/Library/Application Support/Bridge/attachments` and sent as paths in the message text
+- Split panes (`Panes.swift`): the chat page is a row of `model.panes` (session + tab each); the focused pane is the route's session and `model.chatTab`, so header, tab strip and details follow focus. No two panes show the same (session, tab); use `model.showTab`/`dropInPane`/`vacate` rather than setting tabs by hand. Drags (sidebar session ids, `bridge-tab:<run>\t<tab>` from tabs and pane headers) arm `DropCatcher` NSViews over each pane; read a pane's run with `model.runData(id)`, not `openRun`. ⌘\ split, ⌘⇧W close pane, ⌥⌘←/→ focus
+- Terminal tab (`Terminal.swift`): SwiftTerm `LocalProcessTerminalView`, one per session in `model.terms`, running `GET /api/runs/:id/terminal`'s command in the login shell. SwiftTerm is pinned to 1.11.2: 1.12+ ships a Metal shader that the Command Line Tools can't compile
 - The old web UI is kept, untouched, in `legacy/`
-- "Open in cmux" goes through cmux's AppleScript dictionary: its CLI socket only accepts processes started inside cmux
+- "Open in External Terminal" uses `TERMINAL_APP` (Terminal by default; iTerm, cmux). cmux goes through its AppleScript dictionary: its CLI socket only accepts processes started inside cmux
 
 ## Server pieces added with the native app
 
