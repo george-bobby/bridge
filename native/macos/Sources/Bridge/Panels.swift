@@ -299,6 +299,9 @@ struct SettingsView: View {
 
             Form {
                 Section("New sessions start with") {
+                    Picker("Agent", selection: Binding(get: { model.config["followup"]["agent"].nonEmpty ?? "claude" }, set: { v in save(["followup": ["agent": v]]) })) {
+                        ForEach(AgentKind.allCases) { Text($0.label).tag($0.rawValue) }
+                    }
                     ForEach(JobOption.all, id: \.key) { opt in
                         Picker(opt.label, selection: Binding(get: { model.config["followup"][opt.key].string }, set: { v in save(["followup": [opt.key: v]]) })) {
                             ForEach(opt.choices, id: \.0) { Text($0.1).tag($0.0) }
@@ -459,6 +462,7 @@ struct CommandPalette: View {
             PaletteItem(id: "linear", icon: sym("circle.lefthalf.filled"), title: "Go to Linear", hint: "⌘6") { model.route = .linear },
             PaletteItem(id: "memory", icon: sym("book.closed"), title: "Go to Memory", hint: "⌘7") { model.route = .memory },
             PaletteItem(id: "slack", icon: sym("number"), title: "Go to Slack", hint: "⌘8") { model.route = .slack },
+            PaletteItem(id: "usage", icon: sym("gauge.with.dots.needle.50percent"), title: "Go to Usage", hint: "⌘9") { model.route = .usage },
             PaletteItem(id: "project", icon: sym("folder.badge.plus"), title: "Add a project…", hint: "⇧⌘P") { model.addProject() },
             PaletteItem(id: "refresh", icon: sym("arrow.clockwise"), title: "Refresh GitHub and Linear", hint: "⌘R") { Task { await model.loadSources(refresh: true) } },
         ]

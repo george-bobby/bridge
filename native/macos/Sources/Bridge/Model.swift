@@ -198,7 +198,7 @@ let statusLabels: [String: String] = [
 // MARK: - Routes
 
 enum Route: Hashable {
-    case home, inbox, slack, board, sessions, pulls, linear, memory
+    case home, inbox, slack, board, sessions, pulls, linear, memory, usage
     case session(String)
 
     var title: String {
@@ -206,6 +206,7 @@ enum Route: Hashable {
         case .home: return "Home"
         case .inbox: return "Inbox"
         case .slack: return "Slack"
+        case .usage: return "Usage"
         case .board: return "Board"
         case .sessions: return "Sessions"
         case .pulls: return "Pull requests"
@@ -237,6 +238,10 @@ final class AppModel {
     var projectFilter: String? = nil
     var composeProject: String? = nil
 
+    var usage: JSON = .null
+    var agentCatalog: JSON = .null
+    var commands: [JSON] = []
+    var chatTab = "chat"
     var slack: JSON = .null
     var mentions: [Mention] = []
     var slackThread: JSON = .null
@@ -547,6 +552,12 @@ final class AppModel {
                 await load("ports")
             }
         }
+        Task {
+            while true {
+                try? await Task.sleep(nanoseconds: 150_000_000_000)
+                await loadUsage()
+            }
+        }
     }
 
     /// Same path as `npm start`: launchd owns the server, so it outlives the app.
@@ -578,6 +589,8 @@ final class AppModel {
     func loadAll() async {
         if let s = try? await API.get("/api/state") { applyState(s) }
         Task { await loadSlack() }
+        Task { await loadUsage() }
+        Task { if let c = try? await API.get("/api/agents") { agentCatalog = c } }
         if let r = try? await API.get("/api/runs") { sessions = r["runs"].array.map(Session.init) }
         if let i = try? await API.get("/api/inbox") { inbox = i }
         await loadSources(refresh: false)
