@@ -26,13 +26,16 @@ BIN="$(cd "$PROJ/native/macos" && swift build -c release --show-bin-path)/Bridge
 [[ -x "$BIN" ]] || { echo "error: build failed" >&2; exit 1; }
 cp "$BIN" "$APP/Contents/MacOS/$NAME"
 
-# App icon from public/logo.png.
+# App icon: scripts/make-icon.swift draws every size at its own resolution
+# (heavier strokes at 16/32px); fall back to downscaling native/macos/icon.png.
 ICONSET="$(mktemp -d)/$NAME.iconset"
-mkdir -p "$ICONSET"
-for s in 16 32 128 256 512; do
-  sips -z $s $s "$PROJ/native/macos/icon.png" --out "$ICONSET/icon_${s}x${s}.png" >/dev/null
-  sips -z $((s * 2)) $((s * 2)) "$PROJ/native/macos/icon.png" --out "$ICONSET/icon_${s}x${s}@2x.png" >/dev/null
-done
+if ! swift "$PROJ/scripts/make-icon.swift" --iconset "$ICONSET" >/dev/null 2>&1; then
+  mkdir -p "$ICONSET"
+  for s in 16 32 128 256 512; do
+    sips -z $s $s "$PROJ/native/macos/icon.png" --out "$ICONSET/icon_${s}x${s}.png" >/dev/null
+    sips -z $((s * 2)) $((s * 2)) "$PROJ/native/macos/icon.png" --out "$ICONSET/icon_${s}x${s}@2x.png" >/dev/null
+  done
+fi
 iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/$NAME.icns"
 
 cat > "$APP/Contents/Info.plist" <<PLIST

@@ -300,12 +300,41 @@ const server = http.createServer(async (req, res) => {
   }
 
   // --- slash commands: the skills and commands a session's agent can run ---
+  // Claude Code's own list (built-ins, skills, plugins) from its initialize
+  // handshake, plus the skill folders the other agents read, plus anything on
+  // disk the probe didn't report (it can time out, or not be Claude at all).
   if (req.method === "GET" && p === "/api/commands") {
     const runId = store.safeId(url.searchParams.get("runId") || "");
     const run = runId ? store.loadRun(runId) : null;
-    const dir = run ? jobs.resolveWorkdir(store.readConfig(), run) : jobs.resolveWorkdir(store.readConfig());
+    const proj = url.searchParams.get("project") ? projects.get(String(url.searchParams.get("project"))) : null;
+    const dir = run ? jobs.resolveWorkdir(store.readConfig(), run) : proj && proj.path && fs.existsSync(proj.path) ? proj.path : jobs.resolveWorkdir(store.readConfig());
     const out = new Map();
-    const read = (base, kind) => {
+    const frontmatter = (text) => {
+      const fm = /^---\n([\s\S]*?)\n---/.exec(text);
+      const get = (k) => {
+        if (!fm) return "";
+        const m = new RegExp(`^${k}:[ \\t]*(.*)$`, "m").exec(fm[1]);
+        if (!m) return "";
+        let v = m[1].trim();
+        // Folded / literal blocks: the indented lines after `key: >`.
+        if (/^[>|][-+]?$/.test(v) || v === "") {
+          const rest = fm[1].slice(m.index + m[0].length).split("\n").slice(1);
+          const lines = [];
+          for (const l of rest) {
+            if (/^\s+\S/.test(l)) lines.push(l.trim());
+            else break;
+          }
+          v = lines.join(" ");
+        }
+        return v.replace(/^["']|["']$/g, "");
+      };
+      return { name: get("name"), description: get("description"), hint: get("argument-hint") };
+    };
+    const add = (c) => {
+      if (!c.name || out.has(c.name)) return;
+      out.set(c.name, { name: c.name, description: String(c.description || "").slice(0, 240), source: c.source, scope: c.scope || "", hint: c.hint || "" });
+    };
+    const read = (base, kind, scope) => {
       let names = [];
       try {
         names = fs.readdirSync(base);
@@ -317,21 +346,51 @@ const server = http.createServer(async (req, res) => {
         if (kind === "command" && !n.endsWith(".md")) continue;
         let text = "";
         try {
-          text = fs.readFileSync(file, "utf8").slice(0, 4000);
+          text = fs.readFileSync(file, "utf8").slice(0, 6000);
         } catch {
           continue;
         }
-        const name = kind === "skill" ? ((text.match(/^name:\s*(.+)$/m) || [])[1] || n).trim() : n.replace(/\.md$/, "");
-        const desc = ((text.match(/^description:\s*(.+)$/m) || [])[1] || text.replace(/^---[\s\S]*?---/, "").trim().split("\n")[0] || "").replace(/^["']|["']$/g, "").slice(0, 160);
-        if (!out.has(name)) out.set(name, { name, description: desc, source: kind });
+        const f = frontmatter(text);
+        const name = kind === "skill" ? f.name || n : n.replace(/\.md$/, "");
+        const desc = f.description || text.replace(/^---[\s\S]*?---/, "").trim().split("\n")[0] || "";
+        add({ name, description: desc, source: kind, scope, hint: f.hint });
       }
     };
-    for (const root of [path.join(dir, ".claude"), path.join(os.homedir(), ".claude")]) {
-      read(path.join(root, "skills"), "skill");
-      read(path.join(root, "commands"), "command");
+    const probe = env.demo ? null : await require("./lib/agents").claudeProbe(dir, { refresh: url.searchParams.get("refresh") === "1" });
+    const BUILTIN = new Set(["compact", "review", "init", "security-review", "pr-comments", "context", "cost", "usage", "clear", "model", "effort", "mcp", "agents", "config", "doctor", "recap", "insights", "ultrareview", "goal", "loop", "schedule", "batch", "simplify", "verify", "debug", "code-review", "fewer-permission-prompts", "update-config", "claude-api", "autocompact", "fast", "focus", "rename", "color", "output-style", "import", "heapdump", "reload-plugins", "reload-skills", "skill-doctor", "extra-usage", "usage-credits", "auto-mode-setup", "list-agents", "team-onboarding", "design-consent", "design-revoke"]);
+    // Interactive-only commands do nothing in a headless turn.
+    const TUI = new Set(["clear", "color", "config", "focus", "heapdump", "rename", "output-style", "model", "effort", "mcp", "fast", "autocompact", "reload-plugins", "reload-skills", "extra-usage", "usage-credits", "design-consent", "design-revoke", "import", "list-agents", "auto-mode-setup", "agents", "skill-doctor", "team-onboarding", "doctor", "insights", "recap", "heapdump", "workflow-launch-exec"]);
+    for (const c of (probe && probe.commands) || []) {
+      if (!c || !c.name || c.name.startsWith("__") || TUI.has(c.name)) continue;
+      const tag = (/\(([^()]+)\)\s*$/.exec(c.description || "") || [])[1] || "";
+      const own = tag === "user" || tag === "project";
+      const plugin = !own && tag && !BUILTIN.has(c.name);
+      const desc = own || plugin ? String(c.description || "").replace(/\s*\([^()]+\)\s*$/, "") : String(c.description || "");
+      if (own) add({ name: c.name, description: desc, source: "skill", scope: tag, hint: c.argumentHint });
+      else if (plugin) add({ name: c.name, description: desc, source: "plugin", scope: c.name.includes(":") ? c.name.split(":")[0] : tag.replace(/ sync$/, ""), hint: c.argumentHint });
+      else if (BUILTIN.has(c.name)) add({ name: c.name, description: desc, source: "built-in", scope: "built-in", hint: c.argumentHint });
+      else add({ name: c.name, description: desc, source: "skill", scope: "bundled", hint: c.argumentHint });
     }
-    for (const b of [["compact", "Summarise the conversation so far to free up context"], ["review", "Review the current changes"], ["init", "Write a CLAUDE.md for this repo"]]) if (!out.has(b[0])) out.set(b[0], { name: b[0], description: b[1], source: "built-in" });
-    return sendJson(res, 200, { ok: true, commands: [...out.values()].sort((a, b) => a.name.localeCompare(b.name)) });
+    const home = os.homedir();
+    for (const [root, scope] of [[path.join(dir, ".claude"), "project"], [path.join(home, ".claude"), "user"]]) {
+      read(path.join(root, "skills"), "skill", scope);
+      read(path.join(root, "commands"), "command", scope);
+    }
+    for (const [base, scope] of [[path.join(dir, ".agents", "skills"), "project"], [path.join(dir, ".devin", "skills"), "devin · project"], [path.join(dir, ".cursor", "skills"), "cursor · project"], [path.join(home, ".agents", "skills"), "user"], [path.join(home, ".devin", "skills"), "devin"], [path.join(home, ".config", "devin", "skills"), "devin"], [path.join(home, ".codex", "skills"), "codex"]]) read(base, "skill", scope);
+    for (const b of [["compact", "Summarise the conversation so far to free up context"], ["review", "Review the current changes"], ["init", "Write a CLAUDE.md for this repo"], ["security-review", "Security review of the pending changes"]]) add({ name: b[0], description: b[1], source: "built-in", scope: "built-in" });
+    return sendJson(res, 200, { ok: true, dir, commands: [...out.values()].sort((a, b) => a.name.localeCompare(b.name)) });
+  }
+
+  // --- files in a project folder, for the `@` picker when there's no session yet ---
+  if (req.method === "GET" && p === "/api/files") {
+    if (!sameOrigin(req)) return sendJson(res, 403, { ok: false, error: "cross-origin request refused" });
+    try {
+      const proj = projects.get(String(url.searchParams.get("project") || ""));
+      const dir = proj && proj.path ? proj.path : jobs.resolveWorkdir(store.readConfig());
+      return sendJson(res, 200, { ok: true, ...(await require("./lib/files").list(dir)) });
+    } catch (e) {
+      return sendJson(res, 400, { ok: false, error: String(e.message || e) });
+    }
   }
 
   // --- the agents installed here and their models (composer pickers) --------
@@ -719,6 +778,12 @@ const server = http.createServer(async (req, res) => {
         // The composer sends what it is showing along with the message, so the
         // job can never run under options you changed but that hadn't landed.
         applyOpts(id, body.opts);
+        // `/compact` typed in the composer compacts for real, whatever the agent.
+        const c = /^\/compact(?:\s+([\s\S]*))?$/.exec(text);
+        if (c && !jobs.isRunning(id)) {
+          const out = jobs.compact(id, { config: store.readConfig(), instructions: c[1] || "" });
+          return sendJson(res, 200, { ok: true, compacted: true, native: out.native });
+        }
         const msg = jobs.startFollowup(id, text, { config: store.readConfig(), queue: !!body.queue });
         sendJson(res, 200, { ok: true, message: msg, queued: !!(msg && msg.queued) });
       } catch (e) {
@@ -764,6 +829,60 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // The composer's `@` picker: the files in this session's folder.
+    if (req.method === "GET" && verb === "files") {
+      if (!sameOrigin(req)) return sendJson(res, 403, { ok: false, error: "cross-origin request refused" });
+      try {
+        const run = store.loadRun(id);
+        if (!run) throw new Error("no such run");
+        const meta = tasks.exists(id) ? tasks.readMeta(id) || {} : {};
+        const dir = meta.worktree && fs.existsSync(meta.worktree) ? meta.worktree : jobs.resolveWorkdir(store.readConfig(), run);
+        return sendJson(res, 200, { ok: true, ...(await require("./lib/files").list(dir)) });
+      } catch (e) {
+        return sendJson(res, 400, { ok: false, error: String(e.message || e) });
+      }
+    }
+
+    // Free up context: /compact for Claude, a self-handoff for the others.
+    if (req.method === "POST" && verb === "compact") {
+      try {
+        const body = JSON.parse((await readBody(req)) || "{}");
+        const out = jobs.compact(id, { config: store.readConfig(), instructions: body.instructions });
+        return sendJson(res, 200, { ok: true, native: out.native });
+      } catch (e) {
+        return sendJson(res, 409, { ok: false, error: String(e.message || e) });
+      }
+    }
+
+    // `#` in the composer: a briefing of this session, written to a file
+    // another session's agent can read, plus where its transcript lives.
+    if (req.method === "GET" && verb === "reference") {
+      if (!sameOrigin(req)) return sendJson(res, 403, { ok: false, error: "cross-origin request refused" });
+      try {
+        const run = store.loadRun(id);
+        if (!run) throw new Error("no such run");
+        const meta = tasks.exists(id) ? tasks.readMeta(id) || {} : {};
+        const title = meta.title || run.who || id;
+        const transcript = path.join(store.PATHS.runs, `${id}.json`);
+        const text = require("./lib/agents").briefing(run, {
+          meta,
+          report: tasks.exists(id) ? tasks.readReport(id) : null,
+          title: `# Referenced session: ${title}`,
+          intro: `Session id \`${id}\`. This is a summary of another Bridge session, for context: don't act on it unless asked. The full transcript is the JSON file below.`,
+          transcript,
+          now: false,
+          lines: 40,
+        });
+        const dir = path.join(env.dataDir, "references");
+        fs.mkdirSync(dir, { recursive: true });
+        const file = path.join(dir, `${id}.md`);
+        fs.writeFileSync(file, text);
+        return sendJson(res, 200, { ok: true, path: file, transcript, title, worktree: meta.worktree || "" });
+      } catch (e) {
+        return sendJson(res, 400, { ok: false, error: String(e.message || e) });
+      }
+    }
+
     if (req.method === "POST" && verb === "stop") {
       sendJson(res, 200, { ok: jobs.stop(id) });
       return;
@@ -772,6 +891,14 @@ const server = http.createServer(async (req, res) => {
     // Same chat, same session, real terminal. The dashboard is the better
     // place to *watch* a run; it is a worse place to take one over, and until
     // now the only way out was to go digging for the session id by hand.
+    if (req.method === "GET" && verb === "terminal") {
+      try {
+        sendJson(res, 200, { ok: true, ...jobs.terminalInfo(id, { config: store.readConfig() }) });
+      } catch (e) {
+        sendJson(res, 404, { ok: false, error: String(e.message || e) });
+      }
+      return;
+    }
     if (req.method === "POST" && verb === "terminal") {
       try {
         sendJson(res, 200, { ok: true, ...(await jobs.openTerminal(id, { config: store.readConfig() })) });
