@@ -40,7 +40,7 @@ struct ChatView: View {
                 if !s.permalink.isEmpty { IconButton(icon: "number", help: "Open the Slack thread") { openURL(s.permalink) } }
                 if !s.linearUrl.isEmpty { IconButton(icon: "circle.lefthalf.filled", help: "Open in Linear") { openURL(s.linearUrl) } }
                 if !s.prUrl.isEmpty { IconButton(icon: "arrow.triangle.pull", help: "Open the pull request") { openURL(s.prUrl) } }
-                IconButton(icon: "terminal", help: "Continue this session in Terminal") { Task { await model.terminal(id) } }
+                IconButton(icon: "terminal", help: "Continue this session in \(model.terminalName)") { Task { await model.terminal(id) } }
                 if model.isLive(s) {
                     Button { Task { await model.stop(id) } } label: { Label("Stop", systemImage: "stop.fill") }.buttonStyle(LButton(danger: true))
                 }
@@ -626,16 +626,13 @@ struct PropertiesPanel: View {
                 if let s, !s.isOrchestrator {
                     PropSection(title: "Properties") {
                         PropRow(label: "Status") {
+                            SessionIcon(session: s, size: 13)
                             Menu {
                                 ForEach(Column.allCases) { c in Button(c.label) { Task { await model.move(id, to: c) } } }
                                 Divider()
                                 Button("Automatic") { Task { await model.move(id, to: nil) } }
                             } label: {
-                                HStack(spacing: 6) {
-                                    SessionIcon(session: s, size: 13)
-                                    Text(model.column(of: s).label).font(T.ui(12.5)).foregroundStyle(T.text)
-                                    if !s.pinned.isEmpty { Image(systemName: "pin.fill").font(.system(size: 8)).foregroundStyle(T.text3) }
-                                }
+                                Text(model.column(of: s).label + (s.pinned.isEmpty ? "" : " · pinned")).font(T.ui(12.5)).foregroundStyle(T.text)
                             }
                             .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                         }
@@ -716,7 +713,7 @@ struct PropertiesPanel: View {
                                 Button { Task { await model.relaunch(id) } } label: { Label("Relaunch worker", systemImage: "arrow.clockwise").frame(maxWidth: .infinity) }.buttonStyle(LButton())
                                 Button { Task { await model.cleanup(id) } } label: { Label("Clean up worktree", systemImage: "trash").frame(maxWidth: .infinity) }.buttonStyle(LButton())
                             }
-                            Button { Task { await model.terminal(id) } } label: { Label("Open in Terminal", systemImage: "terminal").frame(maxWidth: .infinity) }.buttonStyle(LButton())
+                            Button { Task { await model.terminal(id) } } label: { Label("Open in \(model.terminalName)", systemImage: "terminal").frame(maxWidth: .infinity) }.buttonStyle(LButton())
                         }
                     }
                 }
@@ -742,8 +739,8 @@ struct PropRow<Content: View>: View {
     let label: String
     @ViewBuilder let content: () -> Content
     var body: some View {
-        HStack(alignment: .center, spacing: 10) {
-            Text(label).font(T.ui(12.5)).foregroundStyle(T.text3).frame(width: 74, alignment: .leading)
+        HStack(alignment: .center, spacing: 6) {
+            Text(label).font(T.ui(12.5)).foregroundStyle(T.text3).frame(width: 78, alignment: .leading)
             content().foregroundStyle(T.text)
             Spacer(minLength: 0)
         }

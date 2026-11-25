@@ -175,7 +175,7 @@ function snapshot() {
     inbox: harness.inbox().counts,
     // Only what the page actually draws: the repo a new chat's job would run
     // in, which the composer's picker opens on.
-    meta: { workdir: jobs.resolveWorkdir(store.readConfig()) },
+    meta: { workdir: jobs.resolveWorkdir(store.readConfig()), terminal: env.terminalApp },
     now: Date.now(),
   };
 }

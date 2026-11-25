@@ -207,6 +207,7 @@ final class AppModel {
     var running: Set<String> = []
     var awaiting: Set<String> = []
     var defaultWorkdir = ""
+    var terminalName = "Terminal"
     var sessions: [Session] = []
     var inbox: JSON = .null
 
@@ -374,6 +375,7 @@ final class AppModel {
         running = Set(s["jobs"]["running"].array.map(\.string))
         awaiting = Set(s["jobs"]["awaiting"].array.map(\.string))
         defaultWorkdir = s["meta"]["workdir"].string
+        terminalName = s["meta"]["terminal"].nonEmpty ?? "Terminal"
     }
 
     private func handle(_ name: String, _ d: JSON) {
@@ -467,7 +469,16 @@ final class AppModel {
 
     func stop(_ id: String) async { await act { try await API.post("/api/runs/\(API.q(id))/stop") } }
     func start(_ id: String) async { await act { try await API.post("/api/runs/\(API.q(id))/start") } }
-    func terminal(_ id: String) async { await act { try await API.post("/api/runs/\(API.q(id))/terminal") } }
+    func terminal(_ id: String) async {
+        await act {
+            let out = try await API.post("/api/runs/\(API.q(id))/terminal")
+            if out["opened"].bool { self.say("Opened in \(out["app"].nonEmpty ?? self.terminalName)") }
+            else {
+                copyToPasteboard(out["command"].string)
+                self.say((out["note"].nonEmpty ?? "Couldn't open a terminal") + " (command copied)", bad: true)
+            }
+        }
+    }
     func relaunch(_ id: String) async { await act { try await API.post("/api/tasks/\(API.q(id))/relaunch") } }
     func cleanup(_ id: String, force: Bool = false) async {
         await act { try await API.post("/api/tasks/\(API.q(id))/cleanup", ["force": force]) }
