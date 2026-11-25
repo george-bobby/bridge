@@ -13,69 +13,250 @@ struct ChatView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
+            SessionTabs(runId: id, session: session)
             HStack(spacing: 0) {
-                VStack(spacing: 0) {
-                    if model.chatTab == "changes" {
-                        ChangesView(runId: id)
-                    } else {
-                        Transcript(run: run, runId: id)
-                        Composer(runId: id)
+                ZStack { content.id(model.chatTab).transition(.opacity) }
+                    .animation(M.page, value: model.chatTab)
+                    .frame(maxWidth: .infinity)
+                if model.inspectorShown && !model.chatTab.hasPrefix("web-") {
+                    HStack(spacing: 0) {
+                        Rectangle().fill(T.line).frame(width: 1)
+                        PropertiesPanel(id: id).frame(width: 300)
                     }
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
                 }
-                Rectangle().fill(T.line).frame(width: 1)
-                PropertiesPanel(id: id).frame(width: 284)
             }
+            .clipped()
         }
         .onAppear {
-            model.chatTab = "chat"
+            if !model.chatTab.hasPrefix("web-") || !(model.browserTabs[id] ?? []).contains(where: { "web-\($0.id)" == model.chatTab }) { model.chatTab = "chat" }
             Task { await model.loadCommands(for: id) }
         }
     }
 
-    var header: some View {
-        HStack(spacing: 8) {
-            Button { model.route = .sessions } label: { Text("Sessions").font(T.ui(13)).foregroundStyle(T.text2) }.buttonStyle(.plain)
-            Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold)).foregroundStyle(T.text3)
-            if let s = session {
-                if s.isOrchestrator { Image(systemName: "sparkles").foregroundStyle(T.purple) } else { SessionIcon(session: s, size: 13) }
-                if !s.issueKey.isEmpty { Text(s.issueKey).font(T.mono(12)).foregroundStyle(T.text3) }
-                Text(s.isOrchestrator ? "Orchestrator" : s.title).font(T.ui(13, .medium)).foregroundStyle(T.text).lineLimit(1)
-            } else {
-                Text(run["who"].nonEmpty ?? id).font(T.ui(13, .medium))
-            }
-            Spacer()
-            Picker("", selection: Binding(get: { model.chatTab }, set: { model.chatTab = $0 })) {
-                Text("Chat").tag("chat")
-                Text("Changes").tag("changes")
-            }
-            .pickerStyle(.segmented).frame(width: 150).controlSize(.small)
-            if let s = session, !s.isOrchestrator {
-                Menu {
-                    ForEach(AgentKind.allCases.filter { model.installed($0) }) { a in
-                        Button("Ask \(a.label)") { Task { await model.secondOpinion(id, agent: a) } }
-                    }
-                } label: { Image(systemName: "person.2.wave.2").font(.system(size: 12.5)).foregroundStyle(T.text2).frame(width: 26, height: 26) }
-                .menuStyle(.borderlessButton).menuIndicator(.hidden).frame(width: 30)
-                .help("Second opinion: another agent reviews this session, read-only, in its own worktree")
-            }
-            if let s = session {
-                if !s.permalink.isEmpty { IconButton(icon: "number", help: "Read the Slack thread") { model.openThread(s.permalink) } }
-                IconButton(icon: s.pinned ? "star.fill" : "star", help: s.pinned ? "Unpin" : "Pin to the sidebar") { Task { await model.setPinned(s.id, !s.pinned) } }
-                if !s.linearUrl.isEmpty { IconButton(icon: "circle.lefthalf.filled", help: "Open in Linear") { openURL(s.linearUrl) } }
-                if !s.prUrl.isEmpty { IconButton(icon: "arrow.triangle.pull", help: "Open the pull request") { openURL(s.prUrl) } }
-                IconButton(icon: "terminal", help: "Continue this session in \(model.terminalName)") { Task { await model.terminal(id) } }
-                if model.isLive(s) {
-                    Button { Task { await model.stop(id) } } label: { Label("Stop", systemImage: "stop.fill") }.buttonStyle(LButton(danger: true))
-                }
-                Menu {
-                    SessionMenu(session: s)
-                } label: { Image(systemName: "ellipsis").font(.system(size: 13)).foregroundStyle(T.text2).frame(width: 26, height: 26) }
-                    .menuStyle(.borderlessButton).menuIndicator(.hidden).frame(width: 30)
+    @ViewBuilder var content: some View {
+        if model.chatTab == "changes" {
+            ChangesView(runId: id)
+        } else if model.chatTab.hasPrefix("web-"), let tab = model.browserTabs[id]?.first(where: { "web-\($0.id)" == model.chatTab }) {
+            BrowserView(page: model.web.page(for: tab))
+        } else {
+            VStack(spacing: 0) {
+                Transcript(run: run, runId: id)
+                Composer(runId: id)
             }
         }
+    }
+
+    var header: some View {
+        let order = model.chatOrder
+        let index = order.firstIndex(of: id)
+        let prev = index.flatMap { $0 > 0 ? order[$0 - 1] : nil }
+        let next = index.flatMap { $0 + 1 < order.count ? order[$0 + 1] : nil }
+        return HStack(spacing: 10) {
+            HStack(spacing: 0) {
+                StepButton(icon: "chevron.up", help: "Previous chat (⌥⌘↑)" + (prev.map { ": " + title(of: $0) } ?? ""), enabled: prev != nil) { model.stepChat(-1) }
+                StepButton(icon: "chevron.down", help: "Next chat (⌥⌘↓)" + (next.map { ": " + title(of: $0) } ?? ""), enabled: next != nil) { model.stepChat(1) }
+            }
+            .padding(2)
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(T.raised.opacity(0.7)))
+            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(T.lineSoft, lineWidth: 1))
+            if let index { Text(verbatim: "\(index + 1) of \(order.count)").font(T.ui(11.5)).foregroundStyle(T.text3).monospacedDigit().contentTransition(.numericText()) }
+            Rectangle().fill(T.line).frame(width: 1, height: 18).padding(.horizontal, 2)
+            if let s = session, !s.isOrchestrator, let p = model.project(s.project), model.projects.count > 1 {
+                Button { model.projectFilter = p.id; model.navigate(.sessions) } label: { Text(p.name).font(T.ui(13.5)).foregroundStyle(T.text2) }.buttonStyle(.plain)
+                Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold)).foregroundStyle(T.text3)
+            }
+            if let s = session {
+                if s.isOrchestrator { Image(systemName: "sparkles").foregroundStyle(T.purple) } else { SessionIcon(session: s, size: 14) }
+                if !s.issueKey.isEmpty { Text(s.issueKey).font(T.mono(12.5)).foregroundStyle(T.text3) }
+                Text(s.isOrchestrator ? "Orchestrator" : s.title).font(T.ui(14, .semibold)).foregroundStyle(T.text).lineLimit(1)
+                if model.isLive(s) && !model.isAwaiting(s) { LiveBadge().transition(.scale.combined(with: .opacity)) }
+            } else {
+                Text(run["who"].nonEmpty ?? id).font(T.ui(14, .semibold))
+            }
+            Spacer(minLength: 12)
+            if let s = session {
+                if model.isLive(s) {
+                    Button { Task { await model.stop(id) } } label: { Label("Stop", systemImage: "stop.fill") }
+                        .buttonStyle(LButton(danger: true))
+                        .transition(.scale.combined(with: .opacity))
+                }
+                IconButton(icon: s.pinned ? "star.fill" : "star", help: s.pinned ? "Unpin" : "Pin to the sidebar") { Task { await model.setPinned(s.id, !s.pinned) } }
+                IconButton(icon: "terminal", help: "Continue this session in \(model.terminalName)") { Task { await model.terminal(id) } }
+                Menu {
+                    if !s.isOrchestrator {
+                        Menu("Second Opinion") {
+                            ForEach(AgentKind.allCases.filter { model.installed($0) }) { a in
+                                Button("Ask \(a.label)") { Task { await model.secondOpinion(id, agent: a) } }
+                            }
+                        }
+                        Divider()
+                    }
+                    if !s.permalink.isEmpty { Button("Read the Slack Thread") { model.openThread(s.permalink) } }
+                    SessionMenu(session: s)
+                } label: { Image(systemName: "ellipsis").font(.system(size: 13.5)).foregroundStyle(T.text2).frame(width: 28, height: 28) }
+                    .menuStyle(.borderlessButton).menuIndicator(.hidden).frame(width: 32)
+            }
+            IconButton(icon: "sidebar.right", help: model.inspectorShown ? "Hide details (⌥⌘I)" : "Show details (⌥⌘I)") {
+                withAnimation(M.snappy) { model.inspectorShown.toggle() }
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.leading, model.sidebarHidden ? T.lightsInset : 0)
+        .frame(height: T.headerHeight)
+        .animation(M.snappy, value: session.map(model.isLive) ?? false)
+    }
+
+    func title(of id: String) -> String {
+        guard let s = model.sessions.first(where: { $0.id == id }) else { return id }
+        return s.isOrchestrator ? "Orchestrator" : s.title
+    }
+}
+
+struct StepButton: View {
+    let icon: String
+    let help: String
+    let enabled: Bool
+    let action: () -> Void
+    @StateObject private var hover = Box(false)
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: icon).font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(enabled ? (hover.v ? T.text : T.text2) : T.text3.opacity(0.5))
+                .frame(width: 26, height: 24)
+                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(hover.v && enabled ? T.hover : .clear))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(Pressable(scale: 0.88))
+        .disabled(!enabled)
+        .help(help)
+        .hoverBox(hover)
+    }
+}
+
+struct SessionTabs: View {
+    @Environment(AppModel.self) var model
+    let runId: String
+    let session: Session?
+    @Namespace private var ns
+
+    var body: some View {
+        let webTabs = model.browserTabs[runId] ?? []
+        HStack(spacing: 4) {
+            tab("chat", icon: "bubble.left", label: "Chat")
+            tab("changes", icon: "plusminus", label: "Changes")
+            ForEach(webTabs) { t in
+                WebSessionTab(page: model.web.page(for: t), on: model.chatTab == "web-\(t.id)", ns: ns,
+                              close: { model.closeBrowser(runId, t.id) },
+                              action: { withAnimation(M.snappy) { model.chatTab = "web-\(t.id)" } })
+                    .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .leading)))
+            }
+            newTabMenu
+            Spacer()
+        }
         .padding(.horizontal, 16)
-        .frame(height: 44)
+        .padding(.leading, model.sidebarHidden ? T.lightsInset : 0)
+        .frame(height: 42)
         .overlay(alignment: .bottom) { Rectangle().fill(T.line).frame(height: 1) }
+        .animation(M.snappy, value: webTabs.map(\.id))
+    }
+
+    func tab(_ key: String, icon: String, label: String, close: (() -> Void)? = nil) -> some View {
+        let on = model.chatTab == key
+        return SessionTab(icon: icon, label: label, on: on, ns: ns, close: close) {
+            withAnimation(M.snappy) { model.chatTab = key }
+        }
+    }
+
+    var newTabMenu: some View {
+        let s = session
+        let ports = s.map { model.servers(for: $0) } ?? []
+        return Menu {
+            Section("Browser") {
+                ForEach(ports) { sv in
+                    ForEach(sv.ports, id: \.self) { p in
+                        Button { model.openBrowser(runId, url: "http://localhost:\(p)") } label: { Label("localhost:\(p)  ·  \(sv.command)", systemImage: "play.circle") }
+                    }
+                }
+                if let s, !s.prUrl.isEmpty { Button { model.openBrowser(runId, url: s.prUrl) } label: { Label("Pull request #\(s.prNumber)", systemImage: "arrow.triangle.pull") } }
+                if let s, !s.linearUrl.isEmpty { Button { model.openBrowser(runId, url: s.linearUrl) } label: { Label("Linear issue", systemImage: "circle.lefthalf.filled") } }
+                Button { model.openBrowser(runId, url: "") } label: { Label("New Browser Tab", systemImage: "globe") }
+            }
+            Section {
+                Button { withAnimation(M.snappy) { model.chatTab = "changes" } } label: { Label("Changes", systemImage: "plusminus") }
+                Button { Task { await model.terminal(runId) } } label: { Label("Terminal (\(model.terminalName))", systemImage: "terminal") }
+            }
+        } label: {
+            Image(systemName: "plus").font(.system(size: 11.5, weight: .semibold)).foregroundStyle(T.text2)
+                .frame(width: 28, height: 28)
+        }
+        .menuStyle(.borderlessButton).menuIndicator(.hidden).frame(width: 32)
+        .help("Open a tab: a browser on this session's dev server, its PR or any page")
+    }
+}
+
+struct WebSessionTab: View {
+    @ObservedObject var page: WebPage
+    let on: Bool
+    let ns: Namespace.ID
+    let close: () -> Void
+    let action: () -> Void
+    var body: some View {
+        SessionTab(icon: page.loading ? "arrow.triangle.2.circlepath" : "globe", label: page.label, on: on, ns: ns, close: close, action: action)
+    }
+}
+
+struct SessionTab: View {
+    let icon: String
+    let label: String
+    let on: Bool
+    let ns: Namespace.ID
+    var close: (() -> Void)? = nil
+    let action: () -> Void
+    @StateObject private var hover = Box(false)
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Image(systemName: icon).font(.system(size: 11, weight: .medium))
+            Text(label.count > 26 ? label.prefix(25) + "…" : label).font(T.ui(12.5, on ? .medium : .regular)).lineLimit(1).fixedSize()
+            if let close {
+                Button(action: close) {
+                    Image(systemName: "xmark").font(.system(size: 8.5, weight: .bold)).foregroundStyle(T.text2)
+                        .frame(width: 16, height: 16)
+                        .background(Circle().fill(hover.v ? T.hover : .clear))
+                }
+                .buttonStyle(Pressable(scale: 0.85))
+                .opacity(on || hover.v ? 1 : 0)
+                .help("Close tab")
+            }
+        }
+        .foregroundStyle(on ? T.text : T.text2)
+        .padding(.leading, 12).padding(.trailing, close == nil ? 12 : 7)
+        .frame(height: 30)
+        .background {
+            if on {
+                RoundedRectangle(cornerRadius: 8, style: .continuous).fill(T.selected)
+                    .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(T.line, lineWidth: 1))
+                    .matchedGeometryEffect(id: "session-tab", in: ns)
+            } else if hover.v {
+                RoundedRectangle(cornerRadius: 8, style: .continuous).fill(T.hover.opacity(0.7))
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture(perform: action)
+        .hoverBox(hover)
+    }
+}
+
+struct LiveBadge: View {
+    var body: some View {
+        HStack(spacing: 5) {
+            LiveIcon(size: 10)
+            Text("Running").font(T.ui(11, .medium)).foregroundStyle(T.yellow).shimmer()
+        }
+        .padding(.horizontal, 7).frame(height: 20)
+        .background(Capsule().fill(T.yellow.opacity(0.1)))
+        .overlay(Capsule().stroke(T.yellow.opacity(0.25), lineWidth: 1))
     }
 }
 
@@ -86,7 +267,7 @@ struct Transcript: View {
     var body: some View {
         let messages = run["messages"].array
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 20) {
+            LazyVStack(alignment: .leading, spacing: 26) {
                 if run.isNull {
                     ProgressView().controlSize(.small).frame(maxWidth: .infinity).padding(40)
                 } else if messages.isEmpty {
@@ -94,14 +275,17 @@ struct Transcript: View {
                 }
                 ForEach(Array(messages.enumerated()), id: \.offset) { _, m in
                     MessageView(m: m, run: run, runId: runId)
+                        .transition(.opacity.combined(with: .offset(y: 10)))
                 }
                 Color.clear.frame(height: 8).id("end")
             }
-            .padding(.horizontal, 28).padding(.vertical, 22)
-            .frame(maxWidth: 900, alignment: .leading)
+            .animation(M.snappy, value: messages.count)
+            .padding(.horizontal, 40).padding(.vertical, 28)
+            .frame(maxWidth: 920, alignment: .leading)
             .frame(maxWidth: .infinity)
         }
         .defaultScrollAnchor(.bottom)
+        .scrollIndicators(.never)
     }
 }
 
@@ -140,15 +324,50 @@ struct UserMessage: View {
         let role = m["role"].string
         let fromSlack = role == "slack" || role == "thread"
         let name = fromSlack ? (m["who"].nonEmpty ?? run["who"].nonEmpty ?? "Slack") : "You"
-        HStack(alignment: .top, spacing: 12) {
-            Avatar(name: name, size: 26)
-            VStack(alignment: .leading, spacing: 5) {
+        HStack(alignment: .top, spacing: 14) {
+            Avatar(name: name, size: 28)
+            VStack(alignment: .leading, spacing: 6) {
                 MessageHead(name: name, detail: fromSlack ? (run["channel"].nonEmpty.map { "in \($0)" } ?? "Slack") : "", ts: m["ts"].double)
                 MarkdownText(text: fromSlack ? Session.plain(m["text"].string) : m["text"].string)
                 if m["queued"].bool { Chip(text: "Queued", icon: "clock") }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .messageActions(fromSlack ? Session.plain(m["text"].string) : m["text"].string)
     }
+}
+
+struct MessageActions: ViewModifier {
+    @Environment(AppModel.self) var model
+    let text: String
+    @StateObject private var hover = Box(false)
+    @StateObject private var copied = Box(false)
+
+    func body(content: Content) -> some View {
+        content
+            .overlay(alignment: .topTrailing) {
+                if hover.v && !text.isEmpty {
+                    HStack(spacing: 2) {
+                        IconButton(icon: copied.v ? "checkmark" : "doc.on.doc", help: "Copy") {
+                            copyToPasteboard(text)
+                            withAnimation(M.pop) { copied.v = true }
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { withAnimation(M.hover) { copied.v = false } }
+                        }
+                        IconButton(icon: "text.quote", help: "Quote in your reply (select text and press ⌘L to quote just that)") { model.quoteIntoComposer(text) }
+                    }
+                    .padding(2)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(T.line, lineWidth: 1))
+                    .offset(y: -6)
+                    .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .topTrailing)))
+                }
+            }
+            .hoverBox(hover)
+    }
+}
+
+extension View {
+    func messageActions(_ text: String) -> some View { modifier(MessageActions(text: text)) }
 }
 
 struct ClaudeMark: View {
@@ -167,21 +386,28 @@ struct AssistantMessage: View {
     var body: some View {
         let state = m["state"].string
         let agent = AgentKind.of(m["agent"].string)
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .top, spacing: 14) {
             AgentMark(agent: agent)
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 10) {
                 MessageHead(name: agent.label, detail: [m["label"].string, m["model"].string].filter { !$0.isEmpty }.joined(separator: " · "), ts: m["ts"].double)
                 let steps = m["steps"].array
                 if steps.isEmpty && !m["text"].string.isEmpty { MarkdownText(text: m["text"].string) }
                 ForEach(Array(steps.enumerated()), id: \.offset) { _, s in StepView(step: s, runId: runId) }
                 footer(state)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .messageActions(replyText)
+    }
+
+    var replyText: String {
+        let steps = m["steps"].array.filter { $0["kind"].string == "text" }.map { $0["text"].string }.filter { !$0.isEmpty }
+        return steps.isEmpty ? m["text"].string : steps.joined(separator: "\n\n")
     }
 
     @ViewBuilder func footer(_ state: String) -> some View {
         if state == "running" {
-            HStack(spacing: 7) { LiveIcon(size: 11); Text("Working…").font(T.ui(12)).foregroundStyle(T.text3) }
+            HStack(spacing: 7) { LiveIcon(size: 11); Text("Working…").font(T.ui(12)).foregroundStyle(T.text3).shimmer() }
         } else if state == "error" || state == "failed" {
             Label(m["error"].nonEmpty ?? "The session ended with an error", systemImage: "exclamationmark.triangle.fill")
                 .font(T.ui(12)).foregroundStyle(T.red)
@@ -231,23 +457,26 @@ struct ThinkingView: View {
     var body: some View {
         let text = step["text"].string
         if step["streaming"].bool && text.isEmpty {
-            HStack(spacing: 6) { Image(systemName: "brain").font(.system(size: 11)); Text("Thinking…").font(T.ui(12)) }.foregroundStyle(T.text3)
+            HStack(spacing: 6) { Image(systemName: "brain").font(.system(size: 11)).symbolEffect(.pulse); Text("Thinking…").font(T.ui(12)).shimmer() }.foregroundStyle(T.text3)
         } else if !text.isEmpty {
             VStack(alignment: .leading, spacing: 6) {
-                Button { open.v.toggle() } label: {
+                Button { withAnimation(M.snappy) { open.v.toggle() } } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "brain").font(.system(size: 11))
                         Text("Thought").font(T.ui(12))
                         if step["tokens"].int > 0 { Text(verbatim: "· \(Fmt.tokens(step["tokens"].int)) tokens").font(T.ui(12)) }
-                        Image(systemName: open.v ? "chevron.down" : "chevron.right").font(.system(size: 8, weight: .bold))
+                        Image(systemName: "chevron.right").font(.system(size: 8, weight: .bold))
+                            .rotationEffect(.degrees(open.v ? 90 : 0))
                     }
                     .foregroundStyle(T.text3)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 if open.v {
                     Text(text).font(T.ui(12.5)).foregroundStyle(T.text2).textSelection(.enabled)
                         .padding(.leading, 12)
                         .overlay(alignment: .leading) { Rectangle().fill(T.line).frame(width: 2) }
+                        .transition(.opacity.combined(with: .move(edge: .top)))
                 }
             }
         }
@@ -268,7 +497,7 @@ struct ToolView: View {
             TodoList(raw: raw)
         } else {
         VStack(alignment: .leading, spacing: 0) {
-            Button { if !result.isEmpty { open.v.toggle() } } label: {
+            Button { if !result.isEmpty { withAnimation(M.snappy) { open.v.toggle() } } } label: {
                 HStack(spacing: 8) {
                     Image(systemName: ToolView.icon(name)).font(.system(size: 11)).foregroundStyle(T.text3).frame(width: 14)
                     Text(ToolView.display(name)).font(T.ui(12, .medium)).foregroundStyle(T.text2)
@@ -280,7 +509,8 @@ struct ToolView: View {
                         Image(systemName: "xmark").font(.system(size: 9, weight: .bold)).foregroundStyle(T.red)
                     } else if !result.isEmpty {
                         if step["resultLines"].int > 0 { Text(verbatim: "\(step["resultLines"].int) lines").font(T.ui(11)).foregroundStyle(T.text3) }
-                        Image(systemName: open.v ? "chevron.down" : "chevron.right").font(.system(size: 8, weight: .bold)).foregroundStyle(T.text3)
+                        Image(systemName: "chevron.right").font(.system(size: 8, weight: .bold)).foregroundStyle(T.text3)
+                            .rotationEffect(.degrees(open.v ? 90 : 0))
                     }
                 }
                 .padding(.horizontal, 10).frame(height: 28)
@@ -297,11 +527,13 @@ struct ToolView: View {
                         .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding(10)
                 }
                 .frame(maxHeight: 260)
+                .transition(.opacity)
             }
         }
+        .clipShape(RoundedRectangle(cornerRadius: 7))
         .background(RoundedRectangle(cornerRadius: 7).fill(hover.v ? T.hover.opacity(0.5) : T.raised.opacity(0.45)))
         .overlay(RoundedRectangle(cornerRadius: 7).stroke(T.lineSoft, lineWidth: 1))
-        .onHover { hover.v = $0 }
+        .hoverBox(hover)
         }
     }
 
@@ -537,30 +769,50 @@ struct Composer: View {
     let runId: String
     @StateObject private var text = Box("")
     @StateObject private var sending = Box(false)
+    @StateObject private var hasFocus = Box(false)
+    @StateObject private var monitor = Box<Any?>(nil)
+    @StateObject private var dropping = Box(false)
     @FocusState private var focused: Bool
+
+    var items: [Attachment] { model.attachments[runId] ?? [] }
 
     var body: some View {
         let live = model.sessions.first { $0.id == runId }.map(model.isLive) ?? false
         VStack(alignment: .leading, spacing: 0) {
+            if !items.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        ForEach(items) { a in
+                            AttachmentChip(item: a) { remove(a) }
+                                .transition(.opacity.combined(with: .scale(scale: 0.85)))
+                        }
+                    }
+                    .padding(.horizontal, 12).padding(.top, 14).padding(.bottom, 2)
+                }
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
             if text.v.hasPrefix("/") && !text.v.contains(" ") && !text.v.contains("\n") {
                 SlashMenu(query: String(text.v.dropFirst())) { name in text.v = "/\(name) " }
                     .padding(.horizontal, 8).padding(.top, 8)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
             ZStack(alignment: .topLeading) {
                 if text.v.isEmpty {
-                    Text(live ? "Queue a follow-up for when this turn ends…" : "Reply to continue this session…")
-                        .font(T.ui(13)).foregroundStyle(T.text3).padding(.horizontal, 5).padding(.top, 1)
+                    Text(live ? "Queue a follow-up for when this turn ends…" : "Reply, paste an image, or ⌘L to quote a selection…")
+                        .font(T.ui(13.5)).foregroundStyle(T.text3).padding(.horizontal, 5).padding(.top, 1)
                 }
                 TextEditor(text: $text.v)
-                    .font(T.ui(13))
+                    .font(T.ui(13.5))
                     .scrollContentBackground(.hidden)
                     .scrollIndicators(.never)
                     .focused($focused)
                     .frame(minHeight: 44, maxHeight: 180)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(.horizontal, 10).padding(.top, 10)
+            .padding(.horizontal, 12).padding(.top, 12)
             HStack(spacing: 4) {
+                Button { pickFiles() } label: { ComposerChip(icon: "paperclip", text: "") }
+                    .buttonStyle(.plain).help("Attach images or files (or paste / drop them here)")
                 let agent = AgentKind.of(value("agent").string)
                 AgentPicker(runId: runId, current: agent)
                 ModelPicker(runId: runId, agent: agent, current: value(agent == .claude ? "model" : "agentModel").string)
@@ -584,21 +836,54 @@ struct Composer: View {
                 Button {
                     send()
                 } label: {
+                    let empty = text.v.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && items.isEmpty
                     Image(systemName: "arrow.up").font(.system(size: 12, weight: .bold)).foregroundStyle(.white)
                         .frame(width: 26, height: 26)
-                        .background(Circle().fill(text.v.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? T.text3 : T.accent))
+                        .background(Circle().fill(empty ? T.text3.opacity(0.6) : T.accent))
+                        .shadow(color: T.accent.opacity(empty ? 0 : 0.5), radius: 6)
+                        .scaleEffect(empty ? 0.92 : 1)
+                        .animation(M.pop, value: empty)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(Pressable(scale: 0.88))
                 .keyboardShortcut(.return, modifiers: .command)
                 // Covered by the New Task sheet or ⌘K: ⌘↩ belongs to them.
                 .disabled(sending.v || model.composeOpen || model.paletteOpen)
             }
-            .padding(8)
+            .padding(10)
         }
-        .background(RoundedRectangle(cornerRadius: 10).fill(T.raised))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(focused ? T.accent.opacity(0.6) : T.line, lineWidth: 1))
-        .padding(.horizontal, 24).padding(.bottom, 16).padding(.top, 6)
-        .frame(maxWidth: 900)
+        .animation(M.snappy, value: text.v.hasPrefix("/") && !text.v.contains(" "))
+        .animation(M.snappy, value: items.map(\.id))
+        .overlay {
+            if dropping.v {
+                RoundedRectangle(cornerRadius: 12, style: .continuous).fill(T.accent.opacity(0.12))
+                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(T.accent, style: StrokeStyle(lineWidth: 1.5, dash: [5, 4])))
+                    .overlay(Label("Drop to attach", systemImage: "paperclip").font(T.ui(13, .medium)).foregroundStyle(T.accent))
+                    .transition(.opacity)
+                    .allowsHitTesting(false)
+            }
+        }
+        .animation(M.hover, value: dropping.v)
+        .dropDestination(for: URL.self) { urls, _ in
+            for u in urls {
+                if u.isFileURL { add(.file(u)) } else { text.v += (text.v.isEmpty || text.v.hasSuffix(" ") ? "" : " ") + u.absoluteString }
+            }
+            return !urls.isEmpty
+        } isTargeted: { dropping.v = $0 }
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(T.raised))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(focused ? T.accent.opacity(0.6) : T.line, lineWidth: 1))
+        .shadow(color: focused ? T.accent.opacity(0.18) : .black.opacity(0.2), radius: focused ? 10 : 6, y: 2)
+        .animation(M.hover, value: focused)
+        .onChange(of: focused) { hasFocus.v = focused }
+        .onAppear {
+            text.v = model.drafts[runId] ?? ""
+            installPasteMonitor()
+        }
+        .onDisappear { if let m = monitor.v { NSEvent.removeMonitor(m); monitor.v = nil } }
+        .onChange(of: text.v) { if model.drafts[runId] ?? "" != text.v { model.drafts[runId] = text.v } }
+        .onChange(of: model.drafts[runId] ?? "") { if text.v != model.drafts[runId] ?? "" { text.v = model.drafts[runId] ?? "" } }
+        .onChange(of: model.focusComposer) { focused = true }
+        .padding(.horizontal, 32).padding(.bottom, 20).padding(.top, 8)
+        .frame(maxWidth: 920)
         .frame(maxWidth: .infinity)
     }
 
@@ -650,12 +935,59 @@ struct Composer: View {
     /// you haven't typed something new in the meantime.
     func send() {
         let t = text.v
-        guard !t.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        let attached = items
+        let full = Attachment.compose(t, attached)
+        guard !full.isEmpty else { return }
         sending.v = true
         Task {
-            if await model.send(t, to: runId), text.v == t { text.v = "" }
+            if await model.send(full, to: runId) {
+                if text.v == t { text.v = "" }
+                model.attachments[runId]?.removeAll { a in attached.contains { $0.id == a.id } }
+            }
             sending.v = false
         }
+    }
+
+    func add(_ a: Attachment?) {
+        guard let a else { return }
+        model.attachments[runId, default: []].append(a)
+    }
+
+    func remove(_ a: Attachment) { model.attachments[runId]?.removeAll { $0.id == a.id } }
+
+    func pickFiles() {
+        let p = NSOpenPanel()
+        p.allowsMultipleSelection = true
+        p.canChooseDirectories = false
+        p.prompt = "Attach"
+        guard p.runModal() == .OK else { return }
+        p.urls.forEach { add(.file($0)) }
+    }
+
+    func installPasteMonitor() {
+        guard monitor.v == nil else { return }
+        monitor.v = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak hasFocus] e in
+            guard hasFocus?.v == true, e.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command, e.charactersIgnoringModifiers == "v" else { return e }
+            return handlePaste() ? nil : e
+        }
+    }
+
+    func handlePaste() -> Bool {
+        let pb = NSPasteboard.general
+        if let urls = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL], !urls.isEmpty {
+            urls.forEach { add(.file($0)) }
+            return true
+        }
+        let str = pb.string(forType: .string)
+        if str == nil, let img = NSImage(pasteboard: pb) {
+            add(.image(img))
+            return true
+        }
+        if let str, Attachment.isLarge(str) {
+            add(.pasted(str))
+            return true
+        }
+        return false
     }
 }
 
@@ -666,13 +998,13 @@ struct ComposerChip: View {
     @StateObject private var hover = Box(false)
     var body: some View {
         HStack(spacing: 5) {
-            Image(systemName: icon).font(.system(size: 10.5))
-            Text(text).font(T.ui(11.5, .medium))
+            Image(systemName: icon).font(.system(size: 11))
+            if !text.isEmpty { Text(text).font(T.ui(12, .medium)) }
         }
         .foregroundStyle(warn ? T.orange : T.text2)
-        .padding(.horizontal, 7).frame(height: 24)
+        .padding(.horizontal, 8).frame(height: 26)
         .background(RoundedRectangle(cornerRadius: 6).fill(hover.v ? T.hover : .clear))
-        .onHover { hover.v = $0 }
+        .hoverBox(hover)
     }
 }
 
@@ -687,7 +1019,7 @@ struct PropertiesPanel: View {
         let task = model.openTask
         let parsed = task["parsed"]
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 26) {
                 if let s, !s.isOrchestrator {
                     PropSection(title: "Properties") {
                         PropRow(label: "Status") {
@@ -789,9 +1121,9 @@ struct PropertiesPanel: View {
                     }
                 }
             }
-            .padding(16)
+            .padding(20)
         }
-        .background(T.bg.opacity(0.5))
+        .background(T.panel)
     }
 }
 
@@ -799,8 +1131,8 @@ struct PropSection<Content: View>: View {
     let title: String
     @ViewBuilder let content: () -> Content
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            Text(title).font(T.ui(11.5, .medium)).foregroundStyle(T.text3)
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title).font(T.ui(11.5, .semibold)).foregroundStyle(T.text3)
             content()
         }
     }
@@ -815,7 +1147,7 @@ struct PropRow<Content: View>: View {
             content().foregroundStyle(T.text)
             Spacer(minLength: 0)
         }
-        .frame(minHeight: 22)
+        .frame(minHeight: 26)
     }
 }
 
@@ -833,12 +1165,12 @@ struct LinkRow<Trailing: View>: View {
                 Spacer(minLength: 4)
                 trailing()
             }
-            .padding(.horizontal, 8).frame(height: 28)
-            .background(RoundedRectangle(cornerRadius: 6).fill(hover.v ? T.hover : T.raised.opacity(0.5)))
+            .padding(.horizontal, 10).frame(height: 32)
+            .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(hover.v ? T.hover : T.raised.opacity(0.5)))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .onHover { hover.v = $0 }
+        .hoverBox(hover)
     }
 }
 
@@ -951,3 +1283,4 @@ struct MarkdownText: View {
         return out
     }
 }
+
