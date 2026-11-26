@@ -227,6 +227,16 @@ test("stall, usage limit and a dead worker each become an outcome", async () => 
   assert.ok((await api("GET", "/api/inbox")).decisions.some((d) => d.taskId === g.taskId && d.kind === "resume"));
 });
 
+test("a stop you ask for ends the turn as stopped, not as an error", async () => {
+  const t = await spawnTask("stoppy", "stub:stall=30");
+  await waitFor(async () => (await api("GET", "/api/state")).jobs.running.includes(t.taskId), 10000, "running");
+  assert.equal((await api("POST", `/api/runs/${t.taskId}/stop`)).ok, true);
+  await waitFor(idle(t.taskId), 10000, "idle");
+  const m = (await api("GET", `/api/runs/${t.taskId}`)).run.messages.filter((x) => x.role === "assistant").pop();
+  assert.equal(m.state, "stopped");
+  assert.equal(m.error, undefined);
+});
+
 test("a permission ask reaches the dashboard and the answer reaches the worker", async () => {
   const t = await spawnTask("asky", "stub:ask\nstub:report=ready-for-review");
   const ask = await waitFor(async () => {

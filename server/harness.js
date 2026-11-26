@@ -46,13 +46,24 @@ const cfg = () => store.readConfig().harness;
 function ensureOrchestrator(projectId = projects.defaultId()) {
   const id = projects.orchestratorId(projectId);
   let run = store.loadRun(id);
-  if (run && run.kind === "orchestrator") return run;
+  // It works in its project's checkout ("this repo" means the project), with
+  // Bridge added as a directory. A chat that already has a session keeps the
+  // folder it was minted in, or --resume would no longer find it.
+  const p = projects.get(projectId);
+  const home = p && p.path && fs.existsSync(p.path) ? p.path : ROOT;
+  if (run && run.kind === "orchestrator") {
+    if (!run.sessionId && (run.opts || {}).workdir !== home) {
+      run.opts = { ...run.opts, workdir: home };
+      store.saveRun(run);
+    }
+    return run;
+  }
   run = run || store.blankRun(id, { who: "Orchestrator", action: "acted", phase: "idle" });
   run.kind = "orchestrator";
   run.who = "Orchestrator";
   run.project = projectId;
   run.text = "Your second-in-command. Hand it work; it spawns workers and tells you what happened.";
-  run.opts = { ...run.opts, workdir: ROOT };
+  run.opts = { ...run.opts, workdir: home };
   store.saveRun(run);
   return run;
 }

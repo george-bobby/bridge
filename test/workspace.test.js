@@ -300,3 +300,19 @@ test("compact: /compact for Claude, a self-handoff for the other agents; files a
   assert.strictEqual(stub.description, "A skill the stub reports");
   assert.strictEqual(stub.scope, "user");
 });
+
+test("an orchestrator works in its project's checkout; clearing a chat that started elsewhere moves it there", async () => {
+  const p = (await get("/api/projects")).projects[0];
+  const orch = await post(`/api/projects/${p.id}/orchestrator`);
+  let run = (await get(`/api/runs/${orch.runId}`)).run;
+  assert.strictEqual(run.opts.workdir, p.path, "this repo means the project, not Bridge's own folder");
+  // An older chat minted in Bridge's folder keeps it while it has a session…
+  const file = path.join(DATA, "runs", `${orch.runId}.json`);
+  fs.writeFileSync(file, JSON.stringify({ ...run, sessionId: "s-1", opts: { ...run.opts, workdir: ROOT } }));
+  await post(`/api/projects/${p.id}/orchestrator`);
+  assert.strictEqual((await get(`/api/runs/${orch.runId}`)).run.opts.workdir, ROOT);
+  // …and moves once it's cleared.
+  await post(`/api/runs/${orch.runId}/clear`);
+  run = (await get(`/api/runs/${orch.runId}`)).run;
+  assert.strictEqual(run.opts.workdir, p.path);
+});

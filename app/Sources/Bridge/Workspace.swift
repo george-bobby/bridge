@@ -95,7 +95,7 @@ struct SidebarFooter: View {
             HStack(spacing: 6) {
                 Circle().fill(model.connected ? T.green : T.red).frame(width: 7, height: 7)
                     .shadow(color: (model.connected ? T.green : T.red).opacity(0.6), radius: 3)
-                Text(model.connected ? "\(model.liveCount) running" : "Offline").font(T.ui(11.5)).foregroundStyle(T.text3)
+                Text(model.connected ? "\(model.sessions.filter(model.isLive).count) running" : "Offline").font(T.ui(11.5)).foregroundStyle(T.text3)
                     .contentTransition(.numericText())
                 Spacer()
                 FooterButton(icon: "book.closed", help: "Memory (⌘7)", on: model.route == .memory) { model.route = .memory }
@@ -402,7 +402,7 @@ struct SlackView: View {
                                         Text(m["who"].string).font(T.ui(13, .semibold))
                                         Text(Fmt.clock(m["ts"].double)).font(T.ui(11.5)).foregroundStyle(T.text3)
                                     }
-                                    MarkdownText(text: m["text"].string, size: 13, color: T.text)
+                                    MarkdownText(text: m["text"].string, size: 13, color: NT.text)
                                     ForEach(m["files"].array, id: \.self) { f in Chip(text: f.string, icon: "paperclip") }
                                 }
                             }
