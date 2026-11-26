@@ -17,6 +17,8 @@ struct HistoryChat: Identifiable, Hashable {
     var cwd: String { j["cwd"].string }
     var updatedAt: Double { j["updatedAt"].double }
     var runId: String { j["runId"].string }
+    /// The folder it ran in no longer exists: its session can't carry on.
+    var gone: Bool { j["gone"].bool }
     var folder: String {
         let parts = cwd.split(separator: "/")
         return parts.suffix(2).joined(separator: "/")
@@ -207,7 +209,8 @@ struct ImportSheet: View {
             HStack(spacing: 6) { Kbd(keys: "↩"); Text("Import").font(T.ui(11.5)).foregroundStyle(T.text3) }
             Spacer()
             if let c = selected {
-                Text(c.runId.isEmpty ? "Opens as a worker in \(c.folder.isEmpty ? "its folder" : c.folder)" : "Already imported").font(T.ui(11.5)).foregroundStyle(T.text3).lineLimit(1)
+                Text(!c.runId.isEmpty ? "Already imported" : c.gone ? "Its folder is gone, so it can't carry on" : "Opens as a worker in \(c.folder.isEmpty ? "its folder" : c.folder)")
+                    .font(T.ui(11.5)).foregroundStyle(c.gone && c.runId.isEmpty ? T.orange : T.text3).lineLimit(1)
                 Button { Task { await importSelected() } } label: {
                     HStack(spacing: 6) {
                         if busy.v { ProgressView().controlSize(.mini) }
@@ -217,7 +220,7 @@ struct ImportSheet: View {
                 }
                 .buttonStyle(LButton(primary: true))
                 .keyboardShortcut(.return, modifiers: .command)
-                .disabled(busy.v)
+                .disabled(busy.v || (c.gone && c.runId.isEmpty))
             }
         }
         .padding(.horizontal, 16).frame(height: 48)
@@ -249,7 +252,7 @@ struct ImportSheet: View {
     }
 
     func importSelected() async {
-        guard let c = selected, !busy.v else { return }
+        guard let c = selected, !busy.v, !(c.gone && c.runId.isEmpty) else { return }
         if !c.runId.isEmpty { model.importOpen = false; return model.open(c.runId) }
         busy.v = true
         await model.act {
@@ -279,7 +282,12 @@ struct ImportRow: View {
                     Text(Fmt.ago(chat.updatedAt)).font(T.ui(11)).foregroundStyle(T.text3).monospacedDigit()
                 }
                 if chat.prompt != chat.title { Text(chat.prompt).font(T.ui(12)).foregroundStyle(T.text2).lineLimit(1) }
-                if !chat.folder.isEmpty { Text(chat.folder).font(T.mono(10.5)).foregroundStyle(T.text3).lineLimit(1).truncationMode(.head) }
+                if !chat.folder.isEmpty {
+                    HStack(spacing: 4) {
+                        if chat.gone { Image(systemName: "folder.badge.minus").font(.system(size: 9.5)).foregroundStyle(T.orange).help("This folder no longer exists") }
+                        Text(chat.folder).font(T.mono(10.5)).foregroundStyle(T.text3).lineLimit(1).truncationMode(.head).strikethrough(chat.gone, color: T.text3)
+                    }
+                }
             }
         }
         .padding(.horizontal, 10).padding(.vertical, 9)

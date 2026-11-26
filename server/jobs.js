@@ -502,10 +502,12 @@ function launch(run, { prompt: ask, kind, config, label }) {
   // A chat imported from an agent's own history resumes a session Bridge
   // never set up, and a resumed session keeps the system prompt it started
   // with: its first turn here carries Bridge's instructions inline.
+  // Recorded only once that turn completes (wire's finish), so a launch that
+  // fails brings the instructions again next time.
   if (run.imported && !run.imported.briefed && kind !== "compact") {
     try {
       prompt = `<instructions>\n${systemPrompt(run, config)}\n</instructions>\n\n${prompt}`;
-      run.imported = { ...run.imported, briefed: true };
+      briefingImport.add(run.runId);
     } catch {}
   }
   const reply = store.appendMessage(run, {
@@ -1690,6 +1692,7 @@ function wire(child, runId, msgId, kind) {
     // crashed, `claude` not on PATH.
     commit((m, run) => {
       delete run.pendingAsk;
+      if (briefingImport.delete(runId) && run.imported && (m.state === "done" || (m.state === "running" && why === "closed"))) run.imported = { ...run.imported, briefed: true };
       // Background work dies with the session process.
       for (const t of m.tasks || []) {
         if (t.status !== "running") continue;
@@ -1802,6 +1805,9 @@ function parseVerdict(result) {
 }
 
 /** A one-line, human-readable version of a tool call for the timeline. */
+/** Imported chats whose current turn carries Bridge's instructions inline. */
+const briefingImport = new Set();
+
 /** To-do tools whose whole input the app needs (the task list); every other call keeps 4000 chars. */
 const TODO_TOOLS = new Set(["TodoWrite", "todo_write", "update_plan"]);
 const rawInput = (name, input) => JSON.stringify(input || {}).slice(0, TODO_TOOLS.has(name) ? 40000 : 4000);

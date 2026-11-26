@@ -503,7 +503,8 @@ async function handle(req, res) {
     try {
       if (req.method === "GET" && p === "/api/history") {
         const agent = String(url.searchParams.get("agent") || "");
-        const out = history.list({ agents: agent ? [agent] : undefined, q: url.searchParams.get("q") || "", runs: store.listRunSessions() });
+        const opts = { agents: agent ? [agent] : undefined, q: url.searchParams.get("q") || "", runs: store.listRunSessions() };
+        const out = history.listAsync ? await history.listAsync(opts) : history.list(opts);
         return sendJson(res, 200, { ok: true, ...out });
       }
       if (req.method === "POST" && p === "/api/history/import") {
@@ -513,7 +514,7 @@ async function handle(req, res) {
       }
       const m = p.match(/^\/api\/history\/([a-z]+)\/([^/]+)$/);
       if (req.method === "GET" && m) {
-        const t = history.read(m[1], decodeURIComponent(m[2]));
+        const t = history.readAsync ? await history.readAsync(m[1], decodeURIComponent(m[2])) : history.read(m[1], decodeURIComponent(m[2]));
         return sendJson(res, 200, { ok: true, cwd: t.cwd, total: t.messages.length, messages: t.messages.slice(-40) });
       }
       return sendJson(res, 404, { ok: false, error: "not found" });

@@ -426,7 +426,9 @@ function importChat({ agent, id, history = require("./history") }) {
   const chat = history.list({ agents: [agent], runs }).chats.find((c) => c.id === id) || {};
   const t = history.read(agent, id);
   if (!t.messages.length) throw new Error("that chat has nothing to import");
-  const cwd = t.cwd && fs.existsSync(t.cwd) ? t.cwd : "";
+  // Its session only makes sense in the folder it ran in: never carry it on elsewhere.
+  if (!env.demo && (!t.cwd || !fs.existsSync(t.cwd))) throw new Error(`the folder this chat ran in is gone${t.cwd ? ` (${t.cwd})` : ""}, so it can't carry on`);
+  const cwd = t.cwd;
   const git = (args) => {
     try {
       return require("child_process").execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] }).trim();
@@ -449,7 +451,7 @@ function importChat({ agent, id, history = require("./history") }) {
   const run = store.blankRun(taskId, { who: title, text: String(chat.prompt || title).slice(0, 400), action: "pending", phase: "idle" });
   run.kind = "task";
   run.imported = { agent, id, at: now() };
-  run.opts = { ...run.opts, agent, workdir: cwd || env.targetRepo || ROOT, ...(t.model && agent !== "claude" ? { agentModel: t.model } : {}) };
+  run.opts = { ...run.opts, agent, workdir: cwd, ...(t.model && agent !== "claude" ? { agentModel: t.model } : {}) };
   // The agent resumes its own session: Claude by the chat's session id, the
   // others through agentSessions (see jobs.launchAgent).
   if (agent === "claude") run.sessionId = id;
@@ -457,11 +459,10 @@ function importChat({ agent, id, history = require("./history") }) {
   for (const m of t.messages) store.appendMessage(run, m);
   store.appendMessage(run, { role: "event", phase: "imported", text: `Imported from **${label}**: ${t.messages.length} messages${cwd ? ` in \`${cwd}\`` : ""}. Your next message continues the same ${label} session.` });
   run.createdAt = Math.min(...t.messages.map((m) => m.ts || now())) || now();
+  // The project it belongs to, set directly: store.setProject would also move
+  // a chat without a Claude session id into the project's checkout.
+  run.project = projects.of(run, tasks.readMeta(taskId) || {}) || "";
   store.saveRun(run);
-  if (!run.project) {
-    const pid = projects.of(run, tasks.readMeta(taskId) || {});
-    if (pid) store.setProject(taskId, pid);
-  }
   tasks.appendEvent({ taskId, name: "imported", text: `${label} session ${id}${cwd ? ` in ${cwd}` : ""}` });
   bus.broadcast("runs", { runs: store.listRunSummaries() });
   return { taskId, existing: false };

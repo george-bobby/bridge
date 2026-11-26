@@ -736,7 +736,7 @@ const history = {
     const have = history.known(runs);
     const words = String(q).toLowerCase().split(/\s+/).filter(Boolean);
     const all = historyChats().filter((c) => !agents || agents.includes(c.agent));
-    const chats = all.filter((c) => words.every((w) => `${c.title} ${c.prompt} ${c.cwd}`.toLowerCase().includes(w))).map((c) => ({ ...c, size: 0, runId: have.get(`${c.agent}:${c.id}`) || "" }));
+    const chats = all.filter((c) => words.every((w) => `${c.title} ${c.prompt} ${c.cwd}`.toLowerCase().includes(w))).map((c) => ({ ...c, size: 0, gone: false, runId: have.get(`${c.agent}:${c.id}`) || "" }));
     const counts = {};
     for (const c of all) counts[c.agent] = (counts[c.agent] || 0) + 1;
     return { chats, counts, sqlite: true };
