@@ -247,6 +247,8 @@ let statusLabels: [String: String] = [
 
 enum Route: Hashable {
     case home, inbox, slack, board, sessions, pulls, linear, memory, usage, settings
+    /// New task: the composer as its own page, like a fresh chat.
+    case compose
     case session(String)
 
     var title: String {
@@ -261,6 +263,7 @@ enum Route: Hashable {
         case .linear: return "Linear"
         case .memory: return "Memory"
         case .settings: return "Settings"
+        case .compose: return "New task"
         case .session: return "Session"
         }
     }
@@ -274,7 +277,8 @@ final class AppModel {
     var route: Route = .home {
         didSet {
             guard route != oldValue else { return }
-            if !travelling {
+            // The New task page isn't history: Back from its session skips it.
+            if !travelling && oldValue != .compose {
                 backStack.append(oldValue)
                 if backStack.count > 60 { backStack.removeFirst() }
                 forwardStack.removeAll()
@@ -492,7 +496,14 @@ final class AppModel {
     var openId = ""
 
     var paletteOpen = false
-    var composeOpen = false
+    /// The New task page is open (setting false leaves it for the previous page).
+    var composeOpen: Bool {
+        get { route == .compose }
+        set {
+            if newValue { if route != .compose { route = .compose } }
+            else if route == .compose { if backStack.isEmpty { route = .home } else { back() } }
+        }
+    }
     /// The Import a chat sheet (Import.swift).
     var importOpen = false
     /// The MCP editor or tools list, floating over the window (Servers.swift).
@@ -635,7 +646,7 @@ final class AppModel {
 
     func compose(in projectId: String?) {
         composeProject = projectId
-        composeOpen = true
+        withAnimation(M.page) { composeOpen = true }
     }
 
     // MARK: Slack
