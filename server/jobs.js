@@ -928,7 +928,7 @@ function startPipeline(runId, { config }) {
  * are generous enough to read back and small enough that a 40-minute pipeline
  * run stays a file you can open.
  */
-const CAP = { thinking: 40000, text: 80000, toolResult: 900, steps: 800 };
+const CAP = { thinking: 40000, text: 80000, toolResult: 900, steps: 800, taskSteps: 300, taskText: 6000 };
 
 /**
  * Split one API call's output tokens across the blocks it produced.
@@ -1049,6 +1049,120 @@ function wire(child, runId, msgId, kind) {
     if (i >= 0) push({ blockStart: { i, step } });
     return i;
   };
+
+  /* -- subagents and background tasks ---------------------------------------
+   *
+   * Claude reports every subagent (Agent/Task tool) and background command as
+   * a task: `task_started`, `task_progress`, `task_updated` and
+   * `task_notification` system events, and the subagent's own turns arrive as
+   * assistant/user events carrying `parent_tool_use_id`. They're folded into
+   * `m.tasks` (one record each, with the subagent's steps) rather than the
+   * main step list, so the transcript reads as the parent's work and every
+   * task can be opened on its own.
+   */
+  const taskFor = (m, { id, toolUseId }) => {
+    m.tasks = m.tasks || [];
+    let t = m.tasks.find((x) => (id && x.id === id) || (toolUseId && x.toolUseId === toolUseId));
+    if (!t) {
+      t = { id: id || toolUseId, toolUseId: toolUseId || "", type: "agent", status: "running", startedAt: Date.now(), steps: [] };
+      m.tasks.push(t);
+    }
+    if (id && t.id !== id) t.id = id;
+    if (toolUseId && !t.toolUseId) t.toolUseId = toolUseId;
+    return t;
+  };
+  const taskPatch = (key, fn) => {
+    let id = "";
+    patch((m) => {
+      const t = taskFor(m, key);
+      fn(t, m);
+      id = t.id;
+    });
+    if (id) push({ task: id });
+  };
+  const clip = (v, n) => String(v == null ? "" : v).slice(0, n);
+  const TASK_STATUS = { completed: "completed", failed: "failed", killed: "stopped", stopped: "stopped", cancelled: "stopped" };
+
+  function onTaskEvent(ev) {
+    const key = { id: ev.task_id || "", toolUseId: ev.tool_use_id || "" };
+    if (ev.subtype === "task_started") {
+      taskPatch(key, (t) => {
+        t.type = ev.task_type === "local_bash" ? "bash" : ev.task_type === "local_agent" || ev.subagent_type ? "agent" : String(ev.task_type || "agent");
+        t.description = clip(ev.description, 300);
+        if (ev.subagent_type) t.subagentType = clip(ev.subagent_type, 80);
+        if (ev.prompt) t.prompt = clip(ev.prompt, CAP.taskText);
+        t.background = !!ev.is_backgrounded;
+        t.depth = Number(ev.spawn_depth) || 1;
+        t.status = "running";
+        // The tool call that started it says what a background command runs.
+        const i = key.toolUseId ? toolStep.get(key.toolUseId) : undefined;
+        const step = i === undefined ? null : stepAt(i);
+        if (step && step.raw) {
+          try {
+            const input = JSON.parse(step.raw);
+            if (input.command) t.command = clip(input.command, 2000);
+            if (input.run_in_background) t.background = true;
+          } catch {}
+        }
+      });
+    } else if (ev.subtype === "task_progress") {
+      taskPatch(key, (t) => {
+        const u = ev.usage || {};
+        if (ev.description) t.activity = clip(ev.description, 300);
+        if (ev.last_tool_name) t.lastTool = clip(ev.last_tool_name, 80);
+        if (u.total_tokens) t.tokens = Number(u.total_tokens) || 0;
+        if (u.tool_uses != null) t.toolUses = Number(u.tool_uses) || 0;
+        if (u.duration_ms) t.durationMs = Number(u.duration_ms) || 0;
+      });
+    } else if (ev.subtype === "task_updated") {
+      const pt = ev.patch || {};
+      taskPatch(key, (t) => {
+        if (pt.status) t.status = TASK_STATUS[pt.status] || (pt.status === "running" ? "running" : String(pt.status));
+        if (pt.end_time) t.endedAt = Number(pt.end_time) || Date.now();
+      });
+    } else if (ev.subtype === "task_notification") {
+      taskPatch(key, (t) => {
+        if (ev.status) t.status = TASK_STATUS[ev.status] || String(ev.status);
+        if (ev.summary) t.summary = clip(ev.summary, CAP.taskText);
+        if (ev.output_file) t.outputFile = clip(ev.output_file, 1000);
+        const u = ev.usage || {};
+        if (u.total_tokens) t.tokens = Number(u.total_tokens) || t.tokens || 0;
+        if (u.tool_uses != null) t.toolUses = Number(u.tool_uses) || t.toolUses || 0;
+        if (u.duration_ms) t.durationMs = Number(u.duration_ms) || t.durationMs || 0;
+        if (!t.endedAt && t.status !== "running") t.endedAt = Date.now();
+      });
+    }
+  }
+
+  /** A subagent's own turn: its text and tool calls, onto its task. */
+  function onSubagentEvent(ev) {
+    const key = { toolUseId: ev.parent_tool_use_id };
+    const content = (ev.message && Array.isArray(ev.message.content) && ev.message.content) || [];
+    if (ev.type === "assistant") {
+      taskPatch(key, (t) => {
+        for (const b of content) {
+          if (t.steps.length >= CAP.taskSteps) {
+            t.stepsTruncated = true;
+            break;
+          }
+          if (b.type === "text" && b.text) t.steps.push({ kind: "text", text: clip(b.text, CAP.taskText) });
+          else if (b.type === "tool_use") t.steps.push({ kind: "tool", name: b.name, detail: describeTool(b), id: b.id || "", raw: JSON.stringify(b.input || {}).slice(0, 2000) });
+        }
+      });
+    } else if (ev.type === "user") {
+      taskPatch(key, (t) => {
+        for (const b of content) {
+          if (b.type !== "tool_result") continue;
+          const step = t.steps.find((x) => x.id === b.tool_use_id);
+          if (!step) continue;
+          const body = Array.isArray(b.content) ? b.content.map((c) => (c && c.type === "text" ? c.text : `[${(c || {}).type || "block"}]`)).join("\n") : String(b.content == null ? "" : b.content);
+          step.result = body.trim().slice(0, CAP.toolResult);
+          step.ok = !b.is_error;
+          step.resultLines = body.trim() ? body.trim().split("\n").length : 0;
+        }
+      });
+    }
+  }
 
   // Decoded as a stream: a multi-byte character split across two chunks would
   // otherwise land in the transcript as two replacement characters.
@@ -1303,8 +1417,19 @@ function wire(child, runId, msgId, kind) {
       return;
     }
 
+    // A subagent's turn belongs to its task, not the parent's transcript.
+    if (ev.parent_tool_use_id && (ev.type === "assistant" || ev.type === "user" || ev.type === "stream_event")) {
+      if (ev.type !== "stream_event") onSubagentEvent(ev);
+      return;
+    }
+
     if (ev.type === "stream_event" && ev.event) {
       handleStreamEvent(ev.event);
+      return;
+    }
+
+    if (ev.type === "system" && /^task_(started|progress|updated|notification)$/.test(ev.subtype || "")) {
+      onTaskEvent(ev);
       return;
     }
 
@@ -1395,6 +1520,14 @@ function wire(child, runId, msgId, kind) {
           : String(block.content == null ? "" : block.content);
         const result = body.trim().slice(0, CAP.toolResult);
         const ok = !block.is_error;
+        // A background command says where its output goes; its task can tail it
+        // live. Only from Bash's own answer, and only Claude's `<id>.output` file.
+        const bg = (stepAt(i) || {}).name === "Bash" && /^Command running in background with ID: ([A-Za-z0-9_-]+)\.\s[\s\S]*?written to: (\S+)/.exec(body.trim());
+        if (bg && path.basename(bg[2].replace(/[.,]$/, "")) === `${bg[1]}.output`) taskPatch({ id: bg[1], toolUseId: block.tool_use_id }, (t) => {
+          t.type = "bash";
+          t.background = true;
+          t.outputFile = t.outputFile || bg[2].replace(/[.,]$/, "");
+        });
         patch(() => {
           const step = stepAt(i);
           if (step) {
@@ -1541,6 +1674,12 @@ function wire(child, runId, msgId, kind) {
     // crashed, `claude` not on PATH.
     commit((m, run) => {
       delete run.pendingAsk;
+      // Background work dies with the session process.
+      for (const t of m.tasks || []) {
+        if (t.status !== "running") continue;
+        t.status = "stopped";
+        t.endedAt = Date.now();
+      }
       if (m.state === "running") {
         m.state = why === "stopped" ? "stopped" : "error";
         m.usage = { ...usage };
@@ -1669,6 +1808,13 @@ function describeTool(block) {
       return typeof first === "string" ? first.slice(0, 160) : "";
     }
   }
+}
+
+/** Stop one subagent or background command, leaving the session running. */
+function stopTask(runId, taskId) {
+  const job = running.get(runId);
+  if (!job || !job.child) return false;
+  return writeLine(job.child, { type: "control_request", request_id: `stop-${taskId}-${Date.now().toString(36)}`, request: { subtype: "stop_task", task_id: taskId } });
 }
 
 function stop(runId) {
@@ -1891,6 +2037,7 @@ MEMORY>>>`;
 }
 
 module.exports = {
+  stopTask,
   clear,
   compact,
   events,
@@ -1909,6 +2056,7 @@ module.exports = {
   runningIds,
   awaitingIds,
   resolveWorkdir,
+  sessionWorkdir,
   terminalInfo,
   draftMemory,
 };

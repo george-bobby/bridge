@@ -1184,7 +1184,7 @@ struct TriggerMenu: View {
 extension AppModel {
     /// The sheet's create: like `create(_:direct:project:)`, plus the
     /// worker's job options for a worker started directly.
-    func createTask(_ text: String, direct: Bool, project: String?, opts: [String: Any]) async -> Bool {
+    func createTask(_ text: String, direct: Bool, project: String?, opts: [String: Any], workspace: [String: Any] = [:]) async -> Bool {
         let repo = project.flatMap { self.project($0)?.path } ?? ""
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return false }
@@ -1195,6 +1195,7 @@ extension AppModel {
         await act {
             var body: [String: Any] = ["brief": t, "opts": opts]
             if !repo.isEmpty { body["repo"] = repo }
+            body.merge(workspace) { $1 }
             let out = try await API.post("/api/tasks", body)
             self.say(out["state"].string == "queued" ? "Queued: every worker slot is busy." : "Worker started on \(out["branch"].string)")
             self.open(out["taskId"].string)
@@ -1219,6 +1220,11 @@ struct ComposeSheet: View {
     @StateObject private var effort = Box("")
     @StateObject private var mode = Box("bypassPermissions")
     @StateObject private var projectOpen = Box(false)
+    @StateObject private var git = Box<JSON>(.null)
+    @StateObject private var workspace = Box("worktree")
+    @StateObject private var base = Box("")
+    @StateObject private var branchName = Box("")
+    @ObservedObject private var data = ComposerData.shared
     @FocusState private var focused: Bool
 
     var isSlack: Bool { text.v.trimmingCharacters(in: .whitespaces).range(of: #"^https://[^/]*slack\.com/archives/"#, options: .regularExpression) != nil }
@@ -1228,6 +1234,11 @@ struct ComposeSheet: View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 0) {
                 header
+                if direct.v && !isSlack && !git.v.isNull {
+                    WorkspaceBar(git: git.v, workspace: $workspace.v, base: $base.v, branchName: $branchName.v)
+                        .padding(.horizontal, 8).padding(.top, 2).padding(.bottom, 2)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                }
                 PromptEditor(text: $text.v, placeholder: "Describe what you want built, or paste a Slack thread link…  @ files · # sessions · / skills",
                              source: .project(project.v), fontSize: 15, minHeight: 96, maxHeight: 280, menuAbove: false,
                              focused: $focused) { a in withAnimation(M.snappy) { items.v.append(a) } }
@@ -1266,6 +1277,20 @@ struct ComposeSheet: View {
             mode.v = d["permissionMode"].nonEmpty ?? "bypassPermissions"
         }
         .onKeyPress(.escape) { model.composeOpen = false; return .handled }
+        .onChange(of: data.snapshotOpen) { if data.snapshotOpen.hasPrefix("compose-") { direct.v = true } }
+        .task(id: project.v) {
+            // A new project: back to a fresh worktree right away, then its own branches.
+            withAnimation(M.snappy) {
+                git.v = .null
+                workspace.v = "worktree"
+                base.v = ""
+                branchName.v = ""
+            }
+            let q = project.v.isEmpty ? "" : "?project=\(API.q(project.v))"
+            let out = (try? await API.get("/api/git\(q)")) ?? .null
+            guard !Task.isCancelled else { return }
+            withAnimation(M.snappy) { git.v = out }
+        }
     }
 
     var header: some View {
@@ -1349,8 +1374,14 @@ struct ComposeSheet: View {
         var opts: [String: Any] = ["agent": agent.v, "permissionMode": mode.v, "effort": effort.v]
         opts[isClaude ? "model" : "agentModel"] = modelId.v
         if isClaude && modelId.v.isEmpty { opts.removeValue(forKey: "model") }
+        var ws: [String: Any] = ["workspace": workspace.v]
+        if workspace.v == "worktree" {
+            if !base.v.isEmpty { ws["base"] = base.v }
+            let b = branchName.v.trimmingCharacters(in: .whitespaces)
+            if !b.isEmpty { ws["branch"] = b }
+        }
         Task {
-            if await model.createTask(full, direct: direct.v, project: project.v.isEmpty ? nil : project.v, opts: opts) { model.composeOpen = false }
+            if await model.createTask(full, direct: direct.v, project: project.v.isEmpty ? nil : project.v, opts: opts, workspace: ws) { model.composeOpen = false }
             busy.v = false
         }
     }
@@ -1470,7 +1501,7 @@ enum ComposerSnapshots {
                 shoot(dir, name)
             }
             setText("")
-            for name in ["model", "access", "context"] {
+            for name in ["model", "access", "context", "mcp", "tasks"] {
                 data.snapshotOpen = name
                 try? await Task.sleep(nanoseconds: 1_800_000_000)
                 shoot(dir, name)
@@ -1482,6 +1513,12 @@ enum ComposerSnapshots {
             model.composeOpen = true
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             shoot(dir, "compose")
+            for name in ["compose-direct", "compose-workspace", "compose-base"] {
+                data.snapshotOpen = name
+                try? await Task.sleep(nanoseconds: 1_800_000_000)
+                shoot(dir, name)
+            }
+            data.snapshotOpen = ""
             model.composeOpen = false
         }
     }

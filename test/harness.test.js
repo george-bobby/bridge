@@ -238,6 +238,61 @@ test("a permission ask reaches the dashboard and the answer reaches the worker",
   await waitFor(statusIs(t.taskId, "ready-for-review"), 15000);
 });
 
+test("subagents and background commands become tasks, apart from the parent's steps", async () => {
+  const t = await spawnTask("tasky", "stub:tasks\nstub:report=ready-for-review");
+  await waitFor(statusIs(t.taskId, "ready-for-review"), 15000, "report");
+  await waitFor(idle(t.taskId), 10000, "idle");
+  const run = (await api("GET", `/api/runs/${t.taskId}`)).run;
+  const m = run.messages.find((x) => x.role === "assistant" && x.tasks);
+  assert.ok(m, "a message carries the tasks");
+  const agent = m.tasks.find((x) => x.id === "a1");
+  assert.equal(agent.type, "agent");
+  assert.equal(agent.subagentType, "Explore");
+  assert.equal(agent.status, "completed");
+  assert.equal(agent.tokens, 1500);
+  assert.equal(agent.summary, "Two files: a.txt, b.txt");
+  assert.deepEqual(agent.steps.map((x) => x.kind), ["tool", "text"]);
+  assert.equal(agent.steps[0].result, "a.txt\nb.txt");
+  // The subagent's own `ls` is its step, not the parent's.
+  assert.ok(!m.steps.some((x) => x.id === "tu-sub"));
+  assert.ok(m.steps.some((x) => x.id === "tu-agent"));
+  const bg = m.tasks.find((x) => x.id === "bg1");
+  assert.equal(bg.type, "bash");
+  assert.equal(bg.background, true);
+  assert.equal(bg.command, "npm run build");
+  assert.equal(bg.status, "completed");
+  const out = await api("GET", `/api/runs/${t.taskId}/tasks/bg1/output`);
+  assert.equal(out.text, "building...\ndone\n");
+  assert.equal((await api("POST", `/api/runs/${t.taskId}/tasks/bg1/stop`)).status, 409, "a finished task can't be stopped");
+  assert.equal((await api("GET", `/api/runs/${t.taskId}/tasks/nope/output`)).status, 404);
+});
+
+test("workspaces: a worktree from any branch, or the main checkout, which cleanup leaves alone", async () => {
+  git(["branch", "feature"]);
+  git(["commit", "-q", "--allow-empty", "-m", "feature work"], REPO);
+  git(["branch", "-f", "feature", "HEAD"]);
+  git(["reset", "-q", "--hard", "HEAD~1"]);
+  const info = await api("GET", "/api/git");
+  assert.equal(info.default, "main");
+  assert.ok(info.branches.some((b) => b.name === "feature" && !b.remote));
+  assert.ok(info.worktrees.some((w) => w.main && w.path === REPO));
+
+  const t = await spawnTask("from feature", "stub:report=ready-for-review", { base: "feature" });
+  assert.equal(git(["log", "-1", "--format=%s"], t.worktree), "feature work");
+  assert.equal(meta(t.taskId).base, "feature");
+  assert.equal((await api("POST", "/api/tasks", { repo: REPO, title: "x", brief: "x", base: "nope", start: false })).ok, false);
+
+  const l = await spawnTask("in place", "stub:report=ready-for-review", { workspace: "local" });
+  assert.equal(l.worktree, REPO);
+  assert.equal(meta(l.taskId).adopted, "local");
+  await waitFor(statusIs(l.taskId, "ready-for-review"), 15000, "report");
+  await waitFor(idle(l.taskId), 10000, "idle");
+  const c = await api("POST", `/api/tasks/${l.taskId}/cleanup`, {});
+  assert.equal(c.ok, true, c.error);
+  assert.ok(fs.existsSync(path.join(REPO, "README.md")), "the main checkout stays");
+  git(["branch", "-D", "feature"]);
+});
+
 test("capacity: past the cap a task queues, then starts when a slot frees", async () => {
   const a = await spawnTask("cap a", "stub:stall=1\nstub:report=ready-for-review");
   const b = await spawnTask("cap b", "stub:stall=1\nstub:report=ready-for-review");
