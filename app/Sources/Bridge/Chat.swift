@@ -32,8 +32,8 @@ struct ChatView: View {
                 // its own (PaneView).
                 if showsInspector && !model.isSplit {
                     HStack(spacing: 0) {
-                        Rectangle().fill(T.line).frame(width: 1)
-                        PropertiesPanel(id: id).frame(width: 312)
+                        DetailsResizer(maxWidth: nil)
+                        PropertiesPanel(id: id).frame(width: model.detailsWidth)
                     }
                     // A drag let go over the details still means "beside it".
                     .overlay { if model.paneDragActive { inspectorCatcher } }
