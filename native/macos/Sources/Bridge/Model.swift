@@ -78,6 +78,7 @@ struct Mention: Identifiable, Hashable {
     var channel: String { j["channel"].string }
     var text: String { j["text"].string }
     var permalink: String { j["permalink"].string }
+    var user: String { j["user"].string }
     var threadTs: String { j["threadTs"].string }
     var ts: Double { j["ts"].double }
 }
@@ -274,6 +275,9 @@ final class AppModel {
     var notifyOutcomes = UserDefaults.standard.object(forKey: "notify.outcomes") as? Bool ?? true {
         didSet { UserDefaults.standard.set(notifyOutcomes, forKey: "notify.outcomes") }
     }
+    var notifyMentions = UserDefaults.standard.object(forKey: "notify.mentions") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(notifyMentions, forKey: "notify.mentions") }
+    }
     var showBadge = UserDefaults.standard.object(forKey: "notify.badge") as? Bool ?? true {
         didSet { UserDefaults.standard.set(showBadge, forKey: "notify.badge"); updateBadge() }
     }
@@ -297,6 +301,13 @@ final class AppModel {
     @ObservationIgnored let terms = TermStore()
     var slack: JSON = .null
     var mentions: [Mention] = []
+    /// The newest mention shown on the Slack page; persists so a relaunch doesn't relight them.
+    var slackSeen = UserDefaults.standard.double(forKey: "slack.seen") {
+        didSet { UserDefaults.standard.set(slackSeen, forKey: "slack.seen") }
+    }
+    /// The server's Slack watcher (lib/slackwatch.js): mode, last poll, last error.
+    var slackWatch: JSON = .null
+    var slackUnread: Int { mentions.filter { $0.ts > slackSeen && $0.user != slack["userId"].string }.count }
     var slackThread: JSON = .null
     var slackSelected = ""
     var sessions: [Session] = []
@@ -551,10 +562,56 @@ final class AppModel {
 
     // MARK: Slack
 
-    func loadSlack() async {
+    /// `quiet` is the background poll: a failure there waits for the next one.
+    func loadSlack(quiet: Bool = false) async {
         slack = (try? await API.get("/api/slack/status")) ?? .null
         guard slack["configured"].bool else { return }
-        do { mentions = try await API.get("/api/slack/mentions")["mentions"].array.map(Mention.init) } catch { say(error.localizedDescription, bad: true) }
+        do { mentions = try await API.get("/api/slack/mentions")["mentions"].array.map(Mention.init) } catch {
+            if !quiet { say(error.localizedDescription, bad: true) }
+            return
+        }
+        if let w = try? await API.get("/api/slack/watch") { slackWatch = w["status"] }
+        let newest = mentions.map(\.ts).max() ?? 0
+        if slackSeen == 0 || (route == .slack && NSApp.isActive) { slackSeen = max(slackSeen, newest) }
+    }
+
+    /// What the watcher found this poll: new Inbox items, and replies filed into chats.
+    private func slackFound(_ d: JSON) {
+        slackWatch = d["status"]
+        let fresh = d["fresh"].array, replies = d["followups"].array
+        if !fresh.isEmpty { Task { await loadSlack(quiet: true) } }
+        guard notifyMentions else { return }
+        if let m = fresh.first, !(NSApp.isActive && (route == .slack || route == .inbox)) {
+            let title = fresh.count == 1 ? "\(m["who"].string) in \(m["channel"].nonEmpty ?? "Slack")" : "\(fresh.count) new on Slack"
+            let body = fresh.count == 1 ? Session.plain(m["text"].string) : fresh.prefix(3).map { "\($0["who"].string): \(Session.plain($0["text"].string))" }.joined(separator: "\n")
+            notify(title: title, body: body, runId: "", slack: m["permalink"].string)
+        }
+        for r in replies.prefix(3) {
+            notify(title: "\(r["who"].string) replied in Slack", body: "\(r["title"].string)\n\(Session.plain(r["text"].string))", runId: r["runId"].string)
+        }
+    }
+
+    var slackItems: [JSON] { inbox["slack"].array }
+    /// The Inbox page's tab: decisions, slack, todos, tasks or activity.
+    var inboxTab = "decisions"
+    var slackOpenCount: Int { inbox["counts"]["slack"].int }
+
+    func slackItem(_ id: String, _ action: String, _ extra: [String: Any] = [:]) async {
+        await act {
+            let out = try await API.post("/api/slack/watch/\(API.q(id))", extra.merging(["action": action]) { a, _ in a })
+            if action == "start", let run = out["runId"].nonEmpty {
+                self.say(out["queued"].bool ? "Queued: starts when a worker slot frees" : "Started the pipeline")
+                self.open(run)
+            }
+        }
+    }
+
+    func slackCheckNow() async {
+        await act {
+            let out = try await API.post("/api/slack/watch/poll")
+            self.slackWatch = out["status"]
+            if let e = out["error"].nonEmpty { self.say(e, bad: true) } else { self.say(out["fresh"].int + out["followups"].int > 0 ? "Found \(out["fresh"].int) new, \(out["followups"].int) in chats" : "Nothing new on Slack") }
+        }
     }
 
     func openThread(_ permalink: String) {
@@ -805,6 +862,7 @@ final class AppModel {
             let r = Set(d["running"].array.map(\.string)), a = Set(d["awaiting"].array.map(\.string))
             if r != running || a != awaiting { withAnimation(M.snappy) { running = r; awaiting = a } }
         case "inbox": withAnimation(M.snappy) { inbox = d }
+        case "slack": slackFound(d)
         case "projects": projects = d["projects"].array.map(Project.init)
         case "message", "delta", "run-updated":
             if d["runId"].string == openId || paneRuns.contains(d["runId"].string) { scheduleRefresh() }
@@ -1043,15 +1101,16 @@ final class AppModel {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
     }
 
-    private func notify(title: String, body: String, runId: String) {
+    /// `slack` is a mention's permalink: clicking opens that thread instead of a chat.
+    private func notify(title: String, body: String, runId: String, slack: String = "") {
         guard canNotify else { return }
-        if NSApp.isActive, openId == runId { return }
+        if NSApp.isActive, !runId.isEmpty, openId == runId { return }
         let c = UNMutableNotificationContent()
         c.title = title
         c.body = body
         c.sound = .default
-        c.userInfo = ["runId": runId]
-        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "ask-\(runId)", content: c, trigger: nil))
+        c.userInfo = ["runId": runId, "slack": slack]
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: slack.isEmpty ? "ask-\(runId)" : "slack-\(slack)", content: c, trigger: nil))
     }
 
     func updateBadge() {
