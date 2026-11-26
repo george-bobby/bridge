@@ -21,7 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// Dev aid: render every page of the window to PNGs, for checking the UI
     /// without screen-recording permission. `BRIDGE_SNAPSHOT_DIR=/tmp/x Bridge`.
     private func snapshots(to dir: String) {
-        let routes: [(String, Route)] = [("home", .home), ("board", .board), ("sessions", .sessions), ("archived", .sessions), ("pulls", .pulls), ("linear", .linear), ("inbox", .inbox), ("inbox-slack", .inbox), ("memory", .memory), ("slack", .slack), ("usage", .usage), ("settings", .settings), ("settings-agents", .settings), ("settings-mcp", .settings), ("mcp-tools", .settings), ("mcp-add", .settings), ("settings-integrations", .settings), ("settings-projects", .settings), ("settings-notifications", .settings), ("settings-advanced", .settings)]
+        let routes: [(String, Route)] = [("home", .home), ("board", .board), ("sessions", .sessions), ("archived", .sessions), ("pulls", .pulls), ("linear", .linear), ("inbox", .inbox), ("inbox-slack", .inbox), ("memory", .memory), ("slack", .slack), ("usage", .usage), ("settings", .settings), ("compose", .compose), ("settings-agents", .settings), ("settings-mcp", .settings), ("mcp-tools", .settings), ("mcp-add", .settings), ("settings-integrations", .settings), ("settings-projects", .settings), ("settings-notifications", .settings), ("settings-advanced", .settings)]
         let browser = ProcessInfo.processInfo.environment["BRIDGE_SNAPSHOT_URL"]
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 8_000_000_000)
@@ -271,20 +271,18 @@ struct RootView: View {
             .ignoresSafeArea()
         }
         .overlay {
-            if model.paletteOpen || model.composeOpen || model.importOpen || model.mcpSheet != nil {
+            if model.paletteOpen || model.importOpen || model.mcpSheet != nil {
                 Color.black.opacity(0.32).ignoresSafeArea()
-                    .onTapGesture { model.paletteOpen = false; model.composeOpen = false; model.importOpen = false; model.mcpSheet = nil }
+                    .onTapGesture { model.paletteOpen = false; model.importOpen = false; model.mcpSheet = nil }
                     .transition(.opacity)
             }
         }
         .overlay { if model.paletteOpen { CommandPalette().transition(.panel) } }
-        .overlay { if model.composeOpen { ComposeSheet().transition(.panel) } }
         .overlay { if model.importOpen { ImportSheet().transition(.panel) } }
         .overlay { if let s = model.mcpSheet { MCPSheetHost(sheet: s).transition(.panel) } }
         .overlay(alignment: .bottom) { ToastView() }
         .overlay { if !model.connected && !model.everConnected { ConnectingView().transition(.opacity) } }
         .animation(M.pop, value: model.paletteOpen)
-        .animation(M.pop, value: model.composeOpen)
         .animation(M.pop, value: model.importOpen)
         .animation(M.pop, value: model.mcpSheet)
         .animation(M.page, value: model.everConnected)
@@ -302,6 +300,7 @@ struct RootView: View {
         case .linear: LinearView()
         case .memory: MemoryView()
         case .settings: SettingsView()
+        case .compose: ComposeSheet()
         case .session(let id): ChatView(id: id)
         }
     }
