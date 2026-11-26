@@ -198,12 +198,17 @@ function readJson(file, fallback) {
 // half-written file. The mkdir is here rather than at boot because a fresh
 // clone has no data/ at all, and the first thing to touch it may as well be
 // whichever writer got there first.
-function writeJsonAtomic(file, value) {
+function writeJsonAtomic(file, value, { compact = false } = {}) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.tmp-${process.pid}`;
-  fs.writeFileSync(tmp, JSON.stringify(value, null, 2) + "\n");
+  fs.writeFileSync(tmp, (compact ? JSON.stringify(value) : JSON.stringify(value, null, 2)) + "\n");
   fs.renameSync(tmp, file);
 }
+
+/** Run files are rewritten every 600ms while a turn streams and can run to
+ *  megabytes: written compact, which is a third smaller and quicker to
+ *  serialise than the indented form config.json keeps for hand-editing. */
+const writeRun = (run) => writeJsonAtomic(runPath(run.runId), run, { compact: true });
 
 /* ------------------------------------------------------------------ config */
 
@@ -242,6 +247,78 @@ function writeConfig(patch) {
  * the Spend chart. Read off the runs themselves — every finished job records
  * its `total_cost_usd` on its message — so there is no second ledger to drift.
  */
+/**
+ * What the totals and search need from each run, re-read only when its file
+ * changes: GET /api/state and every `state` broadcast total costs, Usage
+ * totals turns per agent, and the ⌘K palette searches on every keystroke. Each
+ * used to parse every transcript in full, on the event loop.
+ */
+const indexCache = new Map();
+function runIndex(f) {
+  const file = path.join(RUNS_DIR, f);
+  const stamp = stampOf(file);
+  const hit = indexCache.get(f);
+  if (hit && hit.stamp === stamp) return hit.index;
+  const run = readJson(file, null);
+  const messages = (run && Array.isArray(run.messages) && run.messages) || [];
+  const index = {
+    runId: (run && run.runId) || "",
+    who: run ? run.who : "",
+    kind: (run && run.kind) || "slack",
+    updatedAt: (run && run.updatedAt) || 0,
+    costs: [],
+    turns: [],
+    fields: run && run.runId && run.text ? [{ text: String(run.text), lower: String(run.text).toLowerCase(), role: "thread", ts: run.createdAt }] : [],
+  };
+  for (const m of messages) {
+    if (!m) continue;
+    const c = Number(m.cost) || 0;
+    if (c) index.costs.push([Number(m.ts) || 0, c]);
+    if (m.role === "assistant" && m.ts) {
+      const u = m.usage || {};
+      index.turns.push({ ts: m.ts, agent: m.agent || "claude", tokens: (u.input || 0) + (u.output || 0) + (u.cacheRead || 0) + (u.cacheWrite || 0), cost: c, acu: Number(m.acu) || 0 });
+    }
+    if (m.text) index.fields.push({ text: String(m.text), lower: String(m.text).toLowerCase(), role: m.role, ts: m.ts || m.at });
+  }
+  indexCache.set(f, { stamp, index });
+  return index;
+}
+
+/** Every run's index, dropping the cache entries of deleted runs. */
+function runIndexes() {
+  ensureRunsDir();
+  const seen = new Set();
+  const out = [];
+  for (const f of fs.readdirSync(RUNS_DIR)) {
+    if (!f.endsWith(".json") || f.includes(".tmp-")) continue;
+    seen.add(f);
+    out.push(runIndex(f));
+  }
+  for (const f of indexCache.keys()) if (!seen.has(f)) indexCache.delete(f);
+  return out;
+}
+
+/** Turns, tokens, cost and ACUs per agent over the last week and month (Usage's local counts). */
+function summariseUsage() {
+  const now = Date.now() / 1000;
+  const out = {};
+  const bucket = () => ({ turns: 0, tokens: 0, cost: 0, acu: 0 });
+  for (const idx of runIndexes()) {
+    for (const t of idx.turns) {
+      out[t.agent] = out[t.agent] || { week: bucket(), month: bucket() };
+      for (const [k, days] of [["week", 7], ["month", 30]]) {
+        if (now - t.ts > days * 86400) continue;
+        const b = out[t.agent][k];
+        b.turns++;
+        b.tokens += t.tokens;
+        b.cost += t.cost;
+        b.acu += t.acu;
+      }
+    }
+  }
+  return out;
+}
+
 function summariseCost() {
   ensureRunsDir();
   const midnight = new Date();
@@ -259,13 +336,8 @@ function summariseCost() {
     jobs = 0,
     total = 0;
   const days = new Map();
-  for (const f of fs.readdirSync(RUNS_DIR)) {
-    if (!f.endsWith(".json") || f.includes(".tmp-")) continue;
-    const run = readJson(path.join(RUNS_DIR, f), null);
-    for (const m of (run && Array.isArray(run.messages) && run.messages) || []) {
-      const c = Number(m.cost) || 0;
-      if (!c) continue;
-      const ts = Number(m.ts) || 0;
+  for (const idx of runIndexes()) {
+    for (const [ts, c] of idx.costs) {
       jobs++;
       total += c;
       if (ts >= startOfDay) {
@@ -375,7 +447,7 @@ function setBoard(id, column) {
   if (col && !BOARD_COLUMNS.includes(col)) throw new Error(`unknown column: ${col}`);
   if (col) run.board = { column: col, at: Date.now() };
   else delete run.board;
-  writeJsonAtomic(runPath(run.runId), run);
+  writeRun(run);
   return run.board || null;
 }
 
@@ -385,7 +457,7 @@ function setPinned(id, pinned) {
   if (!run) throw new Error("no such run");
   if (pinned) run.pinned = true;
   else delete run.pinned;
-  writeJsonAtomic(runPath(run.runId), run);
+  writeRun(run);
   return !!run.pinned;
 }
 
@@ -398,14 +470,14 @@ function setProject(id, project) {
   if (!p) throw new Error(`no such project: ${project}`);
   run.project = p.id;
   if (!run.sessionId) run.opts = { ...run.opts, workdir: p.path };
-  writeJsonAtomic(runPath(run.runId), run);
+  writeRun(run);
   return p.id;
 }
 
 function saveRun(run) {
   ensureRunsDir();
   run.updatedAt = Math.floor(Date.now() / 1000);
-  writeJsonAtomic(runPath(run.runId), run);
+  writeRun(run);
   return run;
 }
 
@@ -437,7 +509,7 @@ function clearPendingAsks() {
     }
     // Not saveRun(): bumping updatedAt here would mark every swept chat unread
     // on every restart.
-    writeJsonAtomic(runPath(run.runId), run);
+    writeRun(run);
     swept++;
   }
   return swept;
@@ -454,12 +526,57 @@ function clearPendingAsks() {
 function listRunSummaries() {
   ensureRunsDir();
   const out = [];
+  const seen = new Set();
+  const projectsStamp = stampOf(require("./projects").FILE);
   for (const f of fs.readdirSync(RUNS_DIR)) {
     if (!f.endsWith(".json") || f.includes(".tmp-")) continue;
-    const run = readJson(path.join(RUNS_DIR, f), null);
-    if (run && run.runId) out.push(summariseRun(run));
+    seen.add(f);
+    const summary = cachedSummary(f, projectsStamp);
+    if (summary) out.push(summary);
   }
+  for (const f of summaryCache.keys()) if (!seen.has(f)) summaryCache.delete(f);
   return out.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+}
+
+/**
+ * Summaries, cached by what's on disk.
+ *
+ * Every `runs` broadcast used to read and parse every run file in full (a
+ * long chat is megabytes), synchronously, on the event loop: a dozen times a
+ * turn with a few hundred chats, which stalled streaming for everyone. A
+ * summary only changes when its run file, its task's meta.json or the project
+ * list does, so a stat of each is enough to know whether to re-read. Any
+ * writer (this module, imports, a hand edit) changes the stamp.
+ */
+const summaryCache = new Map();
+
+function stampOf(file) {
+  try {
+    const st = fs.statSync(file);
+    return `${st.ino}:${st.size}:${st.mtimeMs}`;
+  } catch {
+    return "";
+  }
+}
+
+function cachedSummary(f, projectsStamp = stampOf(require("./projects").FILE)) {
+  const file = path.join(RUNS_DIR, f);
+  const runStamp = stampOf(file);
+  if (!runStamp) return null;
+  const id = f.slice(0, -5);
+  const stamp = `${runStamp}|${stampOf(path.join(DATA_DIR, "tasks", id, "meta.json"))}|${projectsStamp}`;
+  const hit = summaryCache.get(f);
+  if (hit && hit.stamp === stamp) return hit.summary;
+  const run = readJson(file, null);
+  const summary = run && run.runId ? summariseRun(run) : null;
+  summaryCache.set(f, { stamp, summary });
+  return summary;
+}
+
+/** One chat's summary (its title, who and text) without parsing its transcript again. */
+function runSummary(id) {
+  const safe = safeId(id);
+  return safe ? cachedSummary(`${safe}.json`) : null;
 }
 
 /** Which agent sessions each chat holds (server/history.js: what's already imported). */
@@ -537,15 +654,12 @@ function summariseRun(run) {
 function searchRuns(q, limit = 30) {
   const needle = String(q || "").trim().toLowerCase();
   if (needle.length < 2) return [];
-  ensureRunsDir();
   const hits = [];
-  for (const f of fs.readdirSync(RUNS_DIR)) {
-    if (!f.endsWith(".json") || f.includes(".tmp-")) continue;
-    const run = readJson(path.join(RUNS_DIR, f), null);
-    if (!run || !run.runId) continue;
-    const msgs = Array.isArray(run.messages) ? run.messages : [];
-    const fields = [{ text: run.text, role: "thread", ts: run.createdAt }, ...msgs.map((m) => ({ text: m.text, role: m.role, ts: m.ts || m.at }))];
-    const hit = fields.reverse().find((m) => String(m.text || "").toLowerCase().includes(needle));
+  for (const run of runIndexes()) {
+    if (!run.runId) continue;
+    const fields = run.fields;
+    let hit = null;
+    for (let i = fields.length - 1; i >= 0 && !hit; i--) if (fields[i].lower.includes(needle)) hit = fields[i];
     if (!hit) continue;
     const text = String(hit.text);
     const i = text.toLowerCase().indexOf(needle);
@@ -670,6 +784,7 @@ module.exports = {
   readConfig,
   writeConfig,
   summariseCost,
+  summariseUsage,
   safeId,
   blankRun,
   loadRun,
@@ -680,6 +795,8 @@ module.exports = {
   BOARD_COLUMNS,
   clearPendingAsks,
   listRunSummaries,
+  runSummary,
+  runStamp: (id) => (safeId(id) ? stampOf(runPath(safeId(id))) : ""),
   listRunSessions,
   searchRuns,
   appendMessage,
