@@ -1018,6 +1018,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       store.deleteRun(id);
+      harness.discard(id);
       bus.broadcast("runs", { runs: store.listRunSummaries() });
       sendJson(res, 200, { ok: true });
       return;
