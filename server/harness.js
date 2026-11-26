@@ -78,7 +78,9 @@ function orchestratorFor(taskId) {
 
 function titleOf(taskId) {
   const meta = tasks.readMeta(taskId) || {};
-  const run = store.loadRun(taskId);
+  // The cached summary carries who/text/permalink: no need to parse a
+  // transcript that can run to megabytes for its title (the Inbox asks per row).
+  const run = store.runSummary(taskId);
   return String(meta.title || (run && (run.who !== "Slack thread" ? `${run.who}: ${run.text}` : run.permalink)) || taskId).slice(0, 90);
 }
 

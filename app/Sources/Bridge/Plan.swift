@@ -32,7 +32,8 @@ struct Plan: Equatable {
         var items: [PlanItem] = []
         for m in run["messages"].array where m["role"].string == "assistant" {
             for s in m["steps"].array where s["kind"].string == "tool" && tools.contains(s["name"].string) {
-                guard let raw = try? JSONDecoder().decode(JSON.self, from: Data(s["raw"].string.utf8)) else { continue }
+                let raw = JSON.parse(text: s["raw"].string)
+                if raw.isNull { continue }
                 let list = raw["todos"].array.isEmpty ? raw["plan"].array : raw["todos"].array
                 let next = list.enumerated().compactMap { i, t -> PlanItem? in
                     let text = (t["content"].nonEmpty ?? t["step"].nonEmpty ?? t["title"].nonEmpty ?? t["activeForm"].string).trimmingCharacters(in: .whitespacesAndNewlines)

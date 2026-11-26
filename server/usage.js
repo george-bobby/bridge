@@ -282,35 +282,8 @@ async function devin() {
 
 /** Turns, tokens, cost and ACUs per agent over the last 7 and 30 days, read
  *  off the transcripts Bridge keeps. */
-function local() {
-  const dir = path.join(env.dataDir, "runs");
-  const now = Date.now() / 1000;
-  const out = {};
-  const bucket = () => ({ turns: 0, tokens: 0, cost: 0, acu: 0 });
-  let files = [];
-  try {
-    files = fs.readdirSync(dir).filter((f) => f.endsWith(".json") && !f.includes(".tmp-"));
-  } catch {}
-  for (const f of files) {
-    const runFile = readJson(path.join(dir, f));
-    for (const m of (runFile && runFile.messages) || []) {
-      if (m.role !== "assistant" || !m.ts) continue;
-      const a = m.agent || "claude";
-      out[a] = out[a] || { week: bucket(), month: bucket() };
-      const u = m.usage || {};
-      const tokens = (u.input || 0) + (u.output || 0) + (u.cacheRead || 0) + (u.cacheWrite || 0);
-      for (const [k, days] of [["week", 7], ["month", 30]]) {
-        if (now - m.ts > days * 86400) continue;
-        const b = out[a][k];
-        b.turns++;
-        b.tokens += tokens;
-        b.cost += Number(m.cost) || 0;
-        b.acu += Number(m.acu) || 0;
-      }
-    }
-  }
-  return out;
-}
+/** Bridge's own record of turns per agent (store.js indexes the run files). */
+const local = () => require("./store").summariseUsage();
 
 /* ---------------------------------------------------------------- entry */
 

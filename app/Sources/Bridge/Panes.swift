@@ -283,11 +283,15 @@ extension AppModel {
         if let next { dropInPane(run: next, tab: "chat", at: cur.id, edge: .trailing) }
     }
 
-    func refreshPanes() async {
-        for run in paneRuns {
-            if let r = try? await API.get("/api/runs/\(API.q(run))") { runs[run] = r["run"] }
+    /// Loads the panes' runs that aren't loaded; `all` re-reads every one (on
+    /// reconnect). Loaded panes stay current through streamed deltas and
+    /// per-run refreshes, so opening a chat no longer re-downloads its neighbours.
+    func refreshPanes(all: Bool = false) async {
+        let todo = paneRuns.filter { all || runs[$0] == nil }
+        await withTaskGroup(of: Void.self) { g in
+            for run in todo { g.addTask { await self.fetchRun(run) } }
         }
-        for p in panes where p.details && isSplit && paneRuns.contains(p.run) { await loadTask(p.run) }
+        for p in panes where p.details && isSplit && todo.contains(p.run) { await loadTask(p.run) }
     }
 
     // MARK: terminal tabs

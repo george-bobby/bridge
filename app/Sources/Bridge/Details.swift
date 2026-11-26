@@ -13,7 +13,8 @@ extension AppModel {
     /// link, branch, title or brief names the key.
     func linkedIssue(_ s: Session) -> Issue? {
         let key = s.issueKey
-        return key.isEmpty ? nil : issues.first { $0.key == key }
+        _ = linear // observe the feed: the index itself isn't tracked
+        return key.isEmpty ? nil : issuesByKey[key]
     }
 
     /// What the Status row shows: a manual move, then what's live, then
