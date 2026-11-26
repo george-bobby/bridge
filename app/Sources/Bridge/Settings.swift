@@ -858,10 +858,10 @@ struct ProjectRow: View {
             HStack(spacing: 6) {
                 Button("Orchestrator") { model.openOrchestrator(project.id) }.buttonStyle(LButton())
                 Menu {
-                    Button("New Task…") { model.compose(in: project.id) }
-                    Button("Reveal in Finder") { NSWorkspace.shared.open(URL(fileURLWithPath: project.path)) }
+                    Button { model.compose(in: project.id) } label: { Label("New Task…", systemImage: "square.and.pencil") }
+                    Button { NSWorkspace.shared.open(URL(fileURLWithPath: project.path)) } label: { Label("Reveal in Finder", systemImage: "folder") }
                     Divider()
-                    Button("Remove Project…", role: .destructive) { remove() }
+                    Button(role: .destructive) { remove() } label: { Label("Remove Project…", systemImage: "trash") }
                 } label: {
                     Image(systemName: "ellipsis").font(.system(size: 12, weight: .semibold)).foregroundStyle(T.text2)
                         .frame(width: 28, height: 28)

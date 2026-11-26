@@ -138,6 +138,8 @@ struct Issue: Identifiable, Hashable {
     var stateType: String { j["stateType"].string }
     var stateColor: String { j["stateColor"].string }
     var statePos: Double { j["statePos"].double }
+    /// The Slack thread the issue came from (an attachment or a link in its description).
+    var slackUrl: String { j["slackUrl"].string }
     var team: String { j["team"].string }
     var project: String { j["project"].string }
     var cycle: Int? { j["cycle"].isNull ? nil : j["cycle"].int }
@@ -427,9 +429,13 @@ final class AppModel {
 
     var paletteOpen = false
     var composeOpen = false
+    /// The Import a chat sheet (Import.swift).
+    var importOpen = false
     /// The MCP editor or tools list, floating over the window (Servers.swift).
     var mcpSheet: MCPSheet? = nil
     var composeText = ""
+    /// Whether the New Task sheet was on "Start a worker now" when it closed.
+    var composeDirect = false
     var toast: String? = nil
     var toastBad = false
 
@@ -477,6 +483,8 @@ final class AppModel {
         // stands, once nothing live says otherwise (a manual move still wins).
         if let issue = linkedIssue(s) { return Column(linear: issue.status) }
         if st == "cleaned" || st == "stopped" { return .done }
+        // Brought in from an agent's own history: nothing has run here yet.
+        if st == "imported" && !isLive(s) { return .backlog }
         // A PR missing from the feed is unknown, not closed: the feed holds only
         // your PRs and reviews asked of you, so stay in review until it's seen.
         // Past the feed's 14-day merged window, an unseen PR is taken as landed.
@@ -975,9 +983,19 @@ final class AppModel {
     }
 
     func delete(_ id: String) async {
+        let a = NSAlert()
+        let title = sessions.first { $0.id == id }?.title ?? "this session"
+        a.messageText = "Delete \u{201C}\(title.count > 60 ? String(title.prefix(59)) + "…" : title)\u{201D}?"
+        a.informativeText = "Its chat goes and its open questions and to-dos are dismissed. Its worktree and branch stay on disk. There's no undo."
+        a.addButton(withTitle: "Delete")
+        a.addButton(withTitle: "Cancel")
+        a.buttons.first?.hasDestructiveAction = true
+        guard a.runModal() == .alertFirstButtonReturn else { return }
         await act {
             try await API.delete("/api/runs/\(API.q(id))")
-            if self.openId == id { self.openId = ""; self.route = .sessions }
+            // Off the deleted chat only; the board stays the board.
+            if case .session(let r) = self.route, r == id { self.navigate(.sessions) }
+            if self.openId == id { self.openId = "" }
             self.forgetPanes(of: id)
         }
     }

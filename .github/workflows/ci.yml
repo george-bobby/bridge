@@ -61,3 +61,5 @@ jobs:
           node-version: 22
       - name: Build and package Bridge.app
         run: ./scripts/build.sh
+      - name: UI smoke test (render every main page against the demo)
+        run: ./scripts/smoke.sh

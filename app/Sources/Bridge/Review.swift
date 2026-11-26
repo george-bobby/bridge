@@ -64,7 +64,7 @@ struct ChangesView: View {
     }
 
     var diffView: some View {
-        ScrollView([.vertical, .horizontal]) { DiffText(diff: diff.v).padding(12) }
+        ScrollView(.vertical) { DiffText(diff: diff.v).padding(12) }
             .defaultScrollAnchor(.topLeading)
             .background(T.bg)
     }
@@ -158,63 +158,98 @@ struct ChangesView: View {
     }
 }
 
-/// A unified diff, coloured line by line.
+/// A unified diff, coloured line by line, selectable across lines.
 struct DiffText: View {
     let diff: String
     var body: some View {
         if diff.isEmpty {
             Text("Pick a file").font(T.ui(12)).foregroundStyle(T.text3)
         } else {
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(diff.split(separator: "\n", omittingEmptySubsequences: false).prefix(4000).enumerated()), id: \.offset) { _, line in
-                    let l = String(line)
-                    let header = l.hasPrefix("+++") || l.hasPrefix("---") || l.hasPrefix("diff ") || l.hasPrefix("index ")
-                    Text(l.isEmpty ? " " : l)
-                        .font(T.mono(11.5))
-                        .foregroundStyle(header ? T.text3 : l.hasPrefix("@@") ? T.accent : l.hasPrefix("+") ? T.green : l.hasPrefix("-") ? T.red : T.text2)
-                        .padding(.horizontal, 6)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(header ? Color.clear : l.hasPrefix("+") ? T.green.opacity(0.08) : l.hasPrefix("-") ? T.red.opacity(0.08) : .clear)
-                }
-            }
-            .textSelection(.enabled)
-            .fixedSize(horizontal: true, vertical: false)
+            RichText(key: "unified|\(diff.hashValue)") { DiffText.render(diff) }
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    static func render(_ diff: String) -> NSAttributedString {
+        let out = NSMutableAttributedString()
+        let font = NSFont.monospacedSystemFont(ofSize: 11.5, weight: .regular)
+        let add = RichBlock(.band(NT.green.withAlphaComponent(0.08))), del = RichBlock(.band(NT.red.withAlphaComponent(0.08)))
+        let lines = diff.split(separator: "\n", omittingEmptySubsequences: false).prefix(4000)
+        for (i, line) in lines.enumerated() {
+            let l = String(line)
+            let header = l.hasPrefix("+++") || l.hasPrefix("---") || l.hasPrefix("diff ") || l.hasPrefix("index ")
+            let color: NSColor = header ? NT.text3 : l.hasPrefix("@@") ? NT.accent : l.hasPrefix("+") ? NT.green : l.hasPrefix("-") ? NT.red : NT.text2
+            let p = NSMutableParagraphStyle()
+            p.lineBreakMode = .byCharWrapping
+            p.lineSpacing = 1.5
+            if !header && l.hasPrefix("+") { p.textBlocks = [add] } else if !header && l.hasPrefix("-") { p.textBlocks = [del] } else { p.headIndent = 0 }
+            if !header && l.hasPrefix("@@") { p.paragraphSpacingBefore = i == 0 ? 0 : 6 }
+            out.append(NSAttributedString(string: (l.isEmpty ? " " : l) + (i == lines.count - 1 ? "" : "\n"), attributes: [.font: font, .foregroundColor: color, .paragraphStyle: p]))
+        }
+        return out
     }
 }
 
 // MARK: - Inline edits and to-dos in the transcript
 
-/// An Edit / Write / MultiEdit step's change, as a small diff under the step.
+/// An Edit / Write / MultiEdit step's change, as a selectable diff under the
+/// step: long ones fold to a few lines with a toggle for the rest.
 struct EditPreview: View {
     let raw: JSON
-    var body: some View {
-        let edits: [(String, String)] = {
-            if !raw["edits"].array.isEmpty { return raw["edits"].array.map { ($0["old_string"].string, $0["new_string"].string) } }
-            if !raw["old_string"].isNull || !raw["new_string"].isNull { return [(raw["old_string"].string, raw["new_string"].string)] }
-            if !raw["content"].isNull { return [("", raw["content"].string)] }
-            return []
-        }()
-        if !edits.isEmpty {
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(edits.prefix(4).enumerated()), id: \.offset) { _, e in
-                    ForEach(Array(e.0.split(separator: "\n", omittingEmptySubsequences: false).prefix(12).enumerated()), id: \.offset) { _, l in
-                        line("-", String(l), T.red)
-                    }
-                    ForEach(Array(e.1.split(separator: "\n", omittingEmptySubsequences: false).prefix(16).enumerated()), id: \.offset) { _, l in
-                        line("+", String(l), T.green)
-                    }
-                }
-            }
-            .padding(.vertical, 4)
-            .background(RoundedRectangle(cornerRadius: 6).fill(T.bg))
+    @StateObject private var all = Box(false)
+    private let folded = 14
+
+    var edits: [(String, String)] {
+        if !raw["edits"].array.isEmpty { return raw["edits"].array.map { ($0["old_string"].string, $0["new_string"].string) } }
+        if !raw["old_string"].isNull || !raw["new_string"].isNull { return [(raw["old_string"].string, raw["new_string"].string)] }
+        if !raw["content"].isNull { return [("", raw["content"].string)] }
+        return []
+    }
+
+    /// Every line, signed; an empty side (a new file) adds nothing.
+    var lines: [(Character, String)] {
+        edits.flatMap { e -> [(Character, String)] in
+            func split(_ s: String) -> [String] { s.isEmpty ? [] : s.split(separator: "\n", omittingEmptySubsequences: false).map(String.init) }
+            return split(e.0).map { ("-", $0) } + split(e.1).map { ("+", $0) }
         }
     }
 
-    func line(_ sign: String, _ text: String, _ color: Color) -> some View {
-        Text("\(sign) \(text)").font(T.mono(11)).foregroundStyle(color).lineLimit(1)
-            .padding(.horizontal, 8).frame(maxWidth: .infinity, alignment: .leading)
-            .background(color.opacity(0.07))
+    var body: some View {
+        let lines = self.lines
+        if !lines.isEmpty {
+            let shown = all.v ? lines : Array(lines.prefix(folded))
+            VStack(alignment: .leading, spacing: 0) {
+                RichText(key: "diff|\(shown.count)|\(raw.hashValue)") { EditPreview.render(shown) }
+                    .padding(.vertical, 4)
+                if lines.count > folded {
+                    Button { withAnimation(M.snappy) { all.v.toggle() } } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: all.v ? "chevron.up" : "chevron.down").font(.system(size: 8.5, weight: .bold))
+                            Text(all.v ? "Show less" : "Show all \(lines.count) lines").font(T.ui(11, .medium))
+                        }
+                        .foregroundStyle(T.text3).padding(.horizontal, 10).frame(maxWidth: .infinity, alignment: .leading).frame(height: 24)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .overlay(alignment: .top) { Hairline() }
+                }
+            }
+            .background(RoundedRectangle(cornerRadius: 6).fill(T.bg))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+        }
+    }
+
+    static func render(_ lines: [(Character, String)]) -> NSAttributedString {
+        let out = NSMutableAttributedString()
+        let font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+        let bands: [Character: RichBlock] = ["-": RichBlock(.band(NT.red.withAlphaComponent(0.08))), "+": RichBlock(.band(NT.green.withAlphaComponent(0.08)))]
+        for (i, l) in lines.enumerated() {
+            let p = NSMutableParagraphStyle()
+            p.textBlocks = [bands[l.0]!]
+            p.lineBreakMode = .byCharWrapping
+            out.append(NSAttributedString(string: "\(l.0) \(l.1)\(i == lines.count - 1 ? "" : "\n")", attributes: [.font: font, .foregroundColor: l.0 == "-" ? NT.red : NT.green, .paragraphStyle: p]))
+        }
+        return out
     }
 }
 

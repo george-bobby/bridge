@@ -46,13 +46,24 @@ const cfg = () => store.readConfig().harness;
 function ensureOrchestrator(projectId = projects.defaultId()) {
   const id = projects.orchestratorId(projectId);
   let run = store.loadRun(id);
-  if (run && run.kind === "orchestrator") return run;
+  // It works in its project's checkout ("this repo" means the project), with
+  // Bridge added as a directory. A chat that already has a session keeps the
+  // folder it was minted in, or --resume would no longer find it.
+  const p = projects.get(projectId);
+  const home = p && p.path && fs.existsSync(p.path) ? p.path : ROOT;
+  if (run && run.kind === "orchestrator") {
+    if (!run.sessionId && (run.opts || {}).workdir !== home) {
+      run.opts = { ...run.opts, workdir: home };
+      store.saveRun(run);
+    }
+    return run;
+  }
   run = run || store.blankRun(id, { who: "Orchestrator", action: "acted", phase: "idle" });
   run.kind = "orchestrator";
   run.who = "Orchestrator";
   run.project = projectId;
   run.text = "Your second-in-command. Hand it work; it spawns workers and tells you what happened.";
-  run.opts = { ...run.opts, workdir: ROOT };
+  run.opts = { ...run.opts, workdir: home };
   store.saveRun(run);
   return run;
 }
@@ -233,6 +244,10 @@ function onJobEnd(e) {
     const crashed = !result && why !== "closed";
     if (crashed) {
       outcome(runId, "worker-gone", { text: `the session ended without a result (${why}). ${String(stderr || "").trim().split("\n").slice(-2).join(" ")}`.trim() });
+    } else if (meta.imported) {
+      // A chat you brought in from an agent's own history never took on the
+      // report contract: its turns end like any chat's, without a nudge.
+      tasks.writeMeta(runId, { status: "idle" });
     } else if (!meta.nudged) {
       // One automatic nudge, then it's yours.
       tasks.writeMeta(runId, { nudged: true });
@@ -396,6 +411,63 @@ async function spawnTask({ repo, title, brief, branch, base = "", workspace = ""
   return { taskId: id, state, worktree: wt.worktree, branch: wt.branch, brief: p.brief };
 }
 
+/**
+ * A chat you had with Claude Code, Codex, Cursor or Devin outside Bridge,
+ * as a worker: its transcript, in the folder it ran in, carrying on in the
+ * same agent session on your next message. The folder is adopted, never
+ * removed by cleanup. Importing the same chat again opens the first import.
+ */
+function importChat({ agent, id, history = require("./history") }) {
+  if (!history.AGENTS.includes(agent)) throw new Error(`unknown agent: ${agent}`);
+  if (!id) throw new Error("which chat?");
+  const runs = store.listRunSessions();
+  const existing = history.known(runs).get(`${agent}:${id}`);
+  if (existing) return { taskId: existing, existing: true };
+  const chat = history.list({ agents: [agent], runs }).chats.find((c) => c.id === id) || {};
+  const t = history.read(agent, id);
+  if (!t.messages.length) throw new Error("that chat has nothing to import");
+  // Its session only makes sense in the folder it ran in: never carry it on elsewhere.
+  if (!env.demo && (!t.cwd || !fs.existsSync(t.cwd))) throw new Error(`the folder this chat ran in is gone${t.cwd ? ` (${t.cwd})` : ""}, so it can't carry on`);
+  const cwd = t.cwd;
+  const git = (args) => {
+    try {
+      return require("child_process").execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] }).trim();
+    } catch {
+      return "";
+    }
+  };
+  const branch = cwd ? git(["rev-parse", "--abbrev-ref", "HEAD"]) : "";
+  const common = cwd ? git(["rev-parse", "--path-format=absolute", "--git-common-dir"]) : "";
+  const repo = common ? path.dirname(common) : cwd;
+  const label = { claude: "Claude Code", codex: "Codex", cursor: "Cursor", devin: "Devin" }[agent];
+  const title = String(chat.title || (t.messages.find((m) => m.role === "user") || {}).text || `${label} chat`)
+    .replace(/\s+/g, " ")
+    .slice(0, 80)
+    .trim();
+  const taskId = tasks.newTaskId(title);
+  tasks.writeBrief(taskId, `# ${title}\n\nImported from ${label} (session \`${id}\`${cwd ? ` in ${cwd}` : ""}). The transcript is the chat itself; carry on from where it left off.\n`);
+  tasks.writeMeta(taskId, { kind: "task", title, repo, worktree: cwd, branch, base: "", from: "", status: "imported", adopted: "import", imported: { agent, id } });
+
+  const run = store.blankRun(taskId, { who: title, text: String(chat.prompt || title).slice(0, 400), action: "pending", phase: "idle" });
+  run.kind = "task";
+  run.imported = { agent, id, at: now() };
+  run.opts = { ...run.opts, agent, workdir: cwd, ...(t.model && agent !== "claude" ? { agentModel: t.model } : {}) };
+  // The agent resumes its own session: Claude by the chat's session id, the
+  // others through agentSessions (see jobs.launchAgent).
+  if (agent === "claude") run.sessionId = id;
+  else run.agentSessions = { [agent]: id };
+  for (const m of t.messages) store.appendMessage(run, m);
+  store.appendMessage(run, { role: "event", phase: "imported", text: `Imported from **${label}**: ${t.messages.length} messages${cwd ? ` in \`${cwd}\`` : ""}. Your next message continues the same ${label} session.` });
+  run.createdAt = Math.min(...t.messages.map((m) => m.ts || now())) || now();
+  // The project it belongs to, set directly: store.setProject would also move
+  // a chat without a Claude session id into the project's checkout.
+  run.project = projects.of(run, tasks.readMeta(taskId) || {}) || "";
+  store.saveRun(run);
+  tasks.appendEvent({ taskId, name: "imported", text: `${label} session ${id}${cwd ? ` in ${cwd}` : ""}` });
+  bus.broadcast("runs", { runs: store.listRunSummaries() });
+  return { taskId, existing: false };
+}
+
 /** Pipeline start for a Slack chat, through the same cap. */
 function startSlack(runId) {
   const run = store.loadRun(runId);
@@ -452,6 +524,43 @@ function declare(taskId, state, text = "") {
 }
 
 /* --------------------------------------------------------------- answers */
+
+/**
+ * A worker's task list, for agents without a to-do tool of their own
+ * (`bridge plan`): set replaces it, add appends, start/done/skip mark item n
+ * (1-based), clear removes it. Stored on the task; the app shows it as the
+ * Tasks progress, like a TodoWrite list.
+ */
+function plan(taskId, op, args = []) {
+  if (!tasks.exists(taskId)) throw new Error(`no such task: ${taskId}`);
+  const meta = tasks.readMeta(taskId) || {};
+  let items = Array.isArray(meta.plan) ? meta.plan.map((x) => ({ ...x })) : [];
+  const texts = args.map((a) => String(a || "").replace(/\s+/g, " ").trim().slice(0, 300)).filter(Boolean);
+  const at = (n) => {
+    const i = Number(n) - 1;
+    if (!Number.isInteger(i) || i < 0 || i >= items.length) throw new Error(`no item ${n}: the list has ${items.length}`);
+    return i;
+  };
+  if (op === "set") {
+    if (!texts.length) throw new Error('plan set "<item>" "<item>" …');
+    items = texts.slice(0, 50).map((text) => ({ text, status: "pending" }));
+  } else if (op === "add") {
+    if (!texts.length) throw new Error('plan add "<item>"');
+    items.push(...texts.map((text) => ({ text, status: "pending" })));
+  } else if (op === "start" || op === "done" || op === "skip") {
+    if (!args.length) throw new Error(`plan ${op} <n>`);
+    for (const n of args) {
+      const i = at(n);
+      if (op === "start") items.forEach((x, j) => j !== i && x.status === "in_progress" && (x.status = "pending"));
+      items[i].status = op === "start" ? "in_progress" : op === "done" ? "completed" : "cancelled";
+    }
+  } else if (op === "clear") items = [];
+  else throw new Error("plan set|add|start|done|skip|clear");
+  items = items.slice(0, 50);
+  tasks.writeMeta(taskId, { plan: items, planAt: now() });
+  bus.broadcast("runs", { runs: store.listRunSummaries() });
+  return items;
+}
 
 /**
  * Answer a decision. A question's answer goes back to its worker as a
@@ -708,6 +817,8 @@ module.exports = {
   ORCH,
   start,
   ensureOrchestrator,
+  importChat,
+  plan,
   spawnTask,
   startSlack,
   relaunch,

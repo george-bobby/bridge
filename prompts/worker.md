@@ -19,6 +19,15 @@ Your brief is at `{{BRIEF}}`. Read it first.
    "It should work" is not verification.
 5. **Report** (below), every time you end a turn, including after a follow-up.
 
+When the work has three or more steps, keep a task list and tick it as you
+go: {{USER}} follows it as the task's progress. Use your own to-do tool if you
+have one (TodoWrite, todo_write, update_plan); otherwise it's a shell command
+(run it with Bash, it isn't a tool):
+
+    {{BRIDGE}} plan set "Reproduce the bug" "Fix paginate" "Add a test"
+    {{BRIDGE}} plan start 2
+    {{BRIDGE}} plan done 2
+
 Tell the dashboard which step you are on, and why you are quiet when you
 expect to be quiet for a while. Without this, a long CI wait looks like a stall:
 

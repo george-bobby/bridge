@@ -119,6 +119,7 @@ const LINEAR_QUERY = `{
         project { name }
         cycle { number }
         labels { nodes { name color } }
+        attachments(first: 20) { nodes { url sourceType } }
         assignee { name avatarUrl }
         parent { identifier title url state { name type color } }
         children(first: 50) {
@@ -132,6 +133,15 @@ const LINEAR_QUERY = `{
     }
   }
 }`;
+
+/** The Slack thread an issue came from: a Slack attachment, else a permalink in its description. */
+function slackLink(n) {
+  const re = /https:\/\/[\w.-]*slack\.com\/archives\/[A-Z0-9]+\/p\d+(?:\?[^\s)\]>"]*)?/;
+  const att = ((n.attachments && n.attachments.nodes) || []).find((a) => /slack/i.test(a.sourceType || "") || re.test(a.url || ""));
+  if (att && att.url) return att.url;
+  const m = String(n.description || "").match(re);
+  return m ? m[0] : "";
+}
 
 async function loadLinear() {
   if (!env.linearApiKey) return { configured: false, issues: [], at: Date.now() };
@@ -160,6 +170,7 @@ async function loadLinear() {
     cycle: n.cycle ? n.cycle.number : null,
     labels: (n.labels ? n.labels.nodes : []).map((l) => ({ name: l.name, color: l.color })),
     description: String(n.description || "").slice(0, 4000),
+    slackUrl: slackLink(n),
     assignee: n.assignee ? n.assignee.name : "",
     assigneeAvatar: n.assignee ? n.assignee.avatarUrl || "" : "",
     parent: n.parent

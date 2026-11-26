@@ -363,6 +363,7 @@ async function handle(req, res) {
           });
         }
         if (req.method === "POST" && verb === "declare") return ok({ meta: harness.declare(id, String(body.state || ""), String(body.text || "").slice(0, 300)) });
+        if (req.method === "POST" && verb === "plan") return ok({ plan: harness.plan(id, String(body.op || ""), Array.isArray(body.args) ? body.args : []) });
         if (req.method === "POST" && verb === "relaunch") {
           harness.relaunch(id, String(body.note || "").slice(0, 2000));
           return ok({});
@@ -490,6 +491,35 @@ async function handle(req, res) {
       return sendJson(res, 200, { ok: true, ...(await require("./usage").all({ refresh: url.searchParams.get("refresh") === "1" })) });
     } catch (e) {
       return sendJson(res, 500, { ok: false, error: String(e.message || e) });
+    }
+  }
+
+  // --- chats from the agents' own histories (Import chat) ------------------
+  // GET /api/history[?agent=&q=] lists them, GET /api/history/:agent/:id
+  // previews one, POST /api/history/import {agent, id} makes it a worker.
+  if (p === "/api/history" || p.startsWith("/api/history/")) {
+    if (!sameOrigin(req)) return sendJson(res, 403, { ok: false, error: "cross-origin request refused" });
+    const history = env.demo ? require("./demo").history : require("./history");
+    try {
+      if (req.method === "GET" && p === "/api/history") {
+        const agent = String(url.searchParams.get("agent") || "");
+        const opts = { agents: agent ? [agent] : undefined, q: url.searchParams.get("q") || "", runs: store.listRunSessions() };
+        const out = history.listAsync ? await history.listAsync(opts) : history.list(opts);
+        return sendJson(res, 200, { ok: true, ...out });
+      }
+      if (req.method === "POST" && p === "/api/history/import") {
+        const body = JSON.parse((await readBody(req)) || "{}");
+        const out = harness.importChat({ agent: String(body.agent || ""), id: String(body.id || ""), history });
+        return sendJson(res, 200, { ok: true, ...out });
+      }
+      const m = p.match(/^\/api\/history\/([a-z]+)\/([^/]+)$/);
+      if (req.method === "GET" && m) {
+        const t = history.readAsync ? await history.readAsync(m[1], decodeURIComponent(m[2])) : history.read(m[1], decodeURIComponent(m[2]));
+        return sendJson(res, 200, { ok: true, cwd: t.cwd, total: t.messages.length, messages: t.messages.slice(-40) });
+      }
+      return sendJson(res, 404, { ok: false, error: "not found" });
+    } catch (e) {
+      return sendJson(res, 400, { ok: false, error: String(e.message || e) });
     }
   }
 

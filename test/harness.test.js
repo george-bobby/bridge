@@ -227,6 +227,16 @@ test("stall, usage limit and a dead worker each become an outcome", async () => 
   assert.ok((await api("GET", "/api/inbox")).decisions.some((d) => d.taskId === g.taskId && d.kind === "resume"));
 });
 
+test("a stop you ask for ends the turn as stopped, not as an error", async () => {
+  const t = await spawnTask("stoppy", "stub:stall=30");
+  await waitFor(async () => (await api("GET", "/api/state")).jobs.running.includes(t.taskId), 10000, "running");
+  assert.equal((await api("POST", `/api/runs/${t.taskId}/stop`)).ok, true);
+  await waitFor(idle(t.taskId), 10000, "idle");
+  const m = (await api("GET", `/api/runs/${t.taskId}`)).run.messages.filter((x) => x.role === "assistant").pop();
+  assert.equal(m.state, "stopped");
+  assert.equal(m.error, undefined);
+});
+
 test("a permission ask reaches the dashboard and the answer reaches the worker", async () => {
   const t = await spawnTask("asky", "stub:ask\nstub:report=ready-for-review");
   const ask = await waitFor(async () => {
@@ -441,4 +451,20 @@ test("deleting a chat clears its to-dos and decisions; chats deleted before that
   await startServer();
   assert.deepEqual(await mine(asking.taskId), []);
   assert.equal(meta(asking.taskId).status, "deleted");
+});
+
+test("bridge plan: a worker's task list, set, ticked and shown on its session", async () => {
+  const t = await spawnTask("planny", "stub:report=ready-for-review");
+  await waitFor(statusIs(t.taskId, "ready-for-review"), 15000, "report");
+  const plan = (op, ...args) => api("POST", `/api/tasks/${t.taskId}/plan`, { op, args });
+  assert.strictEqual((await plan("set", "Reproduce", "Fix", "Test")).plan.length, 3);
+  await plan("start", 1);
+  await plan("done", 1);
+  await plan("start", 2);
+  await plan("add", "Write it up");
+  const p = (await plan("skip", 4)).plan;
+  assert.deepStrictEqual(p.map((x) => x.status), ["completed", "in_progress", "pending", "cancelled"]);
+  assert.strictEqual((await plan("done", 9)).status, 400, "an item that isn't there");
+  const summary = (await api("GET", "/api/runs")).runs.find((r) => r.runId === t.taskId);
+  assert.deepStrictEqual(summary.task.plan.map((x) => x.text), ["Reproduce", "Fix", "Test", "Write it up"]);
 });

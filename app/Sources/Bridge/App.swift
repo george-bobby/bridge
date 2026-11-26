@@ -7,6 +7,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     let model = AppModel()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Prompts are code: `--flag` must not become an em dash, nor "x" curly quotes.
+        for k in ["NSAutomaticDashSubstitutionEnabled", "NSAutomaticQuoteSubstitutionEnabled", "NSAutomaticTextReplacementEnabled", "NSAutomaticPeriodSubstitutionEnabled"] {
+            UserDefaults.standard.set(false, forKey: k)
+        }
         if Bundle.main.bundlePath.hasSuffix(".app") { UNUserNotificationCenter.current().delegate = self }
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
@@ -25,6 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             let chat = ProcessInfo.processInfo.environment["BRIDGE_SNAPSHOT_CHAT"]
             if let s = model.sessions.first(where: { $0.id == chat }) ?? model.boardSessions.first(where: { $0.worked }) ?? model.orchestrator { pages.append(("chat", .session(s.id))) }
             pages.append(("palette", .board))
+            pages.append(("import", .home))
             if let last = pages.first(where: { $0.0 == "chat" }) {
                 pages.append(("collapsed", last.1))
                 if browser != nil { pages.append(("browser", last.1)) }
@@ -36,6 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             }
             for (name, route) in pages {
                 model.paletteOpen = name == "palette"
+                model.importOpen = name == "import"
                 model.sidebarHidden = name == "collapsed"
                 if route == .inbox { model.inboxTab = name == "inbox-slack" ? "slack" : "decisions" }
                 if route == .settings { model.settingsPane = name.hasPrefix("settings-") ? String(name.dropFirst(9)) : "general" }
@@ -174,41 +180,43 @@ struct BridgeCommands: Commands {
 
     var body: some Commands {
         CommandGroup(replacing: .appSettings) {
-            Button("Settings…") { model.navigate(.settings) }.keyboardShortcut(",")
+            Button { model.navigate(.settings) } label: { Label("Settings…", systemImage: "gearshape") }.keyboardShortcut(",")
         }
         CommandGroup(replacing: .newItem) {
-            Button("New Task…") { model.compose(in: model.projectFilter) }.keyboardShortcut("n")
-            Button("New Browser Tab") {
+            Button { model.compose(in: model.projectFilter) } label: { Label("New Task…", systemImage: "square.and.pencil") }.keyboardShortcut("n")
+            Button {
                 if case .session(let id) = model.route { model.openBrowser(id, url: "") }
-            }
+            } label: { Label("New Browser Tab", systemImage: "globe") }
             .keyboardShortcut("t")
+            Button { model.importOpen = true } label: { Label("Import Chat…", systemImage: "square.and.arrow.down.on.square") }
+                .keyboardShortcut("i", modifiers: [.command, .shift])
         }
         CommandGroup(after: .pasteboard) {
             Divider()
-            Button("Add Selection to Chat") { addSelection() }.keyboardShortcut("l")
+            Button { addSelection() } label: { Label("Add Selection to Chat", systemImage: "text.quote") }.keyboardShortcut("l")
         }
         CommandGroup(before: .sidebar) {
-            Button("Toggle Sidebar") { model.toggleSidebar() }.keyboardShortcut("s", modifiers: [.command, .control])
-            Button("Toggle Details") { model.toggleDetails() }.keyboardShortcut("i", modifiers: [.command, .option])
+            Button { model.toggleSidebar() } label: { Label("Toggle Sidebar", systemImage: "sidebar.left") }.keyboardShortcut("s", modifiers: [.command, .control])
+            Button { model.toggleDetails() } label: { Label("Toggle Details", systemImage: "sidebar.right") }.keyboardShortcut("i", modifiers: [.command, .option])
             Divider()
         }
         CommandMenu("Go") {
-            Button("Command Menu…") { model.paletteOpen = true }.keyboardShortcut("k")
+            Button { model.paletteOpen = true } label: { Label("Command Menu…", systemImage: "command") }.keyboardShortcut("k")
             Divider()
             ForEach(Array(navOrder.enumerated()), id: \.offset) { i, item in
-                Button(item.label) { model.navigate(item.route) }.keyboardShortcut(KeyEquivalent(Character("\(i + 1)")))
+                Button { model.navigate(item.route) } label: { Label(item.label, systemImage: item.icon) }.keyboardShortcut(KeyEquivalent(Character("\(i + 1)")))
             }
             Divider()
-            Button("Back") { model.back() }.keyboardShortcut("[")
-            Button("Forward") { model.forward() }.keyboardShortcut("]")
-            Button("Previous Chat") { model.stepChat(-1) }.keyboardShortcut(.upArrow, modifiers: [.command, .option])
-            Button("Next Chat") { model.stepChat(1) }.keyboardShortcut(.downArrow, modifiers: [.command, .option])
+            Button { model.back() } label: { Label("Back", systemImage: "chevron.left") }.keyboardShortcut("[")
+            Button { model.forward() } label: { Label("Forward", systemImage: "chevron.right") }.keyboardShortcut("]")
+            Button { model.stepChat(-1) } label: { Label("Previous Chat", systemImage: "chevron.up") }.keyboardShortcut(.upArrow, modifiers: [.command, .option])
+            Button { model.stepChat(1) } label: { Label("Next Chat", systemImage: "chevron.down") }.keyboardShortcut(.downArrow, modifiers: [.command, .option])
             Divider()
-            Button("Orchestrator") { model.openOrchestrator(model.projectFilter) }.keyboardShortcut("o")
-            Button("Add Project…") { model.addProject() }.keyboardShortcut("p", modifiers: [.command, .shift])
-            Button("Refresh") { Task { await model.loadSources(refresh: true); await model.loadAll() } }.keyboardShortcut("r")
+            Button { model.openOrchestrator(model.projectFilter) } label: { Label("Orchestrator", systemImage: "sparkles") }.keyboardShortcut("o")
+            Button { model.addProject() } label: { Label("Add Project…", systemImage: "folder.badge.plus") }.keyboardShortcut("p", modifiers: [.command, .shift])
+            Button { Task { await model.loadSources(refresh: true); await model.loadAll() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }.keyboardShortcut("r")
             Divider()
-            Button("Open Legacy Web UI") { openURL(API.base.absoluteString) }
+            Button { openURL(API.base.absoluteString) } label: { Label("Open Legacy Web UI", systemImage: "safari") }
         }
     }
 }
@@ -262,19 +270,21 @@ struct RootView: View {
             .ignoresSafeArea()
         }
         .overlay {
-            if model.paletteOpen || model.composeOpen || model.mcpSheet != nil {
+            if model.paletteOpen || model.composeOpen || model.importOpen || model.mcpSheet != nil {
                 Color.black.opacity(0.32).ignoresSafeArea()
-                    .onTapGesture { model.paletteOpen = false; model.composeOpen = false; model.mcpSheet = nil }
+                    .onTapGesture { model.paletteOpen = false; model.composeOpen = false; model.importOpen = false; model.mcpSheet = nil }
                     .transition(.opacity)
             }
         }
         .overlay { if model.paletteOpen { CommandPalette().transition(.panel) } }
         .overlay { if model.composeOpen { ComposeSheet().transition(.panel) } }
+        .overlay { if model.importOpen { ImportSheet().transition(.panel) } }
         .overlay { if let s = model.mcpSheet { MCPSheetHost(sheet: s).transition(.panel) } }
         .overlay(alignment: .bottom) { ToastView() }
         .overlay { if !model.connected && !model.everConnected { ConnectingView().transition(.opacity) } }
         .animation(M.pop, value: model.paletteOpen)
         .animation(M.pop, value: model.composeOpen)
+        .animation(M.pop, value: model.importOpen)
         .animation(M.pop, value: model.mcpSheet)
         .animation(M.page, value: model.everConnected)
     }
