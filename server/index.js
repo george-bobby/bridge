@@ -1197,6 +1197,26 @@ async function handle(req, res) {
       return;
     }
 
+    // Archive a chat, or bring it back ({ archived: false }).
+    if (req.method === "POST" && verb === "archive") {
+      try {
+        const body = JSON.parse((await readBody(req)) || "{}");
+        const on = body.archived !== false;
+        if (on && projects.isOrchestrator(id)) {
+          sendJson(res, 409, { ok: false, error: "the orchestrator chat can't be archived" });
+          return;
+        }
+        if (on && jobs.isRunning(id)) {
+          sendJson(res, 409, { ok: false, error: "stop the running job first" });
+          return;
+        }
+        sendJson(res, 200, { ok: true, ...harness.archive(id, on) });
+      } catch (e) {
+        sendJson(res, 400, { ok: false, error: String(e.message || e) });
+      }
+      return;
+    }
+
     if (req.method === "DELETE" && !verb) {
       if (projects.isOrchestrator(id)) {
         sendJson(res, 409, { ok: false, error: "the orchestrator chat can't be deleted" });

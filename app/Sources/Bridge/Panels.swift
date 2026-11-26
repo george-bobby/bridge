@@ -510,7 +510,8 @@ struct CommandPalette: View {
         }
         all.append(PaletteItem(id: "go-settings", icon: sym("gearshape"), title: "Settings", hint: "⌘,", group: "Go to") { model.navigate(.settings) })
         all.append(PaletteItem(id: "board-view", icon: sym("rectangle.split.3x1"), title: "Sessions as a board", group: "Go to") { model.route = .board })
-        all.append(PaletteItem(id: "list-view", icon: sym("list.bullet"), title: "Sessions as a list", group: "Go to") { model.route = .sessions })
+        all.append(PaletteItem(id: "list-view", icon: sym("list.bullet"), title: "Sessions as a list", group: "Go to") { model.showArchived = false; model.route = .sessions })
+        all.append(PaletteItem(id: "archived-view", icon: sym("archivebox"), title: "Archived sessions", group: "Go to") { model.showArchived = true; model.route = .sessions })
         if case .session(let id) = model.route {
             all.append(PaletteItem(id: "web", icon: sym("globe"), title: "New browser tab", hint: "⌘T") { model.openBrowser(id, url: "") })
             all.append(PaletteItem(id: "prev", icon: sym("chevron.up"), title: "Previous chat", hint: "⌥⌘↑") { model.stepChat(-1) })
