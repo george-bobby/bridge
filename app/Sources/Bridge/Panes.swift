@@ -481,6 +481,39 @@ struct PaneDivider: View {
     }
 }
 
+/// The details column's leading hairline; drag it to resize (wider to the
+/// left), the width is shared by every column and remembered.
+struct DetailsResizer: View {
+    @Environment(AppModel.self) var model
+    /// A split pane's column never takes more than half of it.
+    let maxWidth: CGFloat?
+    @StateObject private var hover = Box(false)
+    @StateObject private var start = Box<CGFloat?>(nil)
+
+    var body: some View {
+        Rectangle().fill(hover.v || start.v != nil ? T.accent.opacity(0.7) : T.line)
+            .frame(width: 1)
+            .overlay {
+                Color.clear.frame(width: 9).contentShape(Rectangle())
+                    .onHover { inside in
+                        withAnimation(M.hover) { hover.v = inside }
+                        if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+                    }
+                    .gesture(DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                        .onChanged { v in
+                            if start.v == nil { start.v = min(model.detailsWidth, maxWidth ?? .infinity) }
+                            let lo = AppModel.detailsRange.lowerBound
+                            let hi = max(lo, min(AppModel.detailsRange.upperBound, maxWidth ?? .infinity))
+                            model.detailsWidth = min(max((start.v ?? 312) - v.translation.width, lo), hi)
+                        }
+                        .onEnded { _ in start.v = nil })
+                    .onTapGesture(count: 2) { withAnimation(M.snappy) { model.detailsWidth = 312 } }
+            }
+            .help("Drag to resize; double-click to reset")
+            .zIndex(1)
+    }
+}
+
 struct PaneView: View {
     @Environment(AppModel.self) var model
     let pane: Pane
@@ -532,8 +565,8 @@ struct PaneView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 if details && column {
                     HStack(spacing: 0) {
-                        Rectangle().fill(T.line).frame(width: 1)
-                        PropertiesPanel(id: pane.run).frame(width: 288)
+                        DetailsResizer(maxWidth: width * 0.5)
+                        PropertiesPanel(id: pane.run).frame(width: min(model.detailsWidth, width * 0.5))
                     }
                     .transition(.move(edge: .trailing).combined(with: .opacity))
                 }
