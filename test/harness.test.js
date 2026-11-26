@@ -421,14 +421,12 @@ test("workspaces: a worktree from any branch, or the main checkout, which cleanu
   git(["branch", "-D", "feature"]);
 });
 
-test("capacity: past the cap a task queues, then starts when a slot frees", async () => {
+test("no cap: every task starts at once, even past an old saved maxWorkers", async () => {
   const a = await spawnTask("cap a", "stub:stall=1\nstub:report=ready-for-review");
   const b = await spawnTask("cap b", "stub:stall=1\nstub:report=ready-for-review");
   const c = await spawnTask("cap c", "stub:report=ready-for-review");
-  assert.equal(a.state, "started");
-  assert.equal(b.state, "started");
-  assert.equal(c.state, "queued");
-  await waitFor(statusIs(c.taskId, "ready-for-review"), 20000, "queued task ran");
+  assert.deepEqual([a.state, b.state, c.state], ["started", "started", "started"]);
+  await waitFor(statusIs(c.taskId, "ready-for-review"), 20000, "third task ran");
 });
 
 test("Slack replies filed into a chat reach its agent on the next turn, once", async () => {

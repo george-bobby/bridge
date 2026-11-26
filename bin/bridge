@@ -143,7 +143,7 @@ async function main() {
       const since = flags.since && flags.since !== true ? String(flags.since) : "";
       const [tasks, out] = await Promise.all([call("GET", "/api/tasks"), call("GET", `/api/catchup?since=${encodeURIComponent(since || "0m")}`)]);
       if (flags.json) return console.log(JSON.stringify({ ...out, events: since ? out.events : undefined, harness: tasks.harness, working: tasks.working }, null, 2));
-      console.log(`${tasks.working} working · cap ${tasks.harness.maxWorkers} total / ${tasks.harness.maxPerRepo} per repo · mode ${out.mode}`);
+      console.log(`${tasks.working} working · mode ${out.mode}`);
       console.log("\n== Waiting on you ==");
       printDecisions(out.decisions);
       if (out.todos.length) {

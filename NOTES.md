@@ -72,9 +72,8 @@ A restarted server rereads them (see Recovery).
   **allow**, because `/resolve` posts them as part of the PR workflow.
   Opening and editing your own PR is allowed.
 - **Who merges**: you (`prMerge: ask`).
-- **Caps**: 3 working workers in total, 2 per repo. Workers that have declared
-  they're waiting don't count. Over the cap, a spawn returns `queued` and
-  starts when a slot frees.
+- **Caps**: none. Every spawn starts right away, however many workers are
+  already running.
 - **Stall**: 15 minutes of silence; 4x that for a declared wait.
 - **Quiet / away**: quiet relays only what needs you; away holds every relay
   and sends one catch-up turn when you switch back.
@@ -92,7 +91,7 @@ review to-do), a browser notification if it needs you, and a relay turn
 
 At boot: pending asks are swept (as before); a task still marked `working`
 becomes `worker-gone` with a **Resume** decision; any report written while
-the server was down is caught up; queued tasks are dispatched. Workers are
+the server was down is caught up; tasks left queued are started. Workers are
 children of the server and die with it, so **resume is a relaunch** (`--resume
 <session>` with a note to check git state), not a reattach.
 

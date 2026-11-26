@@ -685,20 +685,10 @@ struct WorkerSettings: View {
     var h: JSON { model.config["harness"] }
 
     var body: some View {
-        SSection(title: "Sessions", detail: "Parallel sessions and their limits") {
+        SSection(title: "Sessions", detail: "Workers run in parallel, with no cap") {
             if Prefs.hit(q, "relay outcomes orchestrator workers") {
                 SRow(title: "Relay outcomes to the orchestrator", detail: "A finished, blocked or stalled worker starts a turn in the orchestrator chat") {
                     SToggle(on: Binding(get: { h["relay"].bool }, set: { v in save(["relay": v]) }))
-                }
-            }
-            if Prefs.hit(q, "max workers sessions at once limit") {
-                SRow(title: "Sessions at once", detail: "Past the cap a new task is queued") {
-                    SStepper(value: h["maxWorkers"].int, range: 1...12) { save(["maxWorkers": $0]) }
-                }
-            }
-            if Prefs.hit(q, "per repo workers sessions limit") {
-                SRow(title: "Per repository", detail: "Working workers in the same repo") {
-                    SStepper(value: h["maxPerRepo"].int, range: 1...12) { save(["maxPerRepo": $0]) }
                 }
             }
             if Prefs.hit(q, "stalled silence minutes stall") {
