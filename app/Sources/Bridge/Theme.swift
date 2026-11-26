@@ -339,9 +339,9 @@ struct IconButton: View {
             Image(systemName: icon)
                 .font(.system(size: size * 13 / 28, weight: .medium))
                 .foregroundStyle(tint ?? (hover.v || on ? T.text : T.text2))
-                .rotationEffect(.degrees(spinning ? 360 : 0))
-                // Stop dead rather than unwinding the spin backwards.
-                .animation(spinning ? .linear(duration: 0.9).repeatForever(autoreverses: false) : nil, value: spinning)
+                // A symbol effect stops as soon as `spinning` goes false; a
+                // repeatForever rotation could keep turning after the load ended.
+                .symbolEffect(.rotate, options: .repeat(.continuous), isActive: spinning)
                 .frame(width: size, height: size)
                 .background(RoundedRectangle(cornerRadius: size / 4, style: .continuous).fill(hover.v ? T.hover : on ? T.selected : .clear))
                 .contentShape(Rectangle())

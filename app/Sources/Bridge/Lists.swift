@@ -365,7 +365,7 @@ struct HomeView: View {
     var body: some View {
         VStack(spacing: 0) {
             PageHeader(title: "Home", icon: "house") {
-                IconButton(icon: "arrow.clockwise", help: "Refresh (⌘R)", spinning: !model.loading.isEmpty) { Task { await model.loadSources(refresh: true) } }
+                IconButton(icon: "arrow.clockwise", help: "Refresh (⌘R)", spinning: !model.refreshing.isEmpty) { Task { await model.loadSources(refresh: true) } }
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: 28) {
@@ -809,7 +809,7 @@ struct PullsView: View {
                     .init(id: "open", label: "Open", count: model.openPulls.count),
                     .init(id: "merged", label: "Merged"),
                 ], selection: $tab)
-                IconButton(icon: "arrow.clockwise", help: "Refresh", spinning: model.loading.contains("pulls")) { Task { await model.load("pulls", refresh: true) } }
+                IconButton(icon: "arrow.clockwise", help: "Refresh", spinning: model.refreshing.contains("pulls")) { Task { await model.load("pulls", refresh: true) } }
             }
             if let e = model.errors["pulls"], !e.isEmpty { ErrorBar(text: e) }
             if model.pulls.isNull {
