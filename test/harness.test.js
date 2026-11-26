@@ -316,3 +316,31 @@ test("restart: a worker lost mid-turn is reported and resumable; reports written
   assert.equal(sb("relaunch", lost.taskId).code, 0);
   await waitFor(statusIs(lost.taskId, "ready-for-review"), 15000, "resumed → report");
 });
+
+test("deleting a chat clears its to-dos and decisions; chats deleted before that heal on restart", async () => {
+  const mine = async (id) => {
+    const i = await api("GET", "/api/inbox");
+    return [...i.decisions, ...i.todos].filter((x) => x.taskId === id);
+  };
+  const done = await spawnTask("delete me", "stub:report=ready-for-review");
+  const asking = await spawnTask("delete me too", "stub:report=needs-input\nstub:question=Keep it?");
+  await waitFor(statusIs(done.taskId, "ready-for-review"), 15000);
+  await waitFor(statusIs(asking.taskId, "needs-input"), 15000);
+  await waitFor(idle(done.taskId), 5000);
+  await waitFor(idle(asking.taskId), 5000);
+  assert.equal((await mine(done.taskId)).length, 1, "review to-do");
+  assert.ok((await mine(asking.taskId)).length >= 1, "open decision");
+
+  assert.equal((await api("DELETE", `/api/runs/${done.taskId}`)).ok, true);
+  assert.deepEqual(await mine(done.taskId), []);
+  assert.equal(meta(done.taskId).status, "deleted");
+  assert.ok(fs.existsSync(done.worktree), "worktree left for sb cleanup");
+  assert.ok(!(await api("GET", "/api/tasks")).tasks.some((t) => t.id === done.taskId), "gone from sb status");
+
+  // The old server only removed the chat file; the next start closes the rest.
+  await stopServer();
+  fs.unlinkSync(path.join(DATA, "runs", `${asking.taskId}.json`));
+  await startServer();
+  assert.deepEqual(await mine(asking.taskId), []);
+  assert.equal(meta(asking.taskId).status, "deleted");
+});
