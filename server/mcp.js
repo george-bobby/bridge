@@ -67,19 +67,32 @@ const readJson = (f, fallback = null) => {
   }
 };
 
-function writeJsonAtomic(file, value) {
+/** The file as it is, for a read-modify-write: missing is empty, but a file
+ *  that won't parse is an error rather than a blank page to write over. */
+function readJsonStrict(f) {
+  if (!fs.existsSync(f)) return {};
+  try {
+    return JSON.parse(fs.readFileSync(f, "utf8"));
+  } catch (e) {
+    throw new Error(`${tilde(f)} isn't valid JSON (${e.message}); fix it by hand first`);
+  }
+}
+
+/** Replace a file in one step, keeping its permissions (these hold tokens):
+ *  a new file is private to you. */
+function writeTextAtomic(file, text) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
+  let mode = 0o600;
+  try {
+    mode = fs.statSync(file).mode & 0o777;
+  } catch {}
   const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(value, null, 2) + "\n");
+  fs.writeFileSync(tmp, text, { mode });
+  fs.chmodSync(tmp, mode);
   fs.renameSync(tmp, file);
 }
 
-function writeTextAtomic(file, text) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(tmp, text);
-  fs.renameSync(tmp, file);
-}
+const writeJsonAtomic = (file, value) => writeTextAtomic(file, JSON.stringify(value, null, 2) + "\n");
 
 /* ------------------------------------------------------------- configs */
 
@@ -211,6 +224,7 @@ function handshakeStdio(cfg, timeout) {
         } catch {
           continue;
         }
+        if (!m || typeof m !== "object" || Array.isArray(m)) continue;
         if (m.id === 1) {
           if (m.error) return finish({ status: "failed", error: m.error.message || "initialize failed" });
           info = (m.result && m.result.serverInfo) || null;
@@ -218,7 +232,8 @@ function handshakeStdio(cfg, timeout) {
           send({ id: 2, method: "tools/list", params: {} });
         } else if (typeof m.id === "number" && m.id >= 2) {
           if (m.error) return finish({ status: "connected", serverInfo: info, tools: cleanTools(tools), error: m.error.message });
-          tools.push(...((m.result && m.result.tools) || []));
+          const page = m.result && Array.isArray(m.result.tools) ? m.result.tools : [];
+          tools.push(...page);
           const next = m.result && m.result.nextCursor;
           if (next && m.id < 40) send({ id: m.id + 1, method: "tools/list", params: { cursor: next } });
           else finish({ status: "connected", serverInfo: info, tools: cleanTools(tools) });
@@ -233,7 +248,7 @@ function handshakeStdio(cfg, timeout) {
 async function rpcAnswer(res, id) {
   const text = await res.text();
   if (/text\/event-stream/.test(res.headers.get("content-type") || "")) {
-    for (const block of text.split(/\n\n+/)) {
+    for (const block of text.replace(/\r\n?/g, "\n").split(/\n\n+/)) {
       const data = block
         .split("\n")
         .filter((l) => l.startsWith("data:"))
@@ -260,18 +275,18 @@ async function handshakeHttp(cfg, timeout) {
   for (const [k, v] of Object.entries(cfg.headers || {})) headers[k] = expand(v);
   if (cfg.bearerEnv && process.env[cfg.bearerEnv]) headers.Authorization = `Bearer ${process.env[cfg.bearerEnv]}`;
   const url = expand(cfg.url);
-  const post = async (body) => {
-    const res = await fetch(url, { method: "POST", headers, body: JSON.stringify({ jsonrpc: "2.0", ...body }), signal: AbortSignal.timeout(timeout) });
-    return res;
-  };
+  const post = (body) => fetch(url, { method: "POST", headers, body: JSON.stringify({ jsonrpc: "2.0", ...body }), signal: AbortSignal.timeout(timeout) });
+  let sid = "";
   try {
     const r1 = await post({ id: 1, method: "initialize", params: INIT });
     if (r1.status === 401 || r1.status === 403) return { status: "needs-auth", error: `${new URL(url).host} wants a sign-in (${r1.status})` };
     if (!r1.ok) return { status: "failed", error: `${new URL(url).host} answered ${r1.status}` };
-    const sid = r1.headers.get("mcp-session-id");
+    sid = r1.headers.get("mcp-session-id") || "";
     if (sid) headers["Mcp-Session-Id"] = sid;
     const init = await rpcAnswer(r1, 1);
     if (!init || init.error) return { status: "failed", error: (init && init.error && init.error.message) || "unreadable initialize answer" };
+    // Later requests carry the version the server agreed to.
+    if (init.result && init.result.protocolVersion) headers["MCP-Protocol-Version"] = String(init.result.protocolVersion);
     await post({ method: "notifications/initialized" })
       .then((r) => r.text())
       .catch(() => {});
@@ -281,15 +296,16 @@ async function handshakeHttp(cfg, timeout) {
       const r = await post({ id, method: "tools/list", params: cursor ? { cursor } : {} });
       const m = r.ok ? await rpcAnswer(r, id) : null;
       if (!m || m.error) break;
-      tools.push(...((m.result && m.result.tools) || []));
+      tools.push(...(m.result && Array.isArray(m.result.tools) ? m.result.tools : []));
       cursor = m.result && m.result.nextCursor;
       if (!cursor) break;
     }
-    if (sid) fetch(url, { method: "DELETE", headers, signal: AbortSignal.timeout(3000) }).catch(() => {});
     return { status: "connected", serverInfo: (init.result && init.result.serverInfo) || null, tools: cleanTools(tools) };
   } catch (e) {
     const why = e.cause && (e.cause.code || e.cause.message);
     return { status: "failed", error: e.name === "TimeoutError" ? `no answer in ${Math.round(timeout / 1000)}s` : why ? `couldn't reach ${hostOf(url)} (${why})` : String(e.message || e) };
+  } finally {
+    if (sid) fetch(url, { method: "DELETE", headers, signal: AbortSignal.timeout(3000) }).catch(() => {});
   }
 }
 
@@ -318,6 +334,8 @@ const inflight = new Map();
 
 function remember(key, r) {
   checks.set(key, { ...r, at: Date.now() });
+  // A server that answered with no tools has none now, whatever it had before.
+  if (r.status === "connected" && r.tools && !r.tools.length) toolsSeen.delete(key);
   if (r.tools && r.tools.length) {
     const prev = toolsSeen.get(key);
     // A list with descriptions beats one with names only.
@@ -434,7 +452,7 @@ function claudeProbe(dir, { refresh = false } = {}) {
   entry.promise.then((v) => {
     entry.pending = false;
     entry.at = Date.now();
-    if (!v) claudeProbes.delete(key);
+    if (!v && claudeProbes.get(key) === entry) claudeProbes.delete(key);
     for (const s of v || []) {
       if (!s.config || !s.tools) continue;
       const cfg = normalize(s.config);
@@ -519,9 +537,12 @@ function claudeEntries(dir) {
   for (const [n, raw] of Object.entries(shared.mcpServers || {})) {
     out.push({ name: n, raw, cfg: normalize(raw), scope: "project", source: ".mcp.json", enabled: true, editable: false, removable: false, toggleable: true, note: "Checked into the repo's .mcp.json; edit the file to change it" });
   }
-  for (const [n, s] of Object.entries((readStash().claude || {}))) {
+  for (const [k, s] of Object.entries(readStash().claude || {})) {
+    // Local-scope entries belong to one project.
+    if (s.scope === "local" && realDir(s.dir || "") !== realDir(dir)) continue;
+    const n = s.name || k;
     if (out.some((e) => e.name === n)) continue;
-    out.push({ name: n, raw: s.raw, cfg: normalize(s.raw), scope: s.scope, source: "Disabled by Bridge", enabled: false, editable: true, removable: true, toggleable: true });
+    out.push({ name: n, stashKey: k, raw: s.raw, cfg: normalize(s.raw), scope: s.scope, source: "Disabled by Bridge", enabled: false, editable: true, removable: true, toggleable: true });
   }
   const off = new Set(proj.disabledMcpServers || []);
   for (const e of out) if (off.has(e.name)) e.enabled = false;
@@ -561,8 +582,11 @@ const tomlHeader = (p) => `[${p.map(tomlKey).join(".")}]`;
 function tomlSections(lines) {
   const out = [];
   for (let i = 0; i < lines.length; i++) {
-    const m = /^\s*\[(?!\[)(.+?)\]\s*(#.*)?$/.exec(lines[i]);
-    if (m) out.push({ i, path: tomlPath(m[1]) });
+    // [[array.of.tables]] ends a section too; it's never one Bridge edits.
+    const arr = /^\s*\[\[(.+?)\]\]\s*(#.*)?$/.exec(lines[i]);
+    const m = arr ? null : /^\s*\[(.+?)\]\s*(#.*)?$/.exec(lines[i]);
+    if (arr) out.push({ i, path: ["[[]]", ...tomlPath(arr[1])] });
+    else if (m) out.push({ i, path: tomlPath(m[1]) });
   }
   return out.map((s, k) => ({ ...s, end: k + 1 < out.length ? out[k + 1].i : lines.length }));
 }
@@ -596,7 +620,9 @@ function valueEnd(lines, i) {
 function tomlSet(lines, h, key, value) {
   const secs = tomlSections(lines);
   const sec = secs.find((s) => s.i === h);
-  const re = new RegExp(`^\\s*${tomlKey(key).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*=`);
+  const esc = (k) => k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // `command`, `"command"` and `'command'` are the same key.
+  const re = new RegExp(`^\\s*(?:${esc(key)}|"${esc(key)}"|'${esc(key)}')\\s*=`);
   for (let i = h + 1; i < sec.end; i++) {
     if (!re.test(lines[i])) continue;
     const end = valueEnd(lines, i);
@@ -672,21 +698,22 @@ function codexEdit(text, name, op) {
 }
 
 const codexLists = new Map();
-async function codexList({ refresh = false } = {}) {
-  const hit = codexLists.get("x");
+/** In the checkout: a trusted project's own .codex/config.toml adds to the list. */
+async function codexList(dir, { refresh = false } = {}) {
+  const hit = codexLists.get(dir);
   if (hit && !refresh && Date.now() - hit.at < 60_000) return hit.data;
-  const r = await sh(bin.codex(), ["mcp", "list", "--json"], { timeout: 20000 });
+  const r = await sh(bin.codex(), ["mcp", "list", "--json"], { cwd: dir, timeout: 20000 });
   let data = null;
   try {
     data = JSON.parse(r.out);
   } catch {}
-  if (data) codexLists.set("x", { at: Date.now(), data });
+  if (!data) throw new Error(`Couldn't read Codex's servers: ${r.err.split("\n").filter(Boolean).pop() || "codex mcp list failed"}`);
+  codexLists.set(dir, { at: Date.now(), data });
   return data;
 }
 
-async function codexEntries() {
-  const list = await codexList({ refresh: true });
-  if (!list) return null;
+async function codexEntries(dir) {
+  const list = await codexList(dir, { refresh: true });
   const text = fs.existsSync(codexFile()) ? fs.readFileSync(codexFile(), "utf8") : "";
   return list.map((s) => {
     const t = s.transport || {};
@@ -718,8 +745,11 @@ function cursorEntries(dir) {
   for (const [n, raw] of Object.entries(j.mcpServers || {})) out.push({ name: n, raw, cfg: normalize(raw), scope: "user", source: tilde(cursorFile()), enabled: true, editable: true, removable: true, toggleable: true, sharedWith: ["devin"] });
   const pj = dir ? readJson(path.join(dir, ".cursor", "mcp.json"), {}) || {} : {};
   for (const [n, raw] of Object.entries(pj.mcpServers || {})) {
-    if (out.some((e) => e.name === n)) continue;
-    out.push({ name: n, raw, cfg: normalize(raw), scope: "project", source: ".cursor/mcp.json", enabled: true, editable: false, removable: false, toggleable: false, note: "Checked into the repo's .cursor/mcp.json" });
+    // Cursor takes the project's entry over a global one of the same name.
+    const shadowed = out.findIndex((e) => e.name === n);
+    const e = { name: n, raw, cfg: normalize(raw), scope: "project", source: ".cursor/mcp.json", enabled: true, editable: false, removable: false, toggleable: false, note: shadowed >= 0 ? "This repo's .cursor/mcp.json overrides your global entry of the same name" : "Checked into the repo's .cursor/mcp.json" };
+    if (shadowed >= 0) out.splice(shadowed, 1, e);
+    else out.push(e);
   }
   for (const [n, s] of Object.entries(readStash().cursor || {})) {
     if (out.some((e) => e.name === n)) continue;
@@ -752,7 +782,7 @@ async function devinEntries() {
   try {
     list = JSON.parse(r.out);
   } catch {}
-  if (!list) return null;
+  if (!list) throw new Error(`Couldn't read Devin's servers: ${r.err.split("\n").filter(Boolean).pop() || "devin mcp list failed"}`);
   const overrides = (readStash().devin || {});
   const out = list.map((s) => {
     const raw = s.transport === "stdio" ? { command: s.command, args: s.args } : { url: s.url, type: s.transport };
@@ -826,7 +856,7 @@ function authAware(agent, e, st, extra) {
 
 async function entriesFor(agent, dir) {
   if (agent === "claude") return claudeEntries(dir).entries;
-  if (agent === "codex") return codexEntries();
+  if (agent === "codex") return codexEntries(dir);
   if (agent === "cursor") return cursorEntries(dir);
   return devinEntries();
 }
@@ -842,13 +872,22 @@ async function installed(agent) {
 
 const checking = new Set();
 
+/** A command a repo's own file defines: Bridge never starts one of those
+ *  itself. The agent asks before it runs them; Bridge has no such prompt. */
+const repoDefined = (e) => e.scope === "project" && e.cfg.type === "stdio";
+
 /** One agent's servers. Statuses come from the cache; a stale cache starts
  *  a check in the background and a `mcp` bus event says when it's done. */
 async function list(agent, { dir, refresh = false } = {}) {
   if (!AGENTS.includes(agent)) throw new Error(`unknown agent: ${agent}`);
   dir = dir || env.targetRepo || home();
   if (!(await installed(agent))) return { agent, label: LABEL[agent], installed: false, servers: [], checking: false, files: [] };
-  const entries = (await entriesFor(agent, dir)) || [];
+  let entries;
+  try {
+    entries = (await entriesFor(agent, dir)) || [];
+  } catch (e) {
+    return { agent, label: LABEL[agent], installed: true, servers: [], checking: false, files: [], dir, error: String(e.message || e) };
+  }
   const files = { claude: [tilde(claudeFile())], codex: [tilde(codexFile())], cursor: [tilde(cursorFile())], devin: [tilde(devinFile()), tilde(cursorFile())] }[agent];
 
   if (agent === "claude") {
@@ -883,7 +922,7 @@ async function list(agent, { dir, refresh = false } = {}) {
   }
 
   const extra = agent === "cursor" ? (cursorStatuses.get(dir) || {}).data || {} : {};
-  const stale = entries.filter((e) => e.enabled && (refresh || !checks.has(keyOf(e.cfg)) || Date.now() - checks.get(keyOf(e.cfg)).at > TTL));
+  const stale = entries.filter((e) => e.enabled && !repoDefined(e) && (refresh || !checks.has(keyOf(e.cfg)) || Date.now() - checks.get(keyOf(e.cfg)).at > TTL));
   const flag = `${agent}:${dir}`;
   if ((stale.length || (agent === "cursor" && (refresh || !cursorStatuses.has(dir)))) && !checking.has(flag)) {
     checking.add(flag);
@@ -893,6 +932,7 @@ async function list(agent, { dir, refresh = false } = {}) {
     });
   }
   const servers = entries.map((e) => {
+    if (repoDefined(e)) return view(agent, e, { status: "unknown", error: "Defined by this repo: Bridge doesn't start it to check" });
     const st = checks.get(keyOf(e.cfg));
     let s = authAware(agent, e, st, extra[e.name]);
     if (agent === "cursor" && extra[e.name] && /requires_authentication/.test(extra[e.name])) s = { ...(s || {}), status: "needs-auth", error: "Cursor needs you to sign in to this server" };
@@ -923,6 +963,11 @@ async function tools(agent, name, { dir, refresh = false } = {}) {
   if (!e) throw new Error(`no MCP server called ${name}`);
   const key = keyOf(e.cfg);
   const known = toolsSeen.get(key);
+  // Off, or a repo's own command: what's known, never a fresh start.
+  if (e.enabled === false || repoDefined(e)) {
+    if (known) return { name, tools: known, source: "cache", note: e.enabled === false ? "Last seen while it was on" : "" };
+    return { name, tools: [], source: "none", status: e.enabled === false ? "disabled" : "unknown", error: e.enabled === false ? "Turn it on to list its tools" : "Defined by this repo: Bridge doesn't start it. Ask the agent, which asks you before running it" };
+  }
   if (known && known.some((t) => t.description) && !refresh) return { name, tools: known, source: "server" };
   const r = e.claudeOnly ? { status: "needs-auth" } : await check(e.cfg, { refresh: true });
   if (r && r.tools && r.tools.length) return { name, tools: r.tools, source: "server" };
@@ -954,7 +999,9 @@ function fromForm(form, prev) {
     if (!command) throw new Error("a stdio server needs a command");
     const args = Array.isArray(form.args) ? form.args.map(String).filter((a) => a !== "") : [];
     const cfg = { type, command, args, env: keep("env", form.env) };
-    if (form.cwd) cfg.cwd = String(form.cwd);
+    // The form has no working-folder field: an edit keeps the one it had.
+    const cwd = form.cwd != null ? String(form.cwd) : (prev && prev.cwd) || "";
+    if (cwd) cfg.cwd = cwd;
     return cfg;
   }
   const url = String(form.url || "").trim();
@@ -1014,8 +1061,8 @@ async function save(agent, { name, original, form }, { dir } = {}) {
     const raw = toRaw(agent, cfg, prev && prev.raw);
     if (stashed) {
       editStash((s) => {
-        delete (s.claude || {})[original];
-        (s.claude = s.claude || {})[name] = { scope, raw };
+        delete (s.claude || {})[prev.stashKey || original];
+        (s.claude = s.claude || {})[scope === "local" ? `${realDir(dir)}::${name}` : name] = { name, scope, dir: realDir(dir), raw };
       });
     } else {
       if (prev) await claudeCli(["remove", "-s", scope, original], dir);
@@ -1045,7 +1092,7 @@ async function save(agent, { name, original, form }, { dir } = {}) {
         (s.cursor = s.cursor || {})[name] = { raw: toRaw(flavour, cfg, prev.raw) };
       });
     } else {
-      const j = readJson(file, {}) || {};
+      const j = readJsonStrict(file);
       j.mcpServers = j.mcpServers || {};
       const raw = toRaw(flavour, cfg, prev && j.mcpServers[original]);
       if (prev && name !== original) delete j.mcpServers[original];
@@ -1054,7 +1101,7 @@ async function save(agent, { name, original, form }, { dir } = {}) {
     }
   } else {
     const file = devinFile();
-    const j = readJson(file, {}) || {};
+    const j = readJsonStrict(file);
     j.mcpServers = j.mcpServers || {};
     const raw = toRaw("devin", cfg, j.mcpServers[original]);
     if (name !== original) delete j.mcpServers[original];
@@ -1074,7 +1121,7 @@ async function remove(agent, name, { dir } = {}) {
   if (!e.removable) throw new Error(e.note || `${name} can't be removed from Bridge`);
   const stashed = !e.enabled && e.source.startsWith("Disabled by Bridge");
   if (agent === "claude") {
-    if (stashed) editStash((s) => delete (s.claude || {})[name]);
+    if (stashed) editStash((s) => delete (s.claude || {})[e.stashKey || name]);
     else await claudeCli(["remove", "-s", e.scope, name], dir);
   } else if (agent === "codex") {
     writeTextAtomic(codexFile(), codexEdit(fs.readFileSync(codexFile(), "utf8"), name, { remove: true }));
@@ -1083,7 +1130,7 @@ async function remove(agent, name, { dir } = {}) {
     if (stashed) editStash((s) => delete (s.cursor || {})[name]);
     else {
       const file = useCursor ? cursorFile() : devinFile();
-      const j = readJson(file, {}) || {};
+      const j = readJsonStrict(file);
       delete (j.mcpServers || {})[name];
       writeJsonAtomic(file, j);
     }
@@ -1104,14 +1151,22 @@ async function setEnabled(agent, name, on, { dir } = {}) {
   if (agent === "claude") {
     if (e.scope === "user" || e.scope === "local") {
       // Stash: out of Claude's config (so it's off everywhere), back on enable.
+      const stashKey = e.scope === "local" ? `${realDir(dir)}::${name}` : name;
       if (!on && e.enabled) {
-        await claudeCli(["remove", "-s", e.scope, name], dir);
-        editStash((s) => ((s.claude = s.claude || {})[name] = { scope: e.scope, raw: e.raw }));
+        // Stashed first, so a failed remove never loses the entry.
+        editStash((s) => ((s.claude = s.claude || {})[stashKey] = { name, scope: e.scope, dir: realDir(dir), raw: e.raw }));
+        try {
+          await claudeCli(["remove", "-s", e.scope, name], dir);
+        } catch (err) {
+          editStash((s) => delete s.claude[stashKey]);
+          throw err;
+        }
       } else if (on) {
-        const s = (readStash().claude || {})[name];
+        const k = e.stashKey || stashKey;
+        const s = (readStash().claude || {})[k];
         if (s) {
-          await claudeCli(["add-json", "-s", s.scope, name, JSON.stringify(s.raw)], dir);
-          editStash((x) => delete x.claude[name]);
+          await claudeCli(["add-json", "-s", s.scope, name, JSON.stringify(s.raw)], s.scope === "local" ? s.dir || dir : dir);
+          editStash((x) => delete x.claude[k]);
         }
         const j = readJson(claudeFile(), {}) || {};
         if (((j.projects || {})[realDir(dir)] || {}).disabledMcpServers?.includes(name)) {
@@ -1127,7 +1182,7 @@ async function setEnabled(agent, name, on, { dir } = {}) {
     writeTextAtomic(codexFile(), codexEdit(fs.readFileSync(codexFile(), "utf8"), name, { enabled: on }));
   } else if (agent === "cursor" || e.scope === "shared") {
     if (!on && e.enabled) {
-      const j = readJson(cursorFile(), {}) || {};
+      const j = readJsonStrict(cursorFile());
       const raw = (j.mcpServers || {})[name];
       if (!raw) throw new Error(`${name} isn't in ${tilde(cursorFile())}`);
       editStash((s) => ((s.cursor = s.cursor || {})[name] = { raw }));
@@ -1136,7 +1191,7 @@ async function setEnabled(agent, name, on, { dir } = {}) {
     } else if (on) {
       const s = (readStash().cursor || {})[name];
       if (s) {
-        const j = readJson(cursorFile(), {}) || {};
+        const j = readJsonStrict(cursorFile());
         (j.mcpServers = j.mcpServers || {})[name] = s.raw;
         writeJsonAtomic(cursorFile(), j);
         editStash((x) => delete x.cursor[name]);
@@ -1144,7 +1199,7 @@ async function setEnabled(agent, name, on, { dir } = {}) {
     }
   } else if (e.scope === "plugin") {
     // Devin's documented override: a disabled entry of the same name.
-    const j = readJson(devinFile(), {}) || {};
+    const j = readJsonStrict(devinFile());
     j.mcpServers = j.mcpServers || {};
     if (!on) {
       j.mcpServers[name] = { ...toRaw("devin", e.cfg), disabled: true };
@@ -1164,11 +1219,26 @@ async function setEnabled(agent, name, on, { dir } = {}) {
 }
 
 /** Start the agent's own OAuth sign-in for a server (it opens the browser). */
-function login(agent, name, { dir } = {}) {
+async function login(agent, name, { dir } = {}) {
   if (!AGENTS.includes(agent)) throw new Error(`unknown agent: ${agent}`);
   if (!NAME.test(String(name || ""))) throw new Error("bad server name");
-  const child = spawn(bin[agent](), ["mcp", "login", name], { cwd: dir && fs.existsSync(dir) ? dir : home(), env: cliEnv(), stdio: "ignore", detached: false });
-  child.on("error", () => {});
+  const child = spawn(bin[agent](), ["mcp", "login", name], { cwd: dir && fs.existsSync(dir) ? dir : home(), env: cliEnv(), stdio: ["ignore", "ignore", "pipe"], detached: false });
+  let errOut = "";
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (c) => (errOut = (errOut + c).slice(-2000)));
+  // Started, or failed right away (not installed, unknown server): say which.
+  await new Promise((resolve, reject) => {
+    const early = setTimeout(resolve, 1500);
+    child.once("error", (e) => {
+      clearTimeout(early);
+      reject(new Error(e.code === "ENOENT" ? `${LABEL[agent]} isn't installed` : e.message));
+    });
+    child.once("exit", (code) => {
+      clearTimeout(early);
+      if (code) reject(new Error(errOut.trim().split("\n").filter(Boolean).pop() || `${LABEL[agent]} couldn't start the sign-in`));
+      else resolve();
+    });
+  });
   const timer = setTimeout(() => {
     try {
       child.kill();

@@ -1520,9 +1520,10 @@ function wire(child, runId, msgId, kind) {
           : String(block.content == null ? "" : block.content);
         const result = body.trim().slice(0, CAP.toolResult);
         const ok = !block.is_error;
-        // A background command says where its output goes; its task can tail it live.
-        const bg = /Command running in background with ID: (\S+?)\.?\s[\s\S]*?written to: (\S+)/.exec(body);
-        if (bg) taskPatch({ id: bg[1], toolUseId: block.tool_use_id }, (t) => {
+        // A background command says where its output goes; its task can tail it
+        // live. Only from Bash's own answer, and only Claude's `<id>.output` file.
+        const bg = (stepAt(i) || {}).name === "Bash" && /^Command running in background with ID: ([A-Za-z0-9_-]+)\.\s[\s\S]*?written to: (\S+)/.exec(body.trim());
+        if (bg && path.basename(bg[2].replace(/[.,]$/, "")) === `${bg[1]}.output`) taskPatch({ id: bg[1], toolUseId: block.tool_use_id }, (t) => {
           t.type = "bash";
           t.background = true;
           t.outputFile = t.outputFile || bg[2].replace(/[.,]$/, "");

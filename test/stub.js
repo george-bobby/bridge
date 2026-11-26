@@ -153,7 +153,9 @@ async function tasks() {
   out({ type: "system", subtype: "task_progress", task_id: "a1", tool_use_id: "tu-agent", description: "Running ls", usage: { total_tokens: 1200, tool_uses: 1, duration_ms: 40 }, last_tool_name: "Bash" });
   out({ type: "system", subtype: "task_notification", task_id: "a1", tool_use_id: "tu-agent", status: "completed", summary: "Two files: a.txt, b.txt", usage: { total_tokens: 1500, tool_uses: 1, duration_ms: 60 } });
   res("tu-agent", "Two files: a.txt, b.txt");
-  const file = require("path").join(require("os").tmpdir(), `stub-bg-${process.pid}.output`);
+  const dir = require("path").join(require("os").tmpdir(), `stub-${process.pid}`, "tasks");
+  fs.mkdirSync(dir, { recursive: true });
+  const file = require("path").join(dir, "bg1.output");
   fs.writeFileSync(file, "building...\ndone\n");
   asst([{ type: "tool_use", id: "tu-bg", name: "Bash", input: { command: "npm run build", run_in_background: true } }]);
   out({ type: "system", subtype: "task_started", task_id: "bg1", tool_use_id: "tu-bg", description: "Build", is_backgrounded: true, task_type: "local_bash" });

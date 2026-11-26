@@ -1279,15 +1279,17 @@ struct ComposeSheet: View {
         .onKeyPress(.escape) { model.composeOpen = false; return .handled }
         .onChange(of: data.snapshotOpen) { if data.snapshotOpen.hasPrefix("compose-") { direct.v = true } }
         .task(id: project.v) {
-            // A new project: its own branches, and back to a fresh worktree.
-            let q = project.v.isEmpty ? "" : "?project=\(API.q(project.v))"
-            let out = (try? await API.get("/api/git\(q)")) ?? .null
+            // A new project: back to a fresh worktree right away, then its own branches.
             withAnimation(M.snappy) {
-                git.v = out
+                git.v = .null
                 workspace.v = "worktree"
                 base.v = ""
                 branchName.v = ""
             }
+            let q = project.v.isEmpty ? "" : "?project=\(API.q(project.v))"
+            let out = (try? await API.get("/api/git\(q)")) ?? .null
+            guard !Task.isCancelled else { return }
+            withAnimation(M.snappy) { git.v = out }
         }
     }
 

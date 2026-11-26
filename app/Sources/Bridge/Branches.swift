@@ -194,6 +194,7 @@ struct BranchPanel: View {
         .frame(width: 400)
         .background(T.raised)
         .onAppear { hi.v = flat.firstIndex { $0.name == current } ?? 0 }
+        .onChange(of: query.v) { hi.v = 0 }
     }
 
     func row(_ b: GitBranch, _ i: Int) -> some View {
