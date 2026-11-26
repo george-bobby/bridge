@@ -36,12 +36,31 @@ struct RichText: NSViewRepresentable {
     func makeNSView(context: Context) -> RichTextView { RichTextView() }
 
     func updateNSView(_ v: RichTextView, context: Context) {
-        if v.key != key { v.set(build(), key: key) }
+        if v.key != key { v.set(RichCache.get(key, build), key: key) }
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView v: RichTextView, context: Context) -> CGSize? {
         let w = proposal.width.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
         return v.fit(width: w ?? 10_000, natural: w == nil)
+    }
+}
+
+/// Rendered blocks shared across views: a chat switched back to, a pane
+/// reopened or a message scrolled back into a lazy stack draws from here
+/// instead of parsing its Markdown again. Bounded by characters held.
+enum RichCache {
+    private static let cache: NSCache<NSString, NSAttributedString> = {
+        let c = NSCache<NSString, NSAttributedString>()
+        c.totalCostLimit = 12_000_000
+        return c
+    }()
+
+    static func get(_ key: String, _ build: () -> NSAttributedString) -> NSAttributedString {
+        let k = key as NSString
+        if let hit = cache.object(forKey: k) { return hit }
+        let s = build()
+        cache.setObject(s, forKey: k, cost: s.length + k.length)
+        return s
     }
 }
 

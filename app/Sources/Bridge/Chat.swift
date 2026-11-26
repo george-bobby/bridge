@@ -349,8 +349,12 @@ struct Transcript: View {
                     } else if messages.isEmpty {
                         EmptyState(icon: "bubble.left", title: "Nothing here yet", detail: "Send a message below to start the session.")
                     }
+                    let who = run["who"].string, channel = run["channel"].string
                     ForEach(Array(messages.enumerated()), id: \.offset) { i, m in
-                        MessageView(m: m, run: run, runId: runId)
+                        // Equatable: while a reply streams only its own
+                        // message re-renders, not every one above it.
+                        MessageView(m: m, who: who, channel: channel, runId: runId)
+                            .equatable()
                             .background(FlashMark(flash: nav.flash, index: i))
                             .transition(.opacity.combined(with: .offset(y: 10)))
                     }
@@ -392,9 +396,11 @@ struct Transcript: View {
     }
 }
 
-struct MessageView: View {
+struct MessageView: View, Equatable {
     let m: JSON
-    let run: JSON
+    /// The chat's Slack author and channel, for messages from the thread.
+    let who: String
+    let channel: String
     let runId: String
 
     var body: some View {
@@ -402,7 +408,7 @@ struct MessageView: View {
         case "assistant": AssistantMessage(m: m, runId: runId)
         case "event", "outcome": EventLine(m: m)
         case "relay", "harness": HarnessMessage(m: m)
-        default: UserMessage(m: m, run: run)
+        default: UserMessage(m: m, who: who, channel: channel)
         }
     }
 }
@@ -422,18 +428,19 @@ struct MessageHead: View {
 
 struct UserMessage: View {
     let m: JSON
-    let run: JSON
+    let who: String
+    let channel: String
     @StateObject private var hover = Box(false)
     var body: some View {
         let role = m["role"].string
         let fromSlack = role == "slack" || role == "thread"
-        let name = fromSlack ? (m["who"].nonEmpty ?? run["who"].nonEmpty ?? "Slack") : "You"
+        let name = fromSlack ? (m["who"].nonEmpty ?? (who.isEmpty ? nil : who) ?? "Slack") : "You"
         let text = fromSlack ? Session.plain(m["text"].string) : m["text"].string
         HStack(alignment: .top, spacing: 14) {
             Avatar(name: name, size: 28)
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 0) {
-                    MessageHead(name: name, detail: fromSlack ? (run["channel"].nonEmpty.map { "in \($0)" } ?? "Slack") : "", ts: m["ts"].double)
+                    MessageHead(name: name, detail: fromSlack ? (channel.isEmpty ? "Slack" : "in \(channel)") : "", ts: m["ts"].double)
                     Spacer(minLength: 8)
                     MessageActions(text: text, shown: hover.v)
                 }
@@ -519,7 +526,7 @@ struct AssistantMessage: View {
                 let steps = m["steps"].array
                 if steps.isEmpty && !m["text"].string.isEmpty { MarkdownText(text: m["text"].string) }
                 let tasks = m["tasks"].array
-                ForEach(Array(steps.enumerated()), id: \.offset) { _, s in StepView(step: s, runId: runId, tasks: tasks) }
+                ForEach(Array(steps.enumerated()), id: \.offset) { _, s in StepView(step: s, runId: runId, tasks: tasks).equatable() }
                 footer(state)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -558,7 +565,7 @@ struct AssistantMessage: View {
     }
 }
 
-struct StepView: View {
+struct StepView: View, Equatable {
     let step: JSON
     let runId: String
     /// The message's subagents and background commands, for their cards.
@@ -631,7 +638,7 @@ struct ToolView: View {
         let name = step["name"].string
         let result = step["result"].string
         let failed = step["ok"] == .bool(false)
-        let raw = (try? JSONDecoder().decode(JSON.self, from: Data(step["raw"].string.utf8))) ?? .null
+        let raw = JSON.parse(text: step["raw"].string)
         let isEdit = ["Edit", "MultiEdit", "Write"].contains(name) && !raw.isNull
         let expandable = isEdit || !result.isEmpty
         let expanded = isEdit ? !folded.v : open.v

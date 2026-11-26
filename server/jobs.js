@@ -985,6 +985,24 @@ function blockSize(step) {
  * session emits dozens of events a second and each one would otherwise rewrite
  * the whole run file.
  */
+/**
+ * Deltas are numbered, one counter for the whole server, and GET
+ * /api/runs/:id answers with the number it was taken at (after flushing the
+ * live message, so the file is current). The app applies deltas to the chat
+ * it holds instead of re-fetching the transcript per token, and replays the
+ * ones numbered after a snapshot it fetched mid-stream: nothing is lost or
+ * applied twice.
+ */
+let deltaSeq = 0;
+const liveFlush = new Map(); // runId -> flush() of the turn streaming into it
+
+/** Write the streaming message to disk now and return the delta number it covers. */
+function flushLive(runId) {
+  const f = liveFlush.get(runId);
+  if (f) f();
+  return deltaSeq;
+}
+
 function wire(child, runId, msgId, kind) {
   let buf = "";
   let pendingWrite = null;
@@ -1037,7 +1055,13 @@ function wire(child, runId, msgId, kind) {
     store.saveRun(run);
   };
 
-  const push = (patchObj) => bus.broadcast("delta", { runId, msgId, ...patchObj });
+  // Only when something waits on the debounce: a read mid-stream must not
+  // rewrite a run file that's already current.
+  const flushPending = () => {
+    if (pendingWrite) flush();
+  };
+  liveFlush.set(runId, flushPending);
+  const push = (patchObj) => bus.broadcast("delta", { runId, msgId, seq: ++deltaSeq, ...patchObj });
 
   /* -- state --------------------------------------------------------------
    * `openBlock` maps the API's content-block index (which restarts at 0 every
@@ -1502,7 +1526,7 @@ function wire(child, runId, msgId, kind) {
                 step.raw = raw;
               }
             });
-            push({ blockDetail: { i: known, detail } });
+            push({ blockDetail: { i: known, detail, raw } });
           } else {
             const i = addStep({ kind: "tool", name: block.name, detail, id: block.id || "", raw });
             if (i >= 0 && block.id) toolStep.set(block.id, i);
@@ -1713,6 +1737,7 @@ function wire(child, runId, msgId, kind) {
         push({ done: true, state: m.state, cost: m.cost || 0, text: m.text || "", usage: { ...usage } });
       }
     });
+    if (liveFlush.get(runId) === flushPending) liveFlush.delete(runId);
     bus.broadcast("jobs", { running: runningIds(), awaiting: awaitingIds() });
     bus.broadcast("run-updated", { runId });
     bus.broadcast("runs", { runs: store.listRunSummaries() });
@@ -2065,6 +2090,7 @@ MEMORY>>>`;
 }
 
 module.exports = {
+  flushLive,
   stopTask,
   clear,
   compact,

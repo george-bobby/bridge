@@ -44,22 +44,50 @@ struct Session: Identifiable, Hashable {
     }
 
     /// The Linear key this session is about: its ticket link, branch or title.
+    /// Memoised on its inputs: the board, sidebar and details ask for it per
+    /// session on every render, and it's two regex scans.
     var issueKey: String {
         let hay = [linearUrl, branch.uppercased(), title, text].joined(separator: " ")
-        if let r = hay.range(of: #"/issue/[A-Za-z][A-Za-z0-9]{1,9}-\d+"#, options: .regularExpression) {
-            return String(hay[r].dropFirst(7)).uppercased()
+        return Memo.string(Memo.issueKeys, hay) {
+            if let r = hay.range(of: #"/issue/[A-Za-z][A-Za-z0-9]{1,9}-\d+"#, options: .regularExpression) {
+                return String(hay[r].dropFirst(7)).uppercased()
+            }
+            if let r = hay.range(of: #"\b[A-Z][A-Z0-9]{1,9}-\d+\b"#, options: .regularExpression) { return String(hay[r]) }
+            return ""
         }
-        if let r = hay.range(of: #"\b[A-Z][A-Z0-9]{1,9}-\d+\b"#, options: .regularExpression) { return String(hay[r]) }
-        return ""
     }
 
     /// Slack mrkdwn to plain text: `<url|label>` to label, `<@U123>` dropped.
+    /// Five regex passes, memoised: every sidebar row and card calls it per render.
     static func plain(_ s: String) -> String {
-        var t = s.replacingOccurrences(of: #"<([^|>]+)\|([^>]+)>"#, with: "$2", options: .regularExpression)
-        t = t.replacingOccurrences(of: #"<[@#!][^>]+>"#, with: "", options: .regularExpression)
-        t = t.replacingOccurrences(of: #"<(https?://[^>]+)>"#, with: "$1", options: .regularExpression)
-        t = t.replacingOccurrences(of: #"(\*\*|__|`)"#, with: "", options: .regularExpression)
-        return t.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression).trimmingCharacters(in: .whitespaces)
+        Memo.string(Memo.plain, s) {
+            var t = s.replacingOccurrences(of: #"<([^|>]+)\|([^>]+)>"#, with: "$2", options: .regularExpression)
+            t = t.replacingOccurrences(of: #"<[@#!][^>]+>"#, with: "", options: .regularExpression)
+            t = t.replacingOccurrences(of: #"<(https?://[^>]+)>"#, with: "$1", options: .regularExpression)
+            t = t.replacingOccurrences(of: #"(\*\*|__|`)"#, with: "", options: .regularExpression)
+            return t.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression).trimmingCharacters(in: .whitespaces)
+        }
+    }
+}
+
+/// Small string-to-string caches for derived text that's pure in its input.
+enum Memo {
+    static let plain = make()
+    static let issueKeys = make()
+    static let urls = make()
+
+    private static func make() -> NSCache<NSString, NSString> {
+        let c = NSCache<NSString, NSString>()
+        c.countLimit = 5000
+        return c
+    }
+
+    static func string(_ cache: NSCache<NSString, NSString>, _ key: String, _ make: () -> String) -> String {
+        let k = key as NSString
+        if let hit = cache.object(forKey: k) { return hit as String }
+        let v = make()
+        cache.setObject(v as NSString, forKey: k)
+        return v
     }
 }
 
@@ -315,8 +343,33 @@ final class AppModel {
     var sessions: [Session] = []
     var inbox: JSON = .null
 
-    var pulls: JSON = .null
-    var linear: JSON = .null
+    /// The PR and Linear feeds, with their rows decoded and indexed once per
+    /// fetch: every card's column, status and links look a PR up by URL and an
+    /// issue up by key, many times a render.
+    var pulls: JSON = .null {
+        didSet {
+            openPulls = pulls["mine"].array.map(PullRequest.init)
+            reviewPulls = pulls["review"].array.map(PullRequest.init)
+            mergedPulls = pulls["merged"].array.map(PullRequest.init)
+            var byURL: [String: PullRequest] = [:]
+            for p in openPulls + reviewPulls + mergedPulls where byURL[norm(p.url)] == nil { byURL[norm(p.url)] = p }
+            pullsByURL = byURL
+        }
+    }
+    var linear: JSON = .null {
+        didSet {
+            issues = linear["issues"].array.map(Issue.init)
+            var byKey: [String: Issue] = [:]
+            for i in issues where byKey[i.key] == nil { byKey[i.key] = i }
+            issuesByKey = byKey
+        }
+    }
+    private(set) var openPulls: [PullRequest] = []
+    private(set) var reviewPulls: [PullRequest] = []
+    private(set) var mergedPulls: [PullRequest] = []
+    private(set) var issues: [Issue] = []
+    @ObservationIgnored private var pullsByURL: [String: PullRequest] = [:]
+    @ObservationIgnored private(set) var issuesByKey: [String: Issue] = [:]
     var ports: JSON = .null
     var loading: Set<String> = []
     var errors: [String: String] = [:]
@@ -449,10 +502,6 @@ final class AppModel {
 
     var boardSessions: [Session] { sessions.filter { !$0.isOrchestrator } }
     var orchestrator: Session? { sessions.first { $0.isOrchestrator } }
-    var openPulls: [PullRequest] { pulls["mine"].array.map(PullRequest.init) }
-    var reviewPulls: [PullRequest] { pulls["review"].array.map(PullRequest.init) }
-    var mergedPulls: [PullRequest] { pulls["merged"].array.map(PullRequest.init) }
-    var issues: [Issue] { linear["issues"].array.map(Issue.init) }
     var servers: [DevServer] { ports["servers"].array.map(DevServer.init) }
     var decisions: [JSON] { inbox["decisions"].array }
     var todos: [JSON] { inbox["todos"].array }
@@ -463,14 +512,18 @@ final class AppModel {
     func isLive(_ s: Session) -> Bool { running.contains(s.id) || s.action == "running" || s.j["live"].bool }
     func isAwaiting(_ s: Session) -> Bool { awaiting.contains(s.id) || s.j["awaiting"].bool }
 
-    private func norm(_ u: String) -> String {
-        u.replacingOccurrences(of: #"[#?].*$"#, with: "", options: .regularExpression).trimmingCharacters(in: CharacterSet(charactersIn: "/")).lowercased()
+    /// A URL without its query or fragment, trailing slashes or case.
+    func norm(_ u: String) -> String {
+        Memo.string(Memo.urls, u) {
+            let cut = u.firstIndex(where: { $0 == "#" || $0 == "?" }).map { String(u[..<$0]) } ?? u
+            return cut.trimmingCharacters(in: CharacterSet(charactersIn: "/")).lowercased()
+        }
     }
 
     func pr(for url: String) -> PullRequest? {
         guard !url.isEmpty else { return nil }
-        let n = norm(url)
-        return (openPulls + reviewPulls + mergedPulls).first { norm($0.url) == n }
+        _ = pulls // observe the feed: the index itself isn't tracked
+        return pullsByURL[norm(url)]
     }
 
     func autoColumn(_ s: Session) -> Column {
@@ -730,7 +783,7 @@ final class AppModel {
 
     func session(forPR p: PullRequest) -> Session? {
         let n = norm(p.url)
-        return boardSessions.first { norm($0.prUrl) == n } ?? boardSessions.first { !$0.branch.isEmpty && $0.branch == p.branch }
+        return boardSessions.first { !$0.prUrl.isEmpty && norm($0.prUrl) == n } ?? boardSessions.first { !$0.branch.isEmpty && $0.branch == p.branch }
     }
 
     func session(forIssue key: String) -> Session? { boardSessions.first { $0.issueKey == key } }
@@ -823,6 +876,7 @@ final class AppModel {
         if let i = try? await API.get("/api/inbox") { inbox = i }
         await loadSources(refresh: false)
         if !openId.isEmpty { await refreshOpen() }
+        await refreshPanes(all: true)
         updateBadge()
     }
 
@@ -877,8 +931,20 @@ final class AppModel {
         case "slack": slackFound(d)
         case "projects": projects = d["projects"].array.map(Project.init)
         case "mcp": MCPStore.shared.changed(d["agent"].string)
-        case "message", "delta", "run-updated":
-            if d["runId"].string == openId || paneRuns.contains(d["runId"].string) { scheduleRefresh() }
+        case "delta":
+            // Tokens stream at dozens a second: patched into the chat held
+            // here, never a re-fetch, and no badge recount.
+            onDelta(d)
+            return
+        case "message":
+            let id = d["runId"].string
+            if id == openId || paneRuns.contains(id) {
+                appendLocally(id, d["message"])
+                scheduleRefresh(id, task: true)
+            }
+        case "run-updated":
+            let id = d["runId"].string
+            if id == openId || paneRuns.contains(id) { scheduleRefresh(id, task: true) }
         case "ask" where notifyAsks:
             notify(title: "\(d["who"].nonEmpty ?? "A session") needs you", body: d["summary"].nonEmpty ?? "Claude is waiting on your answer", runId: d["runId"].string)
         case "outcome":
@@ -889,18 +955,101 @@ final class AppModel {
             if d["taskId"].string == openId { Task { await refreshOpen() } }
         default: break
         }
-        updateBadge()
+        // Only these change what the badge counts.
+        if ["state", "runs", "jobs", "inbox"].contains(name) { updateBadge() }
     }
 
-    private func scheduleRefresh() {
+    // MARK: streaming
+
+    /// Deltas received per run since its last snapshot, for replay over a
+    /// snapshot fetched mid-stream (one taken before them doesn't hold them).
+    @ObservationIgnored private var deltaLog: [String: [JSON]] = [:]
+    /// Runs to re-fetch on the next refresh, and whether their task too.
+    @ObservationIgnored private var staleRuns: [String: Bool] = [:]
+
+    private func onDelta(_ d: JSON) {
+        let id = d["runId"].string
+        guard id == openId || paneRuns.contains(id) else { return }
+        var log = deltaLog[id] ?? []
+        log.append(d)
+        if log.count > 6000 { log.removeFirst(log.count - 6000) }
+        deltaLog[id] = log
+        let cur = runData(id)
+        // Not loaded yet: the fetch in flight answers with it, replayed.
+        guard !cur.isNull else { return }
+        if let next = Delta.apply(d, to: cur) { setRun(id, next) } else { scheduleRefresh(id, task: false) }
+    }
+
+    /// A message the server just added (yours, or the reply starting): shown
+    /// now rather than after the re-fetch it also triggers.
+    private func appendLocally(_ id: String, _ msg: JSON) {
+        let cur = runData(id)
+        guard case .obj(var r) = cur, !msg["id"].string.isEmpty else { return }
+        var msgs = r["messages"]?.array ?? []
+        guard !msgs.contains(where: { $0["id"].string == msg["id"].string }) else { return }
+        msgs.append(msg)
+        r["messages"] = .arr(msgs)
+        setRun(id, .obj(r))
+    }
+
+    private func setRun(_ id: String, _ run: JSON) {
+        if id == openId { openRun = run }
+        runs[id] = run
+    }
+
+    /// A fetched run (`{run, seq}`), with the deltas that came after it replayed.
+    private func adopt(_ id: String, _ r: JSON) {
+        var run = r["run"]
+        let seq = r["seq"].int
+        if var log = deltaLog[id] {
+            log.removeAll { $0["seq"].int <= seq }
+            for d in log { if let next = Delta.apply(d, to: run) { run = next } }
+            deltaLog[id] = log.isEmpty ? nil : log
+        }
+        setRun(id, run)
+        trimRunCache()
+    }
+
+    /// Chats opened earlier stay cached so switching back is instant; the
+    /// oldest beyond a few dozen go (never one on screen).
+    private func trimRunCache() {
+        guard runs.count > 40 else { return }
+        let keep = paneRuns.union([openId])
+        for k in runs.keys where !keep.contains(k) && runs.count > 30 {
+            runs[k] = nil
+            deltaLog[k] = nil
+        }
+    }
+
+    private func scheduleRefresh(_ id: String, task: Bool) {
+        staleRuns[id] = (staleRuns[id] ?? false) || task
         guard !refreshPending else { return }
         refreshPending = true
         Task {
-            try? await Task.sleep(nanoseconds: 220_000_000)
+            try? await Task.sleep(nanoseconds: 150_000_000)
             refreshPending = false
-            await refreshOpen()
+            let ids = staleRuns
+            staleRuns = [:]
+            if let task = ids[openId] { await refreshOpen(task: task) }
+            for id in ids.keys where id != openId && paneRuns.contains(id) { await fetchRun(id) }
         }
     }
+
+    func fetchRun(_ id: String) async {
+        if let r = try? await API.get("/api/runs/\(API.q(id))") { adopt(id, r) }
+    }
+
+    /// Hovering a chat in the sidebar loads it, so the click opens it already
+    /// drawn (the cache is refreshed again on open).
+    func prefetch(_ id: String) {
+        guard !id.isEmpty, id != openId, runs[id] == nil, !prefetching.contains(id) else { return }
+        prefetching.insert(id)
+        Task {
+            await fetchRun(id)
+            prefetching.remove(id)
+        }
+    }
+    @ObservationIgnored private var prefetching: Set<String> = []
 
     // MARK: sessions
 
@@ -919,12 +1068,12 @@ final class AppModel {
 
     /// Every result is checked against the chat that asked for it: switching
     /// chats mid-request must never show one chat's run or report in another.
-    func refreshOpen() async {
+    func refreshOpen(task: Bool = true) async {
         let id = openId
         guard !id.isEmpty, let r = try? await API.get("/api/runs/\(API.q(id))"), id == openId else { return }
-        openRun = r["run"]
-        runs[id] = openRun
+        adopt(id, r)
         await refreshPanes()
+        guard task else { return }
         let kind = r["run"]["kind"].string
         guard kind == "task" || kind == "slack" || kind.isEmpty else { return }
         let task = (try? await API.get("/api/tasks/\(API.q(id))")) ?? .null
@@ -1152,8 +1301,12 @@ final class AppModel {
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: slack.isEmpty ? "ask-\(runId)" : "slack-\(slack)", content: c, trigger: nil))
     }
 
+    @ObservationIgnored private var badgeShown: Int? = nil
+
     func updateBadge() {
         let n = showBadge ? needsCount : 0
+        guard n != badgeShown else { return }
+        badgeShown = n
         NSApp?.dockTile.badgeLabel = n > 0 ? "\(n)" : nil
     }
 }

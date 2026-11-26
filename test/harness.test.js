@@ -277,6 +277,94 @@ test("subagents and background commands become tasks, apart from the parent's st
   assert.equal((await api("GET", `/api/runs/${t.taskId}/tasks/nope/output`)).status, 404);
 });
 
+/** The app's Delta.apply (app/Sources/Bridge/Core.swift), for the test below. */
+function applyDelta(d, run) {
+  const m = [...run.messages].reverse().find((x) => x.id === d.msgId);
+  if (!m) return false;
+  const steps = (m.steps = m.steps || []);
+  const at = (i) => (i >= 0 && i < steps.length ? steps[i] : null);
+  if (d.blockStart) {
+    if (d.blockStart.i === steps.length) steps.push(structuredClone(d.blockStart.step));
+    else if (at(d.blockStart.i)) steps[d.blockStart.i] = structuredClone(d.blockStart.step);
+    else return false;
+  } else if (d.blockDelta) {
+    const st = at(d.blockDelta.i);
+    if (!st) return false;
+    st.text = (st.text || "") + d.blockDelta.text;
+  } else if (d.blockEnd) {
+    const st = at(d.blockEnd.i);
+    if (!st) return false;
+    st.streaming = false;
+  } else if (d.blockTokens) {
+    const st = at(d.blockTokens.i);
+    if (!st) return false;
+    Object.assign(st, { tokens: d.blockTokens.tokens, approx: d.blockTokens.approx });
+  } else if (d.blockDetail) {
+    const st = at(d.blockDetail.i);
+    if (!st) return false;
+    st.detail = d.blockDetail.detail;
+    if ("raw" in d.blockDetail) st.raw = d.blockDetail.raw;
+  } else if (d.blockResult) {
+    const st = at(d.blockResult.i);
+    if (!st) return false;
+    Object.assign(st, { result: d.blockResult.result, ok: d.blockResult.ok, resultLines: d.blockResult.resultLines });
+  } else if (d.usage && !d.done) {
+    m.usage = d.usage;
+  } else return false;
+  return true;
+}
+
+test("a chat fetched mid-stream plus the deltas after its seq equals the saved transcript", async () => {
+  const controller = new AbortController();
+  const res = await fetch(URL_ + "/api/events", { signal: controller.signal });
+  const reader = res.body.getReader();
+  const deltas = [];
+  const reading = (async () => {
+    const dec = new TextDecoder();
+    let buf = "";
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let end;
+        while ((end = buf.indexOf("\n\n")) >= 0) {
+          const frame = buf.slice(0, end);
+          buf = buf.slice(end + 2);
+          if (frame.startsWith("event: delta\n")) deltas.push(JSON.parse(frame.split("\ndata: ")[1]));
+        }
+      }
+    } catch (e) {
+      if (!controller.signal.aborted) throw e;
+    }
+  })();
+  try {
+    const t = await spawnTask("streamy", "stub:stream=60\nstub:report=ready-for-review");
+    const mine = () => deltas.filter((d) => d.runId === t.taskId);
+    await waitFor(() => mine().some((d) => d.blockDelta), 10000, "the reply to start streaming");
+    // What the app does on open: a snapshot, then every delta numbered after it.
+    const snap = await api("GET", `/api/runs/${t.taskId}`);
+    assert.equal(typeof snap.seq, "number");
+    const local = snap.run;
+    await waitFor(idle(t.taskId), 15000, "the turn to end");
+    await new Promise((r) => setTimeout(r, 200));
+    const after = mine().filter((d) => d.seq > snap.seq);
+    assert.ok(after.length > 5, "the snapshot was taken mid-stream");
+    assert.ok(mine().every((d, i, all) => i === 0 || d.seq > all[i - 1].seq), "deltas are numbered in order");
+    for (const d of after) if (!d.done && !d.task && !d.blockAsk && !d.blockAskState) assert.ok(applyDelta(d, local), `applies ${Object.keys(d).join(",")}`);
+    const saved = (await api("GET", `/api/runs/${t.taskId}`)).run;
+    const reply = (run) => run.messages.find((x) => x.role === "assistant" && (x.steps || []).some((s) => s.id === "tu-stream"));
+    const want = reply(saved), got = reply(local);
+    assert.ok(want && got, "the streamed reply is in both");
+    assert.deepEqual(got.steps, want.steps);
+    assert.ok(want.steps[0].text.startsWith("tok0 tok1 ") && want.steps[0].text.includes("tok59 "));
+    assert.equal(want.steps.find((s) => s.id === "tu-stream").result, "a.txt\nb.txt");
+  } finally {
+    controller.abort();
+    await reading;
+  }
+});
+
 test("workspaces: a worktree from any branch, or the main checkout, which cleanup leaves alone", async () => {
   git(["branch", "feature"]);
   git(["commit", "-q", "--allow-empty", "-m", "feature work"], REPO);

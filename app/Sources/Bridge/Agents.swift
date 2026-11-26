@@ -90,11 +90,12 @@ enum Countdown {
         return d > 0 ? "\(d)d \(h)h" : h > 0 ? "\(h)h \(m)m" : "\(max(m, 1))m"
     }
 
+    private static let dayClock: DateFormatter = { let f = DateFormatter(); f.dateFormat = "EEE h:mm a"; return f }()
+    private static let shortClock: DateFormatter = { let f = DateFormatter(); f.dateFormat = "h:mm a"; return f }()
+
     static func clock(_ t: Double) -> String {
         let date = Date(timeIntervalSince1970: t)
-        let f = DateFormatter()
-        f.dateFormat = date.timeIntervalSinceNow > 86400 ? "EEE h:mm a" : "h:mm a"
-        return f.string(from: date)
+        return (date.timeIntervalSinceNow > 86400 ? dayClock : shortClock).string(from: date)
     }
 }
 
