@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert");
-const { parseReport } = require("../lib/tasks");
+const { parseReport } = require("../server/tasks");
 
 test("parseReport reads the contract and is lenient about the rest", () => {
   const r = parseReport(`---

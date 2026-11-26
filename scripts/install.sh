@@ -2,7 +2,7 @@
 #
 # Set the project up on this machine.
 #
-#   1. Render templates/ into .claude/ with your .env baked in. The skill is
+#   1. Render skills/ into .claude/ with your .env baked in. The skill is
 #      read by a Claude session, which cannot see environment variables, so the
 #      repo path, Slack id and Linear parameters must be substituted in first.
 #   2. Symlink the rendered skill into ~/.claude so `/slack-fetch-pipeline
@@ -14,7 +14,7 @@
 # Nothing here watches Slack or runs on a timer. Every run is one you start.
 #
 #   ./scripts/install.sh            render + create/refresh the symlink
-#   ./scripts/install.sh render     render only (after editing .env or templates/)
+#   ./scripts/install.sh render     render only (after editing .env or skills/)
 #   ./scripts/install.sh start      render + link + start the dashboard under launchd
 #   ./scripts/install.sh stop       stop the dashboard (the symlink stays)
 #   ./scripts/install.sh uninstall  remove the symlink (project files are left alone)
@@ -32,14 +32,14 @@ fi
 
 # Read .env with the dashboard's own parser rather than sourcing it: a value
 # that's fine for node (parentheses, spaces) is a syntax error to the shell.
-# An exported variable still wins, as it does in lib/env.js.
+# An exported variable still wins, as it does in server/env.js.
 envval() { node -e 'const fs=require("fs");const m=fs.readFileSync(process.argv[1],"utf8").match(new RegExp("^\\s*(?:export\\s+)?"+process.argv[2]+"\\s*=\\s*[\"\x27]?([^\"\x27#\\s]*)","m"));process.stdout.write(m?m[1]:"")' "$PROJ/.env" "$1"; }
 : "${LAUNCHD_LABEL:=$(envval LAUNCHD_LABEL)}"
 : "${BRIDGE_PORT:=$(envval BRIDGE_PORT)}"
 
 LABEL="${LAUNCHD_LABEL:-local.bridge}"
 DASH_LABEL="$LABEL.dashboard"
-DASH_PLIST_SRC="$SCRIPTS/dashboard.plist.template"
+DASH_PLIST_SRC="$SCRIPTS/launchd.plist"
 DASH_PLIST_DST="$HOME/Library/LaunchAgents/$DASH_LABEL.plist"
 PORT="${BRIDGE_PORT:-4319}"
 
@@ -90,12 +90,12 @@ remove_old_poller() {
   return 0
 }
 
-# --- render templates/ -> .claude/ -----------------------------------------
+# --- render skills/ -> .claude/ -----------------------------------------
 # Always run before anything that reads .claude/, so an edited .env can never
 # leave a stale prompt pointing at the previous repo.
 render() {
-  echo "rendering templates with $PROJ/.env:"
-  node "$PROJ/lib/render.js"
+  echo "rendering skills with $PROJ/.env:"
+  node "$PROJ/server/render.js"
 }
 
 link() {
@@ -119,7 +119,7 @@ dashboard_start() {
   # launchd runs jobs with a near-empty PATH, so resolve node here. Ask node
   # itself for its binary rather than following the symlink: a version-manager
   # shim (mise, asdf) is a link to the manager, so its realpath is `mise`, and
-  # launchd would run `mise index.js` instead of node.
+  # launchd would run `mise server/index.js` instead of node.
   command -v node >/dev/null || { echo "error: node not found in PATH" >&2; exit 1; }
   NODE_BIN="$(node -p 'process.execPath')"
   [[ -x "$NODE_BIN" ]] || { echo "error: could not resolve the node binary (got '$NODE_BIN')" >&2; exit 1; }
@@ -128,7 +128,7 @@ dashboard_start() {
   # would just respawn onto the port we're about to clear.
   bootout_wait "$DASH_LABEL"
 
-  # Anything still holding the port — typically a `node index.js` you started
+  # Anything still holding the port — typically a `node server` you started
   # by hand — would make the new job crash-loop against EADDRINUSE under
   # KeepAlive. Hand the port over instead.
   if OLD_PIDS="$(lsof -t -iTCP:"$PORT" -sTCP:LISTEN 2>/dev/null)" && [[ -n "$OLD_PIDS" ]]; then
