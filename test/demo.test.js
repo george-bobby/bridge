@@ -71,6 +71,20 @@ test("pin and move a session between projects; each project gets its own orchest
   assert.strictEqual((await post("/api/projects/storefront/orchestrator")).runId, "orchestrator", "the default project keeps the original chat");
 });
 
+test("projects reorder without moving the default", async () => {
+  const ids = async () => (await get("/api/projects")).projects.map((p) => p.id);
+  const before = await ids();
+  const last = before[before.length - 1];
+  await post(`/api/projects/${last}`, { index: 0 });
+  const after = await ids();
+  assert.strictEqual(after[0], last);
+  assert.deepStrictEqual([...after].sort(), [...before].sort());
+  assert.strictEqual((await post(`/api/projects/${before[0]}/orchestrator`)).runId, "orchestrator", "the default keeps its orchestrator");
+  assert.strictEqual((await get("/api/projects")).projects.find((p) => p.default).id, before[0]);
+  await post(`/api/projects/${last}`, { index: before.length - 1 });
+  assert.deepStrictEqual(await ids(), before);
+});
+
 test(".env editing keeps secrets out of responses and comments in the file", async () => {
   await post("/api/env", { values: { GITHUB_LOGIN: "octocat", SLACK_USER_TOKEN: "xoxp-secret-value" } });
   const { entries, file } = await get("/api/env");

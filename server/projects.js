@@ -7,8 +7,9 @@
  * chat, so a worker's outcome is relayed to the orchestrator of the repo it
  * worked in.
  *
- * Stored in data/projects.json. The first project is seeded from TARGET_REPO
- * (or the job default workdir) and is the default.
+ * Stored in data/projects.json, in sidebar order. The first project is seeded
+ * from TARGET_REPO (or the job default workdir). The default is the one marked
+ * `default`, else the first, so reordering never moves the default.
  */
 
 const fs = require("fs");
@@ -40,7 +41,7 @@ function write(all) {
   fs.renameSync(tmp, FILE);
 }
 
-/** Every project, the default first. Seeds the default on first use. */
+/** Every project, in sidebar order. Seeds the default on first use. */
 function list(fallbackRepo = "") {
   let all = read();
   if (!all.length) {
@@ -53,7 +54,8 @@ function list(fallbackRepo = "") {
   return all;
 }
 
-const defaultId = () => (list()[0] || {}).id || "";
+const defaultOf = (all) => (all.find((p) => p.default) || all[0] || {}).id || "";
+const defaultId = () => defaultOf(list());
 
 function get(id) {
   return list().find((p) => p.id === id) || null;
@@ -78,8 +80,17 @@ function update(id, patch) {
   if (!p) throw new Error(`no such project: ${id}`);
   if (patch.name) p.name = String(patch.name).slice(0, 60);
   if (patch.makeDefault) {
+    for (const x of all) delete x.default;
+    p.default = true;
+  }
+  if (patch.index !== undefined) {
+    // Pin the default by flag before the order changes, so its orchestrator stays put.
+    const def = defaultOf(all);
+    for (const x of all) delete x.default;
+    all.find((x) => x.id === def).default = true;
+    const to = Math.max(0, Math.min(all.length - 1, Math.floor(Number(patch.index)) || 0));
     all.splice(all.indexOf(p), 1);
-    all.unshift(p);
+    all.splice(to, 0, p);
   }
   write(all);
   return p;
@@ -108,7 +119,7 @@ function of(run, meta = {}) {
     const hit = all.find((p) => inside(path.resolve(dir), p.path) || inside(path.resolve(dir), worktreeRoot(p.path)));
     if (hit) return hit.id;
   }
-  return (all[0] || {}).id || "";
+  return defaultOf(all);
 }
 
 /** Run id of a project's orchestrator chat. The default project keeps the

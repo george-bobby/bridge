@@ -436,7 +436,7 @@ final class AppModel {
     // MARK: chat order, drafts, browser tabs
 
     func sidebarSessions(in projectId: String) -> [Session] {
-        sessions(in: projectId).filter { !$0.pinned && column(of: $0) != .done }.sorted { $0.updatedAt > $1.updatedAt }
+        sessions(in: projectId).filter { !$0.pinned }.sorted { $0.updatedAt > $1.updatedAt }
     }
 
     var chatOrder: [String] {
@@ -578,7 +578,8 @@ final class AppModel {
 
     // MARK: projects
 
-    var defaultProject: Project? { projects.first }
+    /// The one marked default on the server, else the first (older projects.json).
+    var defaultProject: Project? { projects.first { $0.j["default"].bool } ?? projects.first }
     func project(_ id: String) -> Project? { projects.first { $0.id == id } }
     func inFilter(_ s: Session) -> Bool { projectFilter == nil || s.project == projectFilter }
     func sessions(in projectId: String) -> [Session] { boardSessions.filter { $0.project == projectId } }
@@ -623,6 +624,14 @@ final class AppModel {
     }
 
     func updateProject(_ id: String, _ patch: [String: Any]) async { await act { try await API.post("/api/projects/\(id)", patch) } }
+    /// Move a project to `index` in the sidebar; shown at once, then saved.
+    func moveProject(_ id: String, to index: Int) async {
+        guard let from = projects.firstIndex(where: { $0.id == id }), index >= 0, index < projects.count, index != from else { return }
+        var next = projects
+        next.insert(next.remove(at: from), at: index)
+        withAnimation(M.snappy) { projects = next }
+        await updateProject(id, ["index": index])
+    }
     func removeProject(_ id: String) async {
         await act { try await API.delete("/api/projects/\(id)") }
         if projectFilter == id { projectFilter = nil }
