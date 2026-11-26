@@ -46,7 +46,7 @@ struct LinearView: View {
             PageHeader(title: "My issues", subtitle: model.linear["viewer"].nonEmpty ?? "", icon: "circle.lefthalf.filled") {
                 filterButton
                 displayButton
-                IconButton(icon: "arrow.clockwise", help: "Refresh (⌘R)", spinning: model.loading.contains("linear")) { Task { await model.load("linear", refresh: true) } }
+                IconButton(icon: "arrow.clockwise", help: "Refresh (⌘R)", spinning: model.refreshing.contains("linear")) { Task { await model.load("linear", refresh: true) } }
             }
             if filterCount > 0 { filterBar.transition(.move(edge: .top).combined(with: .opacity)) }
             if let e = model.errors["linear"], !e.isEmpty { ErrorBar(text: e) }
