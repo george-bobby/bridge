@@ -432,20 +432,6 @@ test("no cap: every task starts at once, even past an old saved maxWorkers", asy
   await waitFor(statusIs(c.taskId, "ready-for-review"), 20000, "third task ran");
 });
 
-test("stopping a queued task keeps it from starting later", async () => {
-  const a = await spawnTask("hold a", "stub:stall=2\nstub:report=ready-for-review");
-  const b = await spawnTask("hold b", "stub:stall=2\nstub:report=ready-for-review");
-  const c = await spawnTask("hold c", "stub:report=ready-for-review");
-  assert.equal(c.state, "queued");
-  assert.equal((await api("POST", `/api/runs/${c.taskId}/stop`)).ok, true);
-  assert.equal(meta(c.taskId).status, "stopped");
-  await waitFor(statusIs(a.taskId, "ready-for-review"), 15000, "a done");
-  await waitFor(statusIs(b.taskId, "ready-for-review"), 15000, "b done");
-  await new Promise((r) => setTimeout(r, 500));
-  assert.equal(meta(c.taskId).status, "stopped", "the dispatcher left it alone");
-  assert.equal((await api("GET", "/api/state")).jobs.running.includes(c.taskId), false);
-});
-
 test("a stale running chat with no process behind it stops when asked", async () => {
   const t = await spawnTask("ghost", "stub:report=ready-for-review");
   await waitFor(statusIs(t.taskId, "ready-for-review"), 15000);
