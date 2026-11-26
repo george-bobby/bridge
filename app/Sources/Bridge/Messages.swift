@@ -177,13 +177,16 @@ struct MessageStepper: View {
 @MainActor final class HoverIntent: ObservableObject {
     @Published private(set) var open = false
     private var gen = 0
+    private let delay: Double
+
+    init(delay: Double = 0.25) { self.delay = delay }
 
     func show() { gen += 1; open = true }
 
     func hover(_ inside: Bool) {
         gen += 1
         let g = gen
-        DispatchQueue.main.asyncAfter(deadline: .now() + (inside ? 0.25 : 0.3)) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + (inside ? delay : 0.3)) { [weak self] in
             guard let self, self.gen == g, self.open != inside else { return }
             withAnimation(inside ? M.pop : M.exit) { self.open = inside }
         }
