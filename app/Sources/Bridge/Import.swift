@@ -84,7 +84,7 @@ struct ImportSheet: View {
                 Image(systemName: "square.and.arrow.down.on.square").font(.system(size: 14, weight: .medium)).foregroundStyle(T.accent)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Import a chat").font(T.ui(15, .semibold))
-                    Text("Your chats with Claude Code, Codex, Cursor and Devin on this Mac. Importing one makes it a worker that carries on in the same session.")
+                    Text("Your chats with Claude Code, Codex, Cursor and Devin on this Mac. Importing one carries it on here, in the same session.")
                         .font(T.ui(12)).foregroundStyle(T.text3).lineLimit(1)
                 }
                 Spacer()
@@ -209,12 +209,12 @@ struct ImportSheet: View {
             HStack(spacing: 6) { Kbd(keys: "↩"); Text("Import").font(T.ui(11.5)).foregroundStyle(T.text3) }
             Spacer()
             if let c = selected {
-                Text(!c.runId.isEmpty ? "Already imported" : c.gone ? "Its folder is gone, so it can't carry on" : "Opens as a worker in \(c.folder.isEmpty ? "its folder" : c.folder)")
+                Text(!c.runId.isEmpty ? "Already imported" : c.gone ? "Its folder is gone, so it can't carry on" : "Opens in \(c.folder.isEmpty ? "its folder" : c.folder)")
                     .font(T.ui(11.5)).foregroundStyle(c.gone && c.runId.isEmpty ? T.orange : T.text3).lineLimit(1)
                 Button { Task { await importSelected() } } label: {
                     HStack(spacing: 6) {
                         if busy.v { ProgressView().controlSize(.mini) }
-                        Text(c.runId.isEmpty ? "Import as worker" : "Open chat").font(T.ui(12.5, .semibold))
+                        Text(c.runId.isEmpty ? "Import" : "Open chat").font(T.ui(12.5, .semibold))
                         Image(systemName: c.runId.isEmpty ? "arrow.down.circle" : "arrow.up.forward").font(.system(size: 11, weight: .semibold))
                     }
                 }

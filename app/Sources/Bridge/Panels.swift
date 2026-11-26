@@ -46,7 +46,7 @@ struct InboxView: View {
                 LazyVStack(spacing: 0) {
                     switch model.inboxTab {
                     case "decisions":
-                        if model.decisions.isEmpty { EmptyState(icon: "checkmark.circle", title: "You're all caught up", detail: "Questions and requests from workers land here.") }
+                        if model.decisions.isEmpty { EmptyState(icon: "checkmark.circle", title: "You're all caught up", detail: "Questions and requests from your sessions land here.") }
                         ForEach(model.decisions, id: \.self) { DecisionRow(d: $0).transition(.opacity.combined(with: .move(edge: .trailing))) }
                     case "slack":
                         if model.slackItems.isEmpty {
@@ -58,7 +58,7 @@ struct InboxView: View {
                         ForEach(model.todos, id: \.self) { TodoRow(t: $0).transition(.opacity.combined(with: .move(edge: .trailing))) }
                     case "tasks":
                         let list = tasks.v["tasks"].array
-                        if list.isEmpty { EmptyState(icon: "person.2", title: "No workers", detail: "Workers the orchestrator spawns are listed here.") }
+                        if list.isEmpty { EmptyState(icon: "person.2", title: "No sessions", detail: "Sessions the orchestrator starts are listed here.") }
                         ForEach(list, id: \.self) { TaskRow(t: $0) }
                     default:
                         let ev = activity.v["events"].array.reversed()
@@ -108,7 +108,7 @@ struct DecisionRow: View {
             }
             MarkdownText(text: d["text"].string, size: 12.5, color: NT.text2)
             HStack(spacing: 8) {
-                LField(placeholder: kind == "action" ? "Anything to add (optional)" : kind == "resume" ? "Note for the worker (optional)" : "Your answer", text: $answer.v) { submit("answer") }
+                LField(placeholder: kind == "action" ? "Anything to add (optional)" : kind == "resume" ? "Note for the session (optional)" : "Your answer", text: $answer.v) { submit("answer") }
                 Button("Tomorrow") { submit("defer", tomorrow()) }.buttonStyle(LButton()).help("Hide until tomorrow")
                 Button("Dismiss") { submit("dismiss") }.buttonStyle(LButton())
                 Button(kind == "action" ? "Approve" : kind == "resume" ? "Resume" : "Answer") { submit("answer") }.buttonStyle(LButton(primary: true))

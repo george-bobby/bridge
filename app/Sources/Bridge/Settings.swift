@@ -34,7 +34,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
     var blurb: String {
         switch self {
         case .general: return "The server, how outcomes reach you, and what the Slack pipeline may do."
-        case .agents: return "Which agent and model new sessions start with, and how many workers run at once."
+        case .agents: return "Which agent and model new sessions start with, and how many sessions run at once."
         case .mcp: return "The tool servers each agent loads: add, edit, switch off and inspect them. Changes go into the agent's own config."
         case .integrations: return "Slack, GitHub and Linear. Tokens are stored in .env and never shown again."
         case .projects: return "The repositories in the sidebar, each with its own orchestrator."
@@ -414,7 +414,7 @@ struct EnvField: View {
         "TARGET_REPO": "Default repository", "TARGET_SCOPE": "Subdirectory scope", "WORKTREE_ROOT": "Worktree folder", "BRANCH_PREFIX": "Branch prefix",
         "PRODUCT_NAME": "Product name", "PRODUCT_URL": "Product URL",
         "BRIDGE_PORT": "Server port", "LAUNCHD_LABEL": "launchd label", "PIPELINE_MODEL": "Pipeline model",
-        "EXTRA_PATH": "Extra PATH", "MCP_READ_PREFIXES": "Read-only MCP prefixes", "WORKER_SKILL": "Worker skill",
+        "EXTRA_PATH": "Extra PATH", "MCP_READ_PREFIXES": "Read-only MCP prefixes", "WORKER_SKILL": "Opening skill",
     ]
     static let details: [String: String] = [
         "SLACK_PRODUCT_TEAM": "Ticket hints, as Name:MemberID,Name:MemberID",
@@ -511,7 +511,7 @@ struct RestartBanner: View {
                 .frame(width: 28, height: 28).background(Circle().fill(T.orange.opacity(0.14)))
             VStack(alignment: .leading, spacing: 2) {
                 Text("Restart the server to apply your changes").font(T.ui(13, .medium)).foregroundStyle(T.text)
-                Text(".env is saved, but the running server still uses the old values. Running workers restart with it.").font(T.ui(12)).foregroundStyle(T.text2)
+                Text(".env is saved, but the running server still uses the old values. Running sessions restart with it.").font(T.ui(12)).foregroundStyle(T.text2)
             }
             Spacer()
             Button("Later") { withAnimation(M.snappy) { model.envNeedsRestart = false } }.buttonStyle(LButton())
@@ -546,7 +546,7 @@ struct GeneralSettings: View {
                     }
                 }
                 if Prefs.hit(q, "restart server reload") {
-                    SRow(title: "Restart the server", detail: "Reloads server/, .env and the skills. Running workers restart with it.") {
+                    SRow(title: "Restart the server", detail: "Reloads server/, .env and the skills. Running sessions restart with it.") {
                         Button("Restart") { Task { await model.restartServer() } }.buttonStyle(LButton())
                     }
                 }
@@ -556,7 +556,7 @@ struct GeneralSettings: View {
                     }
                 }
             }
-            SSection(title: "Inbox", detail: "How worker outcomes reach the orchestrator") {
+            SSection(title: "Inbox", detail: "How the orchestrator hears back from sessions it started") {
                 if Prefs.hit(q, "relay mode normal quiet away inbox") {
                     SRow(title: "Relay mode", detail: "Normal relays everything; quiet only what needs you; away holds it all for one catch-up") {
                         SlidingTabs(tabs: [
@@ -685,18 +685,18 @@ struct WorkerSettings: View {
     var h: JSON { model.config["harness"] }
 
     var body: some View {
-        SSection(title: "Workers", detail: "Sessions the orchestrator spawns") {
+        SSection(title: "Sessions", detail: "Parallel sessions and their limits") {
             if Prefs.hit(q, "relay outcomes orchestrator workers") {
                 SRow(title: "Relay outcomes to the orchestrator", detail: "A finished, blocked or stalled worker starts a turn in the orchestrator chat") {
                     SToggle(on: Binding(get: { h["relay"].bool }, set: { v in save(["relay": v]) }))
                 }
             }
-            if Prefs.hit(q, "max workers at once limit") {
-                SRow(title: "Workers at once", detail: "Past the cap a new task is queued") {
+            if Prefs.hit(q, "max workers sessions at once limit") {
+                SRow(title: "Sessions at once", detail: "Past the cap a new task is queued") {
                     SStepper(value: h["maxWorkers"].int, range: 1...12) { save(["maxWorkers": $0]) }
                 }
             }
-            if Prefs.hit(q, "per repo workers limit") {
+            if Prefs.hit(q, "per repo workers sessions limit") {
                 SRow(title: "Per repository", detail: "Working workers in the same repo") {
                     SStepper(value: h["maxPerRepo"].int, range: 1...12) { save(["maxPerRepo": $0]) }
                 }

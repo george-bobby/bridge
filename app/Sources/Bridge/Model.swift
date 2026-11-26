@@ -232,7 +232,7 @@ let needsStatuses: Set<String> = ["needs-input", "blocked", "worker-stalled", "w
 let statusLabels: [String: String] = [
     "ready-for-review": "Ready", "needs-input": "Needs input", "blocked": "Blocked", "pushed-follow-up": "Pushed",
     "idle-without-report": "No report", "worker-stalled": "Stalled", "worker-gone": "Lost", "usage-limit": "Usage limit",
-    "queued": "Queued", "working": "Working", "cleaned": "Cleaned up", "stopped": "Stopped",
+    "queued": "Queued", "working": "Working", "cleaned": "Cleaned up", "stopped": "Stopped", "idle": "Replied",
 ]
 
 // MARK: - Routes
@@ -542,7 +542,8 @@ final class AppModel {
         // your PRs and reviews asked of you, so stay in review until it's seen.
         // Past the feed's 14-day merged window, an unseen PR is taken as landed.
         if !s.prUrl.isEmpty { return Date().timeIntervalSince1970 - s.updatedAt > 14 * 86400 ? .done : .review }
-        if st == "ready-for-review" || st == "pushed-follow-up" { return .review }
+        // "idle": it answered and stopped without code to report.
+        if st == "ready-for-review" || st == "pushed-follow-up" || st == "idle" { return .review }
         if ["acted", "skipped", "error"].contains(s.action) { return .done }
         if !s.worked || s.j["messages"].int == 0 { return .backlog }
         return .needs

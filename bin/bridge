@@ -41,6 +41,9 @@ function baseUrl() {
   return `http://127.0.0.1:${port || 4319}`;
 }
 
+/** Who's calling: work the orchestrator starts reports back to it. */
+const BY = process.env.BRIDGE_ROLE === "orchestrator" ? "orchestrator" : "";
+
 async function call(method, p, body) {
   let res;
   try {
@@ -122,6 +125,7 @@ async function main() {
         branch: flags.branch,
         opts,
         start: !flags["no-start"],
+        by: BY,
       });
       console.log(`${out.taskId}  ${out.state}`);
       console.log(`  branch:   ${out.branch}`);
@@ -131,7 +135,7 @@ async function main() {
     }
     case "slack": {
       if (!pos[0]) die("slack <thread url>");
-      const out = await call("POST", "/api/runs", { url: pos[0], start: true });
+      const out = await call("POST", "/api/runs", { url: pos[0], start: true, by: BY });
       console.log(`${out.runId}  ${out.started ? "started" : out.queued ? "queued" : out.created ? "created" : "already had a chat"}`);
       return;
     }

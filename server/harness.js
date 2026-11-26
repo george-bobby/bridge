@@ -11,14 +11,14 @@
  * An outcome is the unit of "this needs attention":
  *
  *   report               a worker wrote or changed report.md
- *   idle-without-report  it ended a turn without one (after one automatic nudge)
+ *   idle-without-report  it changed code but ended without one (after one automatic nudge)
  *   worker-stalled       no activity for N minutes, not declared waiting
  *   worker-gone          it died, or the dashboard restarted under it
  *   usage-limit          the agent hit a usage limit
  *
  * Each outcome goes to events.log, the task's chat, the Inbox (decisions and
- * to-dos), a browser notification when it needs you, and, mode allowing,
- * a relay turn in the orchestrator chat.
+ * to-dos), a browser notification when it needs you, and, for work the
+ * orchestrator started and mode allowing, a relay turn in the orchestrator chat.
  */
 
 const fs = require("fs");
@@ -129,7 +129,8 @@ function outcome(taskId, name, info = {}) {
   // The chat.
   const run = store.loadRun(taskId);
   if (run) {
-    const msg = store.appendMessage(run, { role: "event", phase: "outcome", text: `**${name}** · ${text}` });
+    const said = name === "report" ? `Report: ${(parsed && parsed.tldr) || status}` : `**${name}** · ${text}`;
+    const msg = store.appendMessage(run, { role: "event", phase: "outcome", text: said.slice(0, 600) });
     store.saveRun(run);
     bus.broadcast("message", { runId: taskId, message: msg });
   }
@@ -159,6 +160,10 @@ function relayText(taskId, name, { status, text, title, parsed, decisions }) {
 
 function relay(taskId, name, info) {
   if (projects.isOrchestrator(taskId)) return;
+  // Only work the orchestrator started goes back to it. A chat you started
+  // yourself is already in front of you, and every relay is a whole
+  // orchestrator turn (its instructions and roster included).
+  if ((tasks.readMeta(taskId) || {}).by !== "orchestrator") return;
   send(orchestratorFor(taskId), relayText(taskId, name, info), info.needsYou);
 }
 
@@ -246,27 +251,45 @@ function onJobEnd(e) {
     const crashed = !result && why !== "closed";
     if (crashed) {
       outcome(runId, "worker-gone", { text: `the session ended without a result (${why}). ${String(stderr || "").trim().split("\n").slice(-2).join(" ")}`.trim() });
-    } else if (meta.imported) {
-      // A chat you brought in from an agent's own history never took on the
-      // report contract: its turns end like any chat's, without a nudge.
-      tasks.writeMeta(runId, { status: "idle" });
+    } else if (meta.imported || r || !hasWork(meta)) {
+      // A turn that answered a question, or a follow-up on a chat that already
+      // has a report, ends like any chat's: no nudge (a nudge is a whole extra
+      // turn), no outcome. An imported chat never took on the report contract.
+      // The status goes back to what the report says (a turn sets "working").
+      tasks.writeMeta(runId, { status: r ? statusFor("report", r.parsed) : "idle" });
     } else if (!meta.nudged) {
-      // One automatic nudge, then it's yours.
+      // Work in the worktree and no report: one automatic nudge, then it's yours.
       tasks.writeMeta(runId, { nudged: true });
       tasks.appendEvent({ taskId: runId, name: "nudged", text: "ended a turn without a report" });
       try {
         jobs.startFollowup(
           runId,
-          `[harness] You ended your turn without writing ${tasks.paths(runId).report}. Write it now per the report contract (frontmatter status, TL;DR, summary, changes, verification, open questions, action requests), then stop.`,
+          `[harness] You changed code but haven't written ${tasks.paths(runId).report}. Write a short one now (status frontmatter, TL;DR, what changed, how you verified it), then stop.`,
           { config: store.readConfig(), role: "harness", label: "nudge" }
         );
         return;
       } catch {}
     } else {
-      outcome(runId, "idle-without-report", { text: "ended a turn without a report, even after a nudge" });
+      outcome(runId, "idle-without-report", { text: "changed code but ended without a report, even after a nudge" });
     }
   }
   dispatch();
+}
+
+/** Whether a task's checkout holds work worth a report: uncommitted changes or commits on its branch. */
+function hasWork(meta) {
+  const dir = meta.worktree;
+  if (!dir || !fs.existsSync(dir)) return false;
+  const git = (args) => {
+    try {
+      return require("child_process").execFileSync("git", ["-C", dir, ...args], { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] }).trim();
+    } catch {
+      return "";
+    }
+  };
+  if (git(["status", "--porcelain"])) return true;
+  const base = meta.from || meta.base;
+  return !!base && Number(git(["rev-list", "--count", `${base}..HEAD`])) > 0;
 }
 
 /** Start one queued follow-up for a chat, if any. True when one started. */
@@ -360,7 +383,7 @@ function dispatch() {
  * A worker from a brief: validate, worktree, chat, task folder, then start
  * (or queue when over the cap). Returns the task id either way.
  */
-async function spawnTask({ repo, title, brief, branch, base = "", workspace = "", opts = {}, start = true }) {
+async function spawnTask({ repo, title, brief, branch, base = "", workspace = "", opts = {}, start = true, by = "" }) {
   const text = String(brief || "").trim();
   if (!text) throw new Error("a task needs a brief");
   if (text.length > 60000) throw new Error("brief too long");
@@ -388,12 +411,12 @@ async function spawnTask({ repo, title, brief, branch, base = "", workspace = ""
 
   const p = tasks.paths(id);
   tasks.writeBrief(id, `# ${t}\n\n${text}\n`);
-  tasks.writeMeta(id, { kind: "task", title: t, repo: repoPath, worktree: wt.worktree, branch: wt.branch, base: wt.base, from: wt.from, status: "new", ...(wt.adopted ? { adopted: wt.adopted } : {}) });
+  tasks.writeMeta(id, { kind: "task", title: t, repo: repoPath, worktree: wt.worktree, branch: wt.branch, base: wt.base, from: wt.from, status: "new", ...(wt.adopted ? { adopted: wt.adopted } : {}), ...(by === "orchestrator" ? { by } : {}) });
 
   const run = store.blankRun(id, { who: t, text: text.slice(0, 400), action: "pending", phase: "queued" });
   run.kind = "task";
   run.opts = { ...store.sanitizeJobOpts(opts), workdir: wt.worktree };
-  store.appendMessage(run, { role: "user", text: `**Brief** (${p.brief})\n\n${text}` });
+  store.appendMessage(run, { role: "user", text });
   store.saveRun(run);
   tasks.appendEvent({ taskId: id, name: "spawned", text: `${t} · ${wt.branch} in ${wt.worktree}${wt.copied ? ` · ${wt.copied} file(s) from .worktreeinclude` : ""}` });
 

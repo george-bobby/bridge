@@ -202,36 +202,24 @@ function guardSettings() {
 }
 
 /**
- * The repo's memory, inlined. Claude Code loads project memory by the cwd's
- * path, and a worker's cwd is its worktree, which has no memory of its own.
- * So the main checkout's memory is copied into the worker's system prompt in
- * full: an index alone is not enough, because workers don't open the files.
+ * The repo's memory, the way Claude Code itself loads it: the MEMORY.md index
+ * (capped like Claude Code's own load), with the folder to open a topic file
+ * from. Claude Code finds project memory by the cwd's path, and a worker's cwd
+ * is its worktree, which has none, so the main checkout's index is handed over.
+ * Inlining every topic file cost tens of KB on every turn of every worker.
  */
 function memoryBlock(repo) {
   if (!repo) return "";
   const dir = memory.dirFor(repo);
-  let names = [];
+  let index = "";
   try {
-    names = fs.readdirSync(dir).filter((f) => f.endsWith(".md")).sort((a, b) => (a === "MEMORY.md" ? -1 : b === "MEMORY.md" ? 1 : a.localeCompare(b)));
+    index = fs.readFileSync(path.join(dir, "MEMORY.md"), "utf8").trim();
   } catch {
     return "";
   }
-  let out = "";
-  for (const f of names) {
-    let text = "";
-    try {
-      text = fs.readFileSync(path.join(dir, f), "utf8");
-    } catch {
-      continue;
-    }
-    const chunk = `\n### memory/${f}\n${text.trim()}\n`;
-    if (out.length + chunk.length > 60000) {
-      out += `\n(further memories omitted for size; they are in ${dir})\n`;
-      break;
-    }
-    out += chunk;
-  }
-  return out ? `## What this repo's memory says (shared by every worker in ${repo})\n${out}` : "";
+  if (!index) return "";
+  if (index.length > 25000) index = `${index.slice(0, 25000)}\n(index cut short)`;
+  return `## This repo's memory\nTopic files are in ${dir}: open one when its line below bears on the task.\n\n${index}\n`;
 }
 
 function fill(text, values) {
@@ -330,16 +318,11 @@ function skillWorkerPrompt(run, config, opts, ws) {
   const arg = url || (text && text.length <= 4000 ? text : `the task brief at ${p.brief}`);
   const rule = permissionRule(opts.permissionMode);
   const rules = [
-    `## Bridge (applies on top of the skill)`,
-    `You are Bridge worker \`${run.runId}\`; ${USER} and the orchestrator watch you from the dashboard. The worker contract in your instructions still holds, and where it and the skill differ, it wins:`,
-    `- Brief: ${p.brief} is the task as Bridge received it${url ? " (the link above came from it)" : ""}. Read it too.`,
-    meta.worktree
-      ? `- Worktree: Bridge already made yours, ${meta.worktree} on branch \`${meta.branch || "?"}\`${meta.from ? ` from ${meta.from}` : ""}, and you are in it. Use it instead of creating another (skip the skill's worktree step), and open the PR from this branch.`
-      : "",
-    `- Report: write ${p.report} in the report-contract shape before you end every turn. When the skill says to stop and wait for ${USER} (a verdict that changes the ask, a plan to approve, permission to escalate), end the turn with \`status: needs-input\` and the question under "Open questions", or use AskUserQuestion for a fork you need settled now.`,
-    `- Progress: \`${BRIDGE} declare phase "<skill step>"\` as you move through the skill, \`${BRIDGE} declare waiting "<what>"\` before a long wait.`,
-    `- ${ASK_RULE}`,
-    rule ? `- ${rule} Go as far as the mode allows, then report where you got to.` : "",
+    `## Bridge`,
+    meta.worktree ? `- You're already in a worktree, ${meta.worktree} on \`${meta.branch || "?"}\`: use it (skip the skill's worktree step) and open any PR from this branch.` : "",
+    `- If the ask is just a question, answer it in chat and stop: no ticket, PR or report.`,
+    `- If you change code, keep ${p.report} current (see your instructions). If the skill says to wait for ${USER}, ask with AskUserQuestion or end the turn with the question.`,
+    rule ? `- ${rule}` : "",
   ]
     .filter(Boolean)
     .join("\n");
@@ -898,13 +881,13 @@ function startTask(runId, { config, note = "" }) {
   const sk = skillWorkerPrompt(run, config, store.jobOpts(config, run), ws);
   const used = !!(sk && sk.prompt);
   if (used && sk.url && /linear\.app/.test(sk.url) && !run.linearUrl) run.linearUrl = sk.url;
-  const msg = store.appendMessage(run, { role: "event", phase: "spawned", text: `${note || `Worker started on ${p.brief}`}${skillNote(ws, used)}` });
+  const msg = store.appendMessage(run, { role: "event", phase: "spawned", text: `${note || "Started"}${skillNote(ws, used)}` });
   bus.broadcast("message", { runId, message: msg });
   return launch(run, {
     kind: "task",
     label: "worker",
     config,
-    prompt: used ? sk.prompt : `Read ${p.brief} and begin. Write your report to ${p.report} before you end your turn.`,
+    prompt: used ? sk.prompt : `Read ${p.brief} and begin.`,
   });
 }
 

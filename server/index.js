@@ -318,7 +318,7 @@ async function handle(req, res) {
 
       if (req.method === "GET" && p === "/api/tasks") return ok({ tasks: harness.status(), working: harness.workingCount().total, harness: store.readConfig().harness });
       if (req.method === "POST" && p === "/api/tasks") {
-        return ok(await harness.spawnTask({ repo: body.repo, title: body.title, brief: body.brief, branch: body.branch, base: body.base, workspace: body.workspace, opts: body.opts, start: body.start !== false }));
+        return ok(await harness.spawnTask({ repo: body.repo, title: body.title, brief: body.brief, branch: body.branch, base: body.base, workspace: body.workspace, opts: body.opts, start: body.start !== false, by: body.by === "orchestrator" ? "orchestrator" : "" }));
       }
       if (req.method === "GET" && p === "/api/inbox") return ok(harness.inbox());
       if (req.method === "GET" && p === "/api/catchup") return ok(harness.catchup(url.searchParams.get("since") || "8h"));
@@ -798,6 +798,8 @@ async function handle(req, res) {
     try {
       const body = JSON.parse((await readBody(req)) || "{}");
       const out = await chatFromLink(body.url, body);
+      // `bridge slack` from the orchestrator: its outcomes go back to it.
+      if (body.by === "orchestrator" && out.runId && tasks.exists(out.runId)) tasks.writeMeta(out.runId, { by: "orchestrator" });
       bus.broadcast("runs", { runs: store.listRunSummaries() });
       sendJson(res, 200, { ok: true, ...out });
     } catch (e) {
