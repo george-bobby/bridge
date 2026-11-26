@@ -575,6 +575,30 @@ test("deleting a chat clears its to-dos and decisions; chats deleted before that
   assert.equal(meta(asking.taskId).status, "deleted");
 });
 
+test("archiving a chat clears its Inbox items and hides it; unarchiving brings it back", async () => {
+  const mine = async (id) => {
+    const i = await api("GET", "/api/inbox");
+    return [...i.decisions, ...i.todos].filter((x) => x.taskId === id);
+  };
+  const summary = async (id) => (await api("GET", "/api/runs")).runs.find((r) => r.runId === id);
+  const t = await spawnTask("archive me", "stub:report=ready-for-review");
+  await waitFor(statusIs(t.taskId, "ready-for-review"), 15000);
+  await waitFor(idle(t.taskId), 5000);
+  assert.equal((await mine(t.taskId)).length, 1, "review to-do");
+
+  assert.equal((await api("POST", `/api/runs/${t.taskId}/archive`, {})).archived, true);
+  assert.deepEqual(await mine(t.taskId), []);
+  assert.equal((await summary(t.taskId)).archived, true, "the chat is kept, marked archived");
+  assert.ok(!(await api("GET", "/api/tasks")).tasks.some((x) => x.id === t.taskId), "out of bridge status");
+  assert.ok(!(await api("GET", "/api/sessions")).sessions.some((x) => x.id === t.taskId), "out of the roster");
+  assert.equal(meta(t.taskId).status, "ready-for-review", "status kept");
+
+  assert.equal((await api("POST", `/api/runs/${t.taskId}/archive`, { archived: false })).archived, false);
+  assert.equal((await summary(t.taskId)).archived, false);
+  assert.ok((await api("GET", "/api/tasks")).tasks.some((x) => x.id === t.taskId), "back in bridge status");
+  assert.equal((await api("POST", "/api/runs/orchestrator/archive", {})).status, 409, "the orchestrator stays");
+});
+
 test("bridge plan: a worker's task list, set, ticked and shown on its session", async () => {
   const t = await spawnTask("planny", "stub:report=ready-for-review");
   await waitFor(statusIs(t.taskId, "ready-for-review"), 15000, "report");

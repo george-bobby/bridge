@@ -679,12 +679,29 @@ function discard(taskId) {
   return closeInbox(taskId);
 }
 
+/**
+ * Archiving a chat puts it away without losing it: its open decisions and
+ * to-dos close and it leaves the sidebar, board, Workers and the roster.
+ * Unarchiving brings the chat back as it was; the closed Inbox items stay closed.
+ */
+function archive(id, on = true) {
+  if (on && jobs.isRunning(id)) throw new Error("stop the running job first");
+  const archived = store.setArchived(id, on);
+  if (tasks.exists(id)) {
+    tasks.writeMeta(id, { archived });
+    tasks.appendEvent({ taskId: id, name: archived ? "archived" : "unarchived", text: archived ? "chat archived; its open decisions and to-dos were dismissed" : "chat unarchived" });
+  }
+  if (archived) closeInbox(id);
+  bus.broadcast("runs", { runs: store.listRunSummaries() });
+  return { archived };
+}
+
 /* -------------------------------------------------------- status/catchup */
 
 const GONE = new Set(["cleaned", "deleted"]);
 
 function status() {
-  return tasks.list().filter((m) => m.status !== "deleted").map((m) => {
+  return tasks.list().filter((m) => m.status !== "deleted" && !m.archived).map((m) => {
     const live = jobs.isRunning(m.id);
     const act = jobs.activity(m.id);
     const r = tasks.readReport(m.id);
@@ -779,7 +796,7 @@ function brief({ since = "8h", orchestrator = "" } = {}) {
 function recover() {
   ensureOrchestrator();
   for (const m of tasks.list()) {
-    if (m.status === "deleted") continue;
+    if (m.status === "deleted" || m.archived) continue;
     // Cleaned up before cleanup closed its Inbox items: heal it now.
     if (m.status === "cleaned") {
       closeInbox(m.id);
@@ -863,6 +880,7 @@ module.exports = {
   decide,
   cleanup,
   discard,
+  archive,
   status,
   inbox,
   catchup,

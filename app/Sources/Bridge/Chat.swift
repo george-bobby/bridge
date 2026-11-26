@@ -118,6 +118,11 @@ struct ChatView: View {
                         .transition(.scale.combined(with: .opacity))
                 }
                 if s.isOrchestrator { BriefButton(orchestrator: s.id) }
+                if s.archived {
+                    Button { Task { await model.setArchived(s.id, false) } } label: { Label("Unarchive", systemImage: "tray.and.arrow.up") }
+                        .buttonStyle(LButton())
+                        .help("This chat is archived")
+                }
                 OpenInButton(session: s)
                 IconButton(icon: s.pinned ? "star.fill" : "star", help: s.pinned ? "Unpin" : "Pin to the sidebar") { Task { await model.setPinned(s.id, !s.pinned) } }
                 Menu {

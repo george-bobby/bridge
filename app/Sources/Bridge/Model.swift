@@ -25,6 +25,8 @@ struct Session: Identifiable, Hashable {
     var permalink: String { j["permalink"].string }
     var boardPin: String { j["board"].string }
     var pinned: Bool { j["pinned"].bool }
+    var archived: Bool { j["archived"].bool }
+    var archivedAt: Double { j["archivedAt"].double }
     var project: String { j["project"].string }
     var cost: Double { j["cost"].double }
     var updatedAt: Double { j["updatedAt"].double > 0 ? j["updatedAt"].double : j["createdAt"].double }
@@ -293,6 +295,8 @@ final class AppModel {
     var projects: [Project] = []
     /// The project the Board and Sessions show; nil is every project.
     var projectFilter: String? = nil
+    /// The Sessions list shows archived chats instead of the live ones.
+    var showArchived = false
     var composeProject: String? = nil
 
     var usage: JSON = .null
@@ -397,6 +401,7 @@ final class AppModel {
     func toggleSidebar() { withAnimation(M.snappy) { sidebarHidden.toggle() } }
 
     func navigate(_ r: Route) {
+        if r == .sessions || r == .board { showArchived = false }
         if case .session(let id) = r { open(id) } else { route = r == .sessions ? sessionsRoute : r }
     }
 
@@ -500,7 +505,8 @@ final class AppModel {
 
     // MARK: derived
 
-    var boardSessions: [Session] { sessions.filter { !$0.isOrchestrator } }
+    var boardSessions: [Session] { sessions.filter { !$0.isOrchestrator && !$0.archived } }
+    var archivedSessions: [Session] { sessions.filter { $0.archived }.sorted { $0.archivedAt > $1.archivedAt } }
     var orchestrator: Session? { sessions.first { $0.isOrchestrator } }
     var servers: [DevServer] { ports["servers"].array.map(DevServer.init) }
     var decisions: [JSON] { inbox["decisions"].array }
@@ -1132,21 +1138,27 @@ final class AppModel {
         await refreshOpen()
     }
 
-    func delete(_ id: String) async {
-        let a = NSAlert()
-        let title = sessions.first { $0.id == id }?.title ?? "this session"
-        a.messageText = "Delete \u{201C}\(title.count > 60 ? String(title.prefix(59)) + "…" : title)\u{201D}?"
-        a.informativeText = "Its chat goes and its open questions and to-dos are dismissed. Its worktree and branch stay on disk. There's no undo."
-        a.addButton(withTitle: "Delete")
-        a.addButton(withTitle: "Cancel")
-        a.buttons.first?.hasDestructiveAction = true
-        guard a.runModal() == .alertFirstButtonReturn else { return }
+    /// Archive a chat (its open questions and to-dos are dismissed; the chat
+    /// is kept) or bring it back. Nothing is lost, so it doesn't ask first.
+    func setArchived(_ id: String, _ on: Bool) async {
+        let title = sessions.first { $0.id == id }?.title ?? "Session"
         await act {
-            try await API.delete("/api/runs/\(API.q(id))")
-            // Off the deleted chat only; the board stays the board.
-            if case .session(let r) = self.route, r == id { self.navigate(.sessions) }
-            if self.openId == id { self.openId = "" }
-            self.forgetPanes(of: id)
+            try await API.post("/api/runs/\(API.q(id))/archive", ["archived": on])
+            if let i = self.sessions.firstIndex(where: { $0.id == id }) {
+                var o = self.sessions[i].j.object
+                o["archived"] = .bool(on)
+                o["archivedAt"] = .num(on ? Date().timeIntervalSince1970 : 0)
+                withAnimation(M.snappy) { self.sessions[i] = Session(j: .obj(o)) }
+            }
+            if on {
+                // Off the archived chat only; the board stays the board.
+                if case .session(let r) = self.route, r == id { self.navigate(.sessions) }
+                if self.openId == id { self.openId = "" }
+                self.forgetPanes(of: id)
+                self.say("Archived \u{201C}\(title.count > 40 ? String(title.prefix(39)) + "…" : title)\u{201D}. Find it under Sessions › Archived")
+            } else {
+                self.say("Unarchived \u{201C}\(title.count > 40 ? String(title.prefix(39)) + "…" : title)\u{201D}")
+            }
         }
     }
 

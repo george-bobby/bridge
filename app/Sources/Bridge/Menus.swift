@@ -182,7 +182,21 @@ struct LayoutPicker: View {
         IconTabs(items: [
             .init(id: "list", icon: "list.bullet", help: "List"),
             .init(id: "board", icon: "rectangle.split.3x1", help: "Board"),
-        ], selection: Binding(get: { model.route == .sessions ? "list" : "board" }, set: { model.route = $0 == "list" ? .sessions : .board }))
+        ], selection: Binding(get: { model.route == .sessions ? "list" : "board" }, set: { model.showArchived = false; model.route = $0 == "list" ? .sessions : .board }))
+    }
+}
+
+/// Sessions › Archived: flips the list between live and archived chats.
+struct ArchivedToggle: View {
+    @Environment(AppModel.self) var model
+    var body: some View {
+        let on = model.showArchived && model.route == .sessions
+        IconButton(icon: "archivebox", help: on ? "Back to sessions" : "Archived sessions (\(model.archivedSessions.count))", on: on) {
+            withAnimation(M.snappy) {
+                model.showArchived = !on
+                if !on { model.route = .sessions }
+            }
+        }
     }
 }
 

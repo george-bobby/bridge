@@ -20,7 +20,7 @@ const keyOf = (s) => ((/\/issue\/([A-Z][A-Z0-9]*-\d+)/.exec(s.linearUrl || "") |
 function list({ project = "", all = false, self = "", isRunning = () => false } = {}) {
   return store
     .listRunSummaries()
-    .filter((s) => s.runId !== self && (all || !project || s.project === project))
+    .filter((s) => s.runId !== self && !s.archived && (all || !project || s.project === project))
     .map((s) => {
       const t = s.task || {};
       const p = tasks.paths(s.runId);

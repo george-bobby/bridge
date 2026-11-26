@@ -461,6 +461,16 @@ function setPinned(id, pinned) {
   return !!run.pinned;
 }
 
+/** Archive a chat (out of the sidebar, board and roster) or bring it back. Not activity. */
+function setArchived(id, archived) {
+  const run = loadRun(id);
+  if (!run) throw new Error("no such run");
+  if (archived) run.archivedAt = run.archivedAt || Math.floor(Date.now() / 1000);
+  else delete run.archivedAt;
+  writeRun(run);
+  return !!run.archivedAt;
+}
+
 /** Move a chat to another project. A chat that has never run also takes the
  *  project's checkout as its workdir; one that has keeps its session's. */
 function setProject(id, project) {
@@ -627,6 +637,8 @@ function summariseRun(run) {
     linearUrl: run.linearUrl,
     board: run.board ? run.board.column : "",
     pinned: !!run.pinned,
+    archived: !!run.archivedAt,
+    archivedAt: run.archivedAt || 0,
     project: require("./projects").of(run, meta),
     workdir: (run.opts && run.opts.workdir) || "",
     agent: (run.opts && run.opts.agent) || "",
@@ -791,6 +803,7 @@ module.exports = {
   saveRun,
   setBoard,
   setPinned,
+  setArchived,
   setProject,
   BOARD_COLUMNS,
   clearPendingAsks,
