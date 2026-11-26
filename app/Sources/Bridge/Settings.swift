@@ -7,12 +7,13 @@ import SwiftUI
 // save bar. Secrets are write-only: the server only says whether one is set.
 
 enum SettingsPane: String, CaseIterable, Identifiable {
-    case general, agents, integrations, projects, notifications, advanced
+    case general, agents, mcp, integrations, projects, notifications, advanced
     var id: String { rawValue }
     var label: String {
         switch self {
         case .general: return "General"
         case .agents: return "Agents & models"
+        case .mcp: return "MCP servers"
         case .integrations: return "Integrations"
         case .projects: return "Projects"
         case .notifications: return "Notifications"
@@ -23,6 +24,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         switch self {
         case .general: return "gearshape"
         case .agents: return "cpu"
+        case .mcp: return "puzzlepiece.extension"
         case .integrations: return "square.stack.3d.up"
         case .projects: return "folder"
         case .notifications: return "bell"
@@ -33,6 +35,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         switch self {
         case .general: return "The server, how outcomes reach you, and what the Slack pipeline may do."
         case .agents: return "Which agent and model new sessions start with, and how many workers run at once."
+        case .mcp: return "The tool servers each agent loads: add, edit, switch off and inspect them. Changes go into the agent's own config."
         case .integrations: return "Slack, GitHub and Linear. Tokens are stored in .env and never shown again."
         case .projects: return "The repositories in the sidebar, each with its own orchestrator."
         case .notifications: return "When Bridge interrupts you, on this Mac."
@@ -178,6 +181,7 @@ struct SettingsView: View {
         switch p {
         case .general: GeneralSettings(q: q)
         case .agents: AgentSettings(env: env, q: q)
+        case .mcp: MCPSettings(q: q)
         case .integrations: IntegrationSettings(env: env, q: q)
         case .projects: ProjectSettings(env: env, q: q)
         case .notifications: NotificationSettings(q: q)
@@ -386,7 +390,8 @@ struct SInput: View {
         .font(mono ? T.mono(12) : T.ui(12.5))
         .focused($focused)
         .padding(.horizontal, 9)
-        .frame(width: width, height: 28)
+        .frame(width: width == .infinity ? nil : width, height: 28)
+        .frame(maxWidth: width == .infinity ? .infinity : nil)
         .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(T.bg.opacity(0.6)))
         .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).stroke(focused ? T.accent.opacity(0.7) : T.line, lineWidth: 1))
         .shadow(color: T.accent.opacity(focused ? 0.25 : 0), radius: 4)

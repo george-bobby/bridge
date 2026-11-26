@@ -205,6 +205,7 @@ extension AppModel {
     func dropInPane(run: String, tab: String, at target: String, edge: PaneEdge) {
         guard var t = pane(target) else { return }
         if tab.hasPrefix("web-") && !(browserTabs[run] ?? []).contains(where: { "web-\($0.id)" == tab }) { return }
+        if tab.hasPrefix("task-") && !(taskTabs[run] ?? []).contains(String(tab.dropFirst(5))) { taskTabs[run, default: []].append(String(tab.dropFirst(5))) }
         if tab == "term" { terminalTabs.insert(run) }
         withAnimation(M.snappy) {
             let existing = panes.firstIndex { $0.run == run && $0.tab == tab }
@@ -311,6 +312,9 @@ extension AppModel {
         case "chat": return ("bubble.left", "Chat")
         case "changes": return ("plusminus", "Changes")
         case "term": return ("terminal", "Terminal")
+        case _ where tab.hasPrefix("task-"):
+            let t = agentTask(run, String(tab.dropFirst(5)))
+            return (t?.icon ?? "square.stack.3d.down.right", t?.title ?? "Task")
         default:
             let id = String(tab.dropFirst(4))
             let page = web.existing(id)
@@ -694,12 +698,15 @@ struct PaneContent: View {
             TerminalTab(runId: run)
         } else if tab.hasPrefix("web-"), let t = model.browserTabs[run]?.first(where: { "web-\($0.id)" == tab }) {
             BrowserView(page: model.web.page(for: t))
+        } else if tab.hasPrefix("task-") {
+            TaskView(runId: run, taskId: String(tab.dropFirst(5)))
         } else {
             // Pinned to the pane's width: a composer or card that can't
             // shrink further must not widen (and off-center) the transcript.
             GeometryReader { g in
                 VStack(spacing: 0) {
                     Transcript(run: model.runData(run), runId: run).frame(width: g.size.width)
+                    TaskStrip(runId: run).frame(width: g.size.width)
                     Composer(runId: run).frame(width: g.size.width)
                 }
             }
