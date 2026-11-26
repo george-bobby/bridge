@@ -858,8 +858,7 @@ struct PaneCommands: Commands {
                 .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
                 .disabled(!model.isSplit || !model.isChatRoute)
             Divider()
-            Button { if case .session(let id) = model.route { model.openTerminalTab(id) } } label: { Label("Terminal", systemImage: "terminal") }
-                .keyboardShortcut("`", modifiers: .control)
+            Button { if case .session(let id) = model.route { model.openTerminalTab(id) } } label: { Label("Session Terminal Tab", systemImage: "terminal") }
                 .disabled(!model.isChatRoute)
             Button { if case .session(let id) = model.route { withAnimation(M.snappy) { model.showTab("changes", of: id) } } } label: { Label("Changes", systemImage: "plusminus") }
                 .disabled(!model.isChatRoute)

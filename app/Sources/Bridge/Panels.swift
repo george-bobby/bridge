@@ -502,9 +502,17 @@ struct CommandPalette: View {
         var all: [PaletteItem] = [
             PaletteItem(id: "new", icon: sym("square.and.pencil"), title: "New task", hint: "⌘N", group: "Suggestions") { model.composeOpen = true },
             PaletteItem(id: "import", icon: sym("square.and.arrow.down.on.square"), title: "Import a chat from Claude Code, Codex, Cursor or Devin…", hint: "⇧⌘I", group: "Suggestions") { model.importOpen = true },
-            PaletteItem(id: "project", icon: sym("folder.badge.plus"), title: "Add a project…", hint: "⇧⌘P") { model.addProject() },
+            PaletteItem(id: "project", icon: sym("folder.badge.plus"), title: "Add a project…") { model.addProject() },
             PaletteItem(id: "refresh", icon: sym("arrow.clockwise"), title: "Refresh GitHub and Linear", hint: "⌘R") { Task { await model.loadSources(refresh: true) } },
         ]
+        all.append(PaletteItem(id: "term-toggle", icon: sym("terminal"), title: "Toggle terminal", hint: "⌃`", group: "Suggestions") { ConsoleStore.shared.toggle(model) })
+        all.append(PaletteItem(id: "term-new", icon: sym("plus.rectangle"), title: "New terminal", hint: "⌃⇧`") { ConsoleStore.shared.add(model.contextFolder) })
+        all.append(PaletteItem(id: "panel", icon: sym("rectangle.bottomthird.inset.filled"), title: "Toggle panel", hint: "⌘J") { ConsoleStore.shared.togglePanel(model) })
+        if !ConsoleStore.shared.shells.isEmpty {
+            all.append(PaletteItem(id: "term-kill", icon: sym("trash"), title: "Kill the active terminal") { ConsoleStore.shared.kill() })
+            all.append(PaletteItem(id: "term-max", icon: sym("arrow.up.left.and.arrow.down.right"), title: "Maximize panel size") { ConsoleStore.shared.show(); ConsoleStore.shared.toggleMaximized() })
+        }
+        all.append(PaletteItem(id: "sidebar", icon: sym("sidebar.left"), title: "Toggle sidebar", hint: "⌘B") { model.toggleSidebar() })
         for (i, n) in navOrder.enumerated() {
             all.append(PaletteItem(id: "go-\(n.label)", icon: sym(n.icon), title: n.label, hint: "⌘\(i + 1)", group: "Go to") { model.navigate(n.route) })
         }
@@ -516,6 +524,10 @@ struct CommandPalette: View {
             all.append(PaletteItem(id: "web", icon: sym("globe"), title: "New browser tab", hint: "⌘T") { model.openBrowser(id, url: "") })
             all.append(PaletteItem(id: "prev", icon: sym("chevron.up"), title: "Previous chat", hint: "⌥⌘↑") { model.stepChat(-1) })
             all.append(PaletteItem(id: "next", icon: sym("chevron.down"), title: "Next chat", hint: "⌥⌘↓") { model.stepChat(1) })
+            all.append(PaletteItem(id: "next-tab", icon: sym("arrow.right.square"), title: "Next tab", hint: "⌃⇥") { model.stepTab(1) })
+            all.append(PaletteItem(id: "prev-tab", icon: sym("arrow.left.square"), title: "Previous tab", hint: "⌃⇧⇥") { model.stepTab(-1) })
+            all.append(PaletteItem(id: "changes", icon: sym("plusminus"), title: "Show changes", hint: "⇧⌘G") { withAnimation(M.snappy) { model.showTab("changes", of: id) } })
+            all.append(PaletteItem(id: "session-term", icon: sym("terminal.fill"), title: "Resume this session in a Terminal tab") { model.openTerminalTab(id) })
             if let s = model.sessions.first(where: { $0.id == id }), model.isLive(s) {
                 all.insert(PaletteItem(id: "stop", icon: sym("stop.circle", T.red), title: "Stop the running turn", hint: "⌘.", group: "Suggestions") { Task { await model.stop(id) } }, at: 0)
             }

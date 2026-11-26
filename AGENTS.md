@@ -42,7 +42,8 @@ Zero-dependency Node dashboard (no `npm install`) plus a Swift WKWebView shell.
 - Composer: while a turn runs the send button becomes a stop square (⌘.); the app turns off smart dashes/quotes/text replacement (prompts are code). Esc in the New Task sheet closes an open picker first; closing the sheet keeps the draft (`model.composeText`/`composeDirect`)
 - ⌘K palette (`CommandPalette`, `PaletteRow` in Panels.swift) groups results by `PaletteItem.group` in `CommandPalette.groups` order; page filters use the SwiftUI `SearchField` in Theme.swift (⌘F focuses, Esc clears)
 - The old web UI is kept, untouched, in `legacy/`
-- The only terminal is the in-app Terminal tab: no external-terminal hand-off
+- The only terminals are in-app: a chat's Terminal tab (resumes the agent's session) and the VS Code-style panel under every page (`Console.swift`: `ConsoleStore.shared`, plain login shells started in `model.contextFolder`, ⌃` toggle, ⌃⇧` new, ⌘J panel, drag the top edge to resize, double-click to maximize; snapshot page `console`). No external-terminal hand-off
+- VS Code key bindings live in `Keys.swift` (one local key monitor, installed by `RootView`): ⌃Tab/⌃⇧Tab and ⇧⌘]/⇧⌘[ step the focused pane's tabs (`model.stepTab`), ⌘W closes a browser/terminal/task tab or a split pane (`model.closeFocusedTab`), ⌃-/⌃⇧- back/forward, ⌘P/⇧⌘P/⇧⌘F the palette, ⌘B sidebar (⌃⌘S too), ⇧⌘G Changes, ⇧⌘E Sessions, ⌘K clears a focused panel terminal. ⌃ keys a shell needs (⌃-) pass through when a terminal has focus; add new bindings there, not as bare menu shortcuts
 
 ## Server pieces added with the native app
 
