@@ -150,6 +150,9 @@ async function waitFor(fn, ms = 10000) {
   throw new Error("timed out");
 }
 
+/** No job in the chat, the harness's automatic nudge included. */
+const idle = () => waitFor(async () => !(await get("/api/state")).jobs.running.includes(RUN_ID));
+
 test("a session can switch agents: Codex runs through the same transcript, and the next agent gets a handoff", async () => {
   await post(`/api/runs/${RUN_ID}/opts`, { opts: { agent: "codex" } });
   await post(`/api/runs/${RUN_ID}/followup`, { text: "List the files." });
@@ -167,9 +170,12 @@ test("a session can switch agents: Codex runs through the same transcript, and t
   assert.strictEqual(run.agentSessions.codex, "th-123", "the agent's session id is kept for the next turn");
   assert.match(fs.readFileSync(path.join(tmp, "codex-prompt.txt"), "utf8"), /List the files\./);
 
-  // Back to Claude (the stub): it gets a briefing of what Codex did.
+  // Back to Claude (the stub): it gets a briefing of what Codex did. Codex
+  // ended without a report, so the harness may be nudging it right now:
+  // queue behind that turn rather than racing it.
   await post(`/api/runs/${RUN_ID}/opts`, { opts: { agent: "claude" } });
-  await post(`/api/runs/${RUN_ID}/followup`, { text: "Now summarise." });
+  const next = await post(`/api/runs/${RUN_ID}/followup`, { text: "Now summarise.", queue: true });
+  assert.strictEqual(next.ok, true, next.error);
   const after = await waitFor(async () => {
     const r = (await get(`/api/runs/${RUN_ID}`)).run;
     const m = r.messages.filter((x) => x.role === "assistant").pop();
@@ -233,6 +239,7 @@ test("compact: /compact for Claude, a self-handoff for the other agents; files a
       return r.messages.some((m) => m.role === "assistant" && m.state === "running") ? null : r;
     });
   await settled();
+  await idle();
   await post(`/api/runs/${RUN_ID}/opts`, { opts: { agent: "claude" } });
   const out = await post(`/api/runs/${RUN_ID}/compact`, {});
   assert.strictEqual(out.ok, true, out.error);
@@ -248,6 +255,7 @@ test("compact: /compact for Claude, a self-handoff for the other agents; files a
   assert.match(m.text, /42k → 6k/);
 
   // Codex has no headless /compact: its session is dropped and its next turn is briefed.
+  await idle();
   await post(`/api/runs/${RUN_ID}/opts`, { opts: { agent: "codex" } });
   const typed = await post(`/api/runs/${RUN_ID}/followup`, { text: "/compact keep the CSV bits" });
   assert.strictEqual(typed.compacted, true);
