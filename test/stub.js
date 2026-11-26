@@ -9,6 +9,7 @@
  *   stub:action=<text>        (with report) add an action request
  *   stub:noreport             end the turn without a report
  *   stub:report-on-nudge      write a ready-for-review report when nudged
+ *   stub:edit                 leave an uncommitted file in the worktree (real work to report)
  *   stub:stall=<seconds>      open a Bash call, go silent, then end
  *   stub:limit                end with a usage-limit error
  *   stub:exit                 die without a result
@@ -115,8 +116,8 @@ async function turn(prompt) {
     say("Applied the answer.");
     return done("ok");
   }
-  const d = directives(prompt.startsWith("[harness] You ended your turn") ? "" : briefText(prompt) + "\n" + prompt);
-  if (/^\[harness\] You ended your turn/.test(prompt)) {
+  const d = directives(/^\[harness\] You changed code/.test(prompt) ? "" : briefText(prompt) + "\n" + prompt);
+  if (/^\[harness\] You changed code/.test(prompt)) {
     const b = directives(briefText(prompt));
     if (b["report-on-nudge"]) writeReport("ready-for-review");
     say("Nudged.");
@@ -140,6 +141,7 @@ async function turn(prompt) {
   }
   if (d.tasks) await tasks();
   if (d.stream) await stream(Number(d.stream) || 20);
+  if (d.edit) fs.writeFileSync("stub-edit.txt", "edited\n");
   if (d.report) writeReport(d.report, d);
   say("Stub turn done.");
   return done("stub done");

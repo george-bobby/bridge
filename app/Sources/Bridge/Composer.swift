@@ -1330,9 +1330,9 @@ struct ComposeSheet: View {
         } else {
             HStack(spacing: 10) {
                 ModeCard(icon: "point.3.connected.trianglepath.dotted", tint: T.accent, title: "Plan with the orchestrator",
-                         detail: "It writes the brief, picks the agent and starts a worker in a fresh worktree.", on: !direct.v) { direct.v = false }
-                ModeCard(icon: "hammer", tint: T.green, title: "Start a worker now",
-                         detail: "This text is the brief. A worker starts on it right away in its own worktree.", on: direct.v) { direct.v = true }
+                         detail: "It writes the brief, picks the agent and starts a session in a fresh worktree.", on: !direct.v) { direct.v = false }
+                ModeCard(icon: "hammer", tint: T.green, title: "Start it now",
+                         detail: "A session starts on this text right away, in its own worktree.", on: direct.v) { direct.v = true }
             }
             .transition(.opacity)
         }
@@ -1350,7 +1350,7 @@ struct ComposeSheet: View {
             } else if !isSlack {
                 HStack(spacing: 6) {
                     AgentMark(agent: AgentKind.of(model.config["followup"]["agent"].nonEmpty ?? "claude"), size: 14)
-                    Text("The orchestrator chooses the worker's agent").font(T.ui(11.5)).foregroundStyle(T.text3)
+                    Text("The orchestrator chooses the agent").font(T.ui(11.5)).foregroundStyle(T.text3)
                 }
                 .padding(.horizontal, 6)
                 .transition(.opacity)
@@ -1360,7 +1360,7 @@ struct ComposeSheet: View {
             Button { submit() } label: {
                 HStack(spacing: 6) {
                     if busy.v { ProgressView().controlSize(.mini) }
-                    Text(isSlack ? "Run pipeline" : direct.v ? "Start worker" : "Send to orchestrator")
+                    Text(isSlack ? "Run pipeline" : direct.v ? "Start" : "Send to orchestrator")
                     Image(systemName: "arrow.up").font(.system(size: 10, weight: .bold))
                 }
             }

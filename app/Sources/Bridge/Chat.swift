@@ -518,7 +518,7 @@ struct AssistantMessage: View {
             AgentMark(agent: agent)
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 0) {
-                    MessageHead(name: agent.label, detail: [m["label"].string, m["model"].string].filter { !$0.isEmpty }.joined(separator: " · "), ts: m["ts"].double)
+                    MessageHead(name: agent.label, detail: m["model"].string, ts: m["ts"].double)
                     Spacer(minLength: 8)
                     MessageActions(text: replyText, shown: hover.v && state != "running")
                 }
@@ -745,8 +745,7 @@ struct HarnessMessage: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Image(systemName: "arrow.triangle.turn.up.right.diamond").font(.system(size: 10.5))
-                Text(m["role"].string == "relay" ? "Harness → orchestrator" : "Harness → worker").font(T.ui(11.5, .medium))
-                if !m["label"].string.isEmpty { Text(verbatim: "· \(m["label"].string)").font(T.ui(11.5)) }
+                Text("Bridge").font(T.ui(11.5, .medium))
                 Spacer()
                 Text(Fmt.clock(m["ts"].double)).font(T.ui(11))
             }

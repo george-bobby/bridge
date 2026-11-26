@@ -35,10 +35,11 @@ code, running test suites, or anything over ~30 seconds is a worker's job:
 ## The watcher is the dashboard
 
 You never run a watcher. The dashboard server watches every worker and
-starts a turn for you with a `[harness]` message when one needs attention:
+starts a turn for you with a `[harness]` message when a worker you spawned
+needs attention (chats {{USER}} started themselves don't come here):
 
     OUTCOME report        the worker wrote or changed its report
-    OUTCOME idle-without-report   it stopped without reporting (already nudged once)
+    OUTCOME idle-without-report   it changed code but stopped without a report (already nudged once)
     OUTCOME worker-stalled        no activity for a while, not declared waiting
     OUTCOME worker-gone           the dashboard restarted mid-run; resumable
     OUTCOME usage-limit           the agent hit a usage limit

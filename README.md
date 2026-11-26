@@ -67,13 +67,13 @@ BRIDGE_PORT=4420 ~/Applications/Bridge.app/Contents/MacOS/Bridge
 New task ── Slack link ──► worker running the Slack pipeline skill
          └─ anything else ► Orchestrator ── bin/bridge spawn ──► worker
                                                                 │
-   worker: own worktree + branch, writes data/tasks/<id>/report.md
+   worker: own worktree + branch; when it changes code, data/tasks/<id>/report.md
                                                                 │
-   server watches every worker ──► outcome ──► Inbox + relay to the orchestrator
+   server watches every worker ──► outcome ──► Inbox (+ relay, if the orchestrator spawned it)
 ```
 
-- **Workers** run headless in their own worktree with a chat you can follow up in. Each turn ends with a `report.md`: a status, a TL;DR, open questions and action requests.
-- **Outcomes**: the server notices when a worker reports, stops without a report, stalls, dies or hits a usage limit, and puts what needs you in the Inbox.
+- **Workers** run headless in their own worktree with a chat you can follow up in. One that changes code keeps a short `report.md` (status, TL;DR, open questions, action requests); a question just gets an answer.
+- **Outcomes**: the server notices when a worker reports, changes code without a report, stalls, dies or hits a usage limit, and puts what needs you in the Inbox.
 - **Imported chats** keep their original folder and agent session; Bridge never removes a checkout it didn't create.
 - **Capacity**: 3 workers at once, 2 per repo by default; extra tasks queue.
 
