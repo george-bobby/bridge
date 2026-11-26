@@ -6,11 +6,29 @@ import SwiftUI
 // Linear's palette: near-black layered surfaces, hairline borders, three steps
 // of gray text, one indigo accent. Every color resolves per appearance.
 
-private func dyn(_ dark: UInt32, _ light: UInt32) -> Color {
-    Color(nsColor: NSColor(name: nil) { a in
+private func ndyn(_ dark: UInt32, _ light: UInt32) -> NSColor {
+    NSColor(name: nil) { a in
         let hex = a.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
         return NSColor(srgbRed: CGFloat((hex >> 16) & 0xFF) / 255, green: CGFloat((hex >> 8) & 0xFF) / 255, blue: CGFloat(hex & 0xFF) / 255, alpha: 1)
-    })
+    }
+}
+
+/// The palette as NSColors, for AppKit views (RichText); `T` wraps these.
+enum NT {
+    static let bg = ndyn(0x0B0B0D, 0xFBFBFC)
+    static let panel = ndyn(0x111113, 0xFFFFFF)
+    static let raised = ndyn(0x18181B, 0xF4F4F6)
+    static let hover = ndyn(0x1C1C20, 0xEFEFF2)
+    static let selected = ndyn(0x222228, 0xE8E8EE)
+    static let line = ndyn(0x232327, 0xE6E6EA)
+    static let lineSoft = ndyn(0x1A1A1E, 0xEFEFF2)
+    static let text = ndyn(0xEDEDEF, 0x1B1B1F)
+    static let text2 = ndyn(0x9A9AA3, 0x5C5C66)
+    static let text3 = ndyn(0x5F5F68, 0x9A9AA3)
+    static let codeBg = ndyn(0x0E0E10, 0xF6F6F8)
+    static let accent = NSColor(srgbRed: 0.369, green: 0.416, blue: 0.824, alpha: 1)
+    static let green = NSColor(srgbRed: 0.30, green: 0.72, blue: 0.47, alpha: 1)
+    static let red = NSColor(srgbRed: 0.92, green: 0.34, blue: 0.34, alpha: 1)
 }
 
 func hexColor(_ s: String, fallback: Color = T.text3) -> Color {
@@ -20,16 +38,16 @@ func hexColor(_ s: String, fallback: Color = T.text3) -> Color {
 }
 
 enum T {
-    static let bg = dyn(0x0B0B0D, 0xFBFBFC)          // window / sidebar
-    static let panel = dyn(0x111113, 0xFFFFFF)       // content surface
-    static let raised = dyn(0x18181B, 0xF4F4F6)      // cards, inputs
-    static let hover = dyn(0x1C1C20, 0xEFEFF2)
-    static let selected = dyn(0x222228, 0xE8E8EE)
-    static let line = dyn(0x232327, 0xE6E6EA)
-    static let lineSoft = dyn(0x1A1A1E, 0xEFEFF2)
-    static let text = dyn(0xEDEDEF, 0x1B1B1F)
-    static let text2 = dyn(0x9A9AA3, 0x5C5C66)
-    static let text3 = dyn(0x5F5F68, 0x9A9AA3)
+    static let bg = Color(nsColor: NT.bg)          // window / sidebar
+    static let panel = Color(nsColor: NT.panel)       // content surface
+    static let raised = Color(nsColor: NT.raised)      // cards, inputs
+    static let hover = Color(nsColor: NT.hover)
+    static let selected = Color(nsColor: NT.selected)
+    static let line = Color(nsColor: NT.line)
+    static let lineSoft = Color(nsColor: NT.lineSoft)
+    static let text = Color(nsColor: NT.text)
+    static let text2 = Color(nsColor: NT.text2)
+    static let text3 = Color(nsColor: NT.text3)
     static let accent = Color(red: 0.369, green: 0.416, blue: 0.824)   // #5E6AD2
     static let accentSoft = Color(red: 0.369, green: 0.416, blue: 0.824).opacity(0.16)
 
@@ -525,34 +543,43 @@ struct VisualEffect: NSViewRepresentable {
     }
 }
 
-struct SearchField: NSViewRepresentable {
+/// The page filter: a quiet pill that lights up while you type. ⌘F focuses
+/// it, Esc clears it, the × empties it.
+struct SearchField: View {
     var placeholder = "Filter"
     @Binding var text: String
+    @FocusState private var focused: Bool
+    @StateObject private var hover = Box(false)
 
-    func makeNSView(context: Context) -> NSSearchField {
-        let f = NSSearchField()
-        f.placeholderString = placeholder
-        f.delegate = context.coordinator
-        f.sendsSearchStringImmediately = true
-        f.controlSize = .regular
-        f.font = .systemFont(ofSize: 12.5)
-        f.bezelStyle = .roundedBezel
-        return f
-    }
-
-    func updateNSView(_ f: NSSearchField, context: Context) {
-        context.coordinator.parent = self
-        if f.stringValue != text { f.stringValue = text }
-    }
-
-    func makeCoordinator() -> Coordinator { Coordinator(self) }
-
-    final class Coordinator: NSObject, NSSearchFieldDelegate {
-        var parent: SearchField
-        init(_ parent: SearchField) { self.parent = parent }
-        func controlTextDidChange(_ n: Notification) {
-            if let f = n.object as? NSTextField { parent.text = f.stringValue }
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 7, style: .continuous)
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass").font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(focused || !text.isEmpty ? T.accent : T.text3)
+            TextField("", text: $text, prompt: Text(placeholder).foregroundStyle(T.text3))
+                .textFieldStyle(.plain).font(T.ui(12.5)).foregroundStyle(T.text)
+                .focused($focused)
+                .onExitCommand { if text.isEmpty { focused = false } else { text = "" } }
+            if !text.isEmpty {
+                Button { text = "" } label: {
+                    Image(systemName: "xmark.circle.fill").font(.system(size: 11.5)).foregroundStyle(T.text3)
+                }
+                .buttonStyle(.plain).help("Clear (Esc)")
+                .transition(.scale.combined(with: .opacity))
+            } else if !focused {
+                Text("⌘F").font(T.ui(10.5, .medium)).foregroundStyle(T.text3.opacity(0.8)).transition(.opacity)
+            }
         }
+        .padding(.horizontal, 9).frame(height: 28)
+        .background(shape.fill(focused ? T.panel : hover.v ? T.hover : T.raised.opacity(0.55)))
+        .overlay(shape.stroke(focused ? T.accent.opacity(0.65) : T.line, lineWidth: 1))
+        .shadow(color: focused ? T.accent.opacity(0.25) : .clear, radius: 6)
+        .contentShape(shape)
+        .onTapGesture { focused = true }
+        .hoverBox(hover)
+        .animation(M.hover, value: focused)
+        .animation(M.hover, value: text.isEmpty)
+        .background(Button("") { focused = true }.keyboardShortcut("f").opacity(0).allowsHitTesting(false))
     }
 }
 

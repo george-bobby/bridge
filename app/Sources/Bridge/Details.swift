@@ -61,6 +61,7 @@ struct PropertiesPanel: View {
     }
 
     @ViewBuilder func sections(_ s: Session?) -> some View {
+        if let s, s.isOrchestrator { OrchestratorPanel(session: s) }
         if let s, !s.isOrchestrator {
             PropSection(title: "Properties") { PropertyRows(session: s) }
             PropSection(title: "Links") { LinkRows(session: s) }
@@ -71,6 +72,68 @@ struct PropertiesPanel: View {
             PropSection(title: "Report") { ReportView(parsed: parsed) }
         }
         if let s { NextStep(session: s) }
+    }
+}
+
+// MARK: orchestrator
+
+/// The orchestrator's column: where it works, its workers, quick actions.
+struct OrchestratorPanel: View {
+    @Environment(AppModel.self) var model
+    let session: Session
+
+    var body: some View {
+        let p = model.project(session.project) ?? model.projects.first
+        let workers = model.boardSessions.filter { p == nil || $0.project == p!.id }
+        let live = workers.filter(model.isLive)
+        PropSection(title: "Orchestrator") {
+            VStack(alignment: .leading, spacing: 2) {
+                if let p {
+                    PropRow(label: "Project") { Text(p.name).font(T.ui(12.5)) }
+                    if !p.path.isEmpty { PropRow(label: "Repo") { CopyValue(text: p.path, shown: (p.path as NSString).lastPathComponent, what: "Path", reveal: true) } }
+                }
+                PropRow(label: "Workers") {
+                    Text(verbatim: live.isEmpty ? "\(workers.count)" : "\(live.count) running · \(workers.count)").font(T.ui(12.5)).monospacedDigit()
+                }
+            }
+        }
+        PropSection(title: "Actions") {
+            VStack(alignment: .leading, spacing: 6) {
+                Button { Task { await model.brief(session.id) } } label: { Label("Brief me", systemImage: "sparkles").frame(maxWidth: .infinity) }
+                    .buttonStyle(LButton())
+                Button { model.compose(in: p?.id) } label: { Label("New task", systemImage: "square.and.pencil").frame(maxWidth: .infinity) }
+                    .buttonStyle(LButton())
+            }
+        }
+        if !workers.isEmpty {
+            PropSection(title: "Recent workers") {
+                VStack(alignment: .leading, spacing: 1) {
+                    ForEach(Array(workers.prefix(8))) { w in WorkerRow(session: w) }
+                }
+            }
+        }
+    }
+}
+
+private struct WorkerRow: View {
+    @Environment(AppModel.self) var model
+    let session: Session
+    @StateObject private var hover = Box(false)
+    var body: some View {
+        Button { model.open(session.id) } label: {
+            HStack(spacing: 8) {
+                SessionIcon(session: session, size: 13)
+                Text(session.title).font(T.ui(12.5)).foregroundStyle(T.text).lineLimit(1)
+                Spacer(minLength: 4)
+                if model.isLive(session) { LiveIcon(size: 10) }
+            }
+            .padding(.horizontal, 8).frame(height: 28)
+            .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(hover.v ? T.hover : .clear))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, -8)
+        .hoverBox(hover)
     }
 }
 
@@ -578,7 +641,7 @@ struct ReportView: View {
             let tldr = parsed["tldr"].string
             if !tldr.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
-                    MarkdownText(text: tldr, size: 12.5, color: T.text2)
+                    MarkdownText(text: tldr, size: 12.5, color: NT.text2)
                         .fixedSize(horizontal: false, vertical: true)
                         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { full.v = $0 }
                         .frame(maxHeight: more.v || full.v <= folded + 8 ? nil : folded, alignment: .top)
@@ -591,7 +654,7 @@ struct ReportView: View {
                 }
             }
             ForEach(Array(parsed["questions"].array.enumerated()), id: \.offset) { _, q in
-                Callout(icon: "questionmark.bubble.fill", title: "Open question", text: q.string, tint: T.orange)
+                Callout(icon: "questionmark", title: "Open question", text: q.string, tint: T.orange)
             }
             ForEach(Array(parsed["actions"].array.enumerated()), id: \.offset) { _, a in
                 Callout(icon: "hand.raised.fill", title: "Needs you", text: a.string, tint: T.yellow)
@@ -605,25 +668,40 @@ struct ReportView: View {
     }
 }
 
+/// An open question or an ask from the report: a quiet card with a colored
+/// tag, the text selectable, and Reply to answer it from the composer.
 struct Callout: View {
+    @Environment(AppModel.self) var model
     let icon: String
     let title: String
     let text: String
     let tint: Color
+    @StateObject private var hover = Box(false)
 
     var body: some View {
-        HStack(alignment: .top, spacing: 9) {
-            Image(systemName: icon).font(.system(size: 11.5)).foregroundStyle(tint).frame(width: 14).padding(.top, 1)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title).font(T.ui(11, .semibold)).foregroundStyle(tint)
-                Text(inline(text)).font(T.ui(12)).foregroundStyle(T.text).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: icon).font(.system(size: 10, weight: .semibold)).foregroundStyle(tint)
+                    .frame(width: 18, height: 18)
+                    .background(Circle().fill(tint.opacity(0.14)))
+                Text(title).font(T.ui(11.5, .semibold)).foregroundStyle(T.text)
+                Spacer(minLength: 0)
             }
-            Spacer(minLength: 0)
+            RichText(markdown: text, size: 12.5, color: NT.text2)
+            HStack(spacing: 6) {
+                Button { model.quoteIntoComposer(text) } label: { Label("Reply", systemImage: "arrowshape.turn.up.left").font(T.ui(11.5, .medium)) }
+                    .buttonStyle(LButton())
+                    .help("Quote this in the composer to answer it")
+                Button { copyToPasteboard(text); model.say("Copied") } label: { Image(systemName: "doc.on.doc").font(.system(size: 11)) }
+                    .buttonStyle(LButton())
+                    .help("Copy")
+            }
+            .padding(.top, 2)
         }
-        .padding(10)
-        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(tint.opacity(0.08)))
-        .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(tint.opacity(0.22), lineWidth: 1))
-        .overlay(alignment: .leading) { RoundedRectangle(cornerRadius: 1.5).fill(tint).frame(width: 3).padding(.vertical, 8) }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(hover.v ? T.hover : T.raised.opacity(0.7)))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(T.line, lineWidth: 1))
+        .hoverBox(hover)
     }
 }
 

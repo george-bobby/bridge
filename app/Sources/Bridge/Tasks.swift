@@ -513,7 +513,7 @@ struct AgentTaskBody: View {
             }
             .buttonStyle(.plain)
             if promptOpen.v {
-                Text(task.prompt).font(T.ui(12.5)).foregroundStyle(T.text2).textSelection(.enabled)
+                RichText(markdown: task.prompt, size: 12.5, color: NT.text2)
                     .padding(12).frame(maxWidth: .infinity, alignment: .leading)
                     .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(T.raised.opacity(0.6)))
                     .transition(.opacity.combined(with: .move(edge: .top)))
@@ -604,7 +604,7 @@ struct OutputPane: View {
                         Text(!loaded ? "Reading…" : running ? "No output yet" : exists ? "It printed nothing" : "The output file is gone")
                             .font(T.mono(11.5)).foregroundStyle(T.text3).shimmer(running || !loaded)
                     } else {
-                        Text(text).font(T.mono(11.5)).foregroundStyle(T.text2).textSelection(.enabled)
+                        RichText(plain: text, font: .monospacedSystemFont(ofSize: 11.5, weight: .regular))
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     if running && !text.isEmpty {

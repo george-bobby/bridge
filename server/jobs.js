@@ -852,6 +852,9 @@ function clear(runId) {
   delete run.compactBrief;
   delete run.pendingAsk;
   pending.delete(runId);
+  // A fresh session can start in the project's checkout (harness.ensureOrchestrator).
+  const p = run.kind === "orchestrator" && projects.get(run.project);
+  if (p && p.path && fs.existsSync(p.path)) run.opts = { ...run.opts, workdir: p.path };
   store.saveRun(run);
   bus.broadcast("run-updated", { runId });
   return run;
@@ -1699,7 +1702,8 @@ function wire(child, runId, msgId, kind) {
     bus.broadcast("runs", { runs: store.listRunSummaries() });
   };
 
-  child.on("close", (code) => finish(code === 0 ? "closed" : `exit ${code}`));
+  // A stop you asked for is "stopped", not a crash with SIGTERM's exit code.
+  child.on("close", (code) => finish((running.get(runId) || {}).stopped ? "stopped" : code === 0 ? "closed" : `exit ${code}`));
   child.on("error", (err) => {
     stderr += String(err.message || err);
     finish("spawn failed");
@@ -1820,6 +1824,7 @@ function stopTask(runId, taskId) {
 function stop(runId) {
   const job = running.get(runId);
   if (!job) return false;
+  job.stopped = true;
   job.child.kill("SIGTERM");
   // SIGTERM is usually enough; a wedged session gets 3s then the hammer.
   setTimeout(() => {

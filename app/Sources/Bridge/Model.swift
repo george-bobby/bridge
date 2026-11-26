@@ -430,6 +430,8 @@ final class AppModel {
     /// The MCP editor or tools list, floating over the window (Servers.swift).
     var mcpSheet: MCPSheet? = nil
     var composeText = ""
+    /// Whether the New Task sheet was on "Start a worker now" when it closed.
+    var composeDirect = false
     var toast: String? = nil
     var toastBad = false
 
@@ -975,9 +977,19 @@ final class AppModel {
     }
 
     func delete(_ id: String) async {
+        let a = NSAlert()
+        let title = sessions.first { $0.id == id }?.title ?? "this session"
+        a.messageText = "Delete \u{201C}\(title.count > 60 ? String(title.prefix(59)) + "…" : title)\u{201D}?"
+        a.informativeText = "Its chat goes and its open questions and to-dos are dismissed. Its worktree and branch stay on disk. There's no undo."
+        a.addButton(withTitle: "Delete")
+        a.addButton(withTitle: "Cancel")
+        a.buttons.first?.hasDestructiveAction = true
+        guard a.runModal() == .alertFirstButtonReturn else { return }
         await act {
             try await API.delete("/api/runs/\(API.q(id))")
-            if self.openId == id { self.openId = ""; self.route = .sessions }
+            // Off the deleted chat only; the board stays the board.
+            if case .session(let r) = self.route, r == id { self.navigate(.sessions) }
+            if self.openId == id { self.openId = "" }
             self.forgetPanes(of: id)
         }
     }
