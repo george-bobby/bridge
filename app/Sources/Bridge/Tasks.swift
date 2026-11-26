@@ -187,10 +187,16 @@ struct TaskStrip: View {
         }
     }
 
+    /// "2 subagents finished", "1 background command finished", or both.
+    func finishedLabel(_ all: [AgentTask]) -> String {
+        let a = all.filter(\.isAgent).count, c = all.count - a
+        return [a > 0 ? (a == 1 ? "1 subagent" : "\(a) subagents") : "", c > 0 ? (c == 1 ? "1 background command" : "\(c) background commands") : ""].filter { !$0.isEmpty }.joined(separator: " · ") + " finished"
+    }
+
     func bar(all: [AgentTask], running: [AgentTask]) -> some View {
         let agents = running.filter(\.isAgent).count, cmds = running.count - agents
         let head = running.isEmpty
-            ? (all.count == 1 ? "1 task finished" : "\(all.count) tasks finished")
+            ? finishedLabel(all)
             : [agents > 0 ? (agents == 1 ? "1 subagent" : "\(agents) subagents") : "", cmds > 0 ? (cmds == 1 ? "1 background command" : "\(cmds) background commands") : ""].filter { !$0.isEmpty }.joined(separator: " · ") + " running"
         let lead = running.first ?? all.last
         return HStack(spacing: 10) {
@@ -513,7 +519,7 @@ struct AgentTaskBody: View {
             }
             .buttonStyle(.plain)
             if promptOpen.v {
-                Text(task.prompt).font(T.ui(12.5)).foregroundStyle(T.text2).textSelection(.enabled)
+                RichText(markdown: task.prompt, size: 12.5, color: NT.text2)
                     .padding(12).frame(maxWidth: .infinity, alignment: .leading)
                     .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(T.raised.opacity(0.6)))
                     .transition(.opacity.combined(with: .move(edge: .top)))
@@ -604,7 +610,7 @@ struct OutputPane: View {
                         Text(!loaded ? "Reading…" : running ? "No output yet" : exists ? "It printed nothing" : "The output file is gone")
                             .font(T.mono(11.5)).foregroundStyle(T.text3).shimmer(running || !loaded)
                     } else {
-                        Text(text).font(T.mono(11.5)).foregroundStyle(T.text2).textSelection(.enabled)
+                        RichText(plain: text, font: .monospacedSystemFont(ofSize: 11.5, weight: .regular))
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     if running && !text.isEmpty {

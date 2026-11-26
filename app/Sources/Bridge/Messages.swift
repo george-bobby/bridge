@@ -28,13 +28,25 @@ import SwiftUI
     /// target near the end can't reach the top, so the scroll position alone
     /// would leave the stepper stuck there.
     @Published var pinned: Int?
+    /// Stuck to the end: content that streams in keeps the end in view, until
+    /// you scroll up by hand (or step to a message); back at the end, it sticks again.
+    var following = true
+    var userScrolling = false
 
     static func isPrompt(_ m: JSON) -> Bool {
         !["assistant", "event", "outcome", "relay", "harness"].contains(m["role"].string)
     }
 
     func update(_ messages: [JSON]) {
+        let old = count
         count = messages.count
+        // You just sent something: follow it to the end, like any chat app,
+        // even if you were reading further up.
+        if old > 0, messages.count > old, messages[old...].contains(where: { $0["role"].string == "user" }) {
+            pinned = nil
+            following = true
+            DispatchQueue.main.async { [weak self] in withAnimation(M.page) { self?.proxy?.scrollTo("end", anchor: .bottom) } }
+        }
         // A cleared chat: nothing stepped to survives it.
         if let t = pinned, t >= count { pinned = nil }
         if let t = top, t >= count { top = nil }
@@ -64,6 +76,12 @@ import SwiftUI
 
     func scrolledByHand() { if pinned != nil { pinned = nil } }
 
+    /// The scroll view's bottom edge moved: only a hand scroll changes whether we follow.
+    func bottomChanged(_ bottom: Bool) {
+        if atBottom != bottom { atBottom = bottom }
+        if bottom { following = true } else if userScrolling { following = false }
+    }
+
     func canStep(_ delta: Int) -> Bool { target(delta) != nil }
 
     func step(_ delta: Int, all: Bool = false) {
@@ -79,6 +97,7 @@ import SwiftUI
             if let i = t { proxy.scrollTo(i, anchor: UnitPoint(x: 0.5, y: 0.035)) } else { proxy.scrollTo("end", anchor: .bottom) }
         }
         pinned = t
+        following = t == nil
         guard let i = t else { return }
         flashGen += 1
         let gen = flashGen

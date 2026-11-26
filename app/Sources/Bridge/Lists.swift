@@ -90,9 +90,11 @@ struct SessionMenu: View {
             Section {
                 Button { model.open(session.id) } label: { Label("Open", systemImage: "arrow.up.forward.app") }
                 Button { model.openToSide(session.id) } label: { Label("Open to the Side", systemImage: "rectangle.split.2x1") }
+                    .disabled(model.isChatRoute && model.panes.contains { $0.run == session.id && $0.tab == "chat" })
                 Button { model.open(session.id); model.openTerminalTab(session.id) } label: { Label("Terminal", systemImage: "terminal") }
             }
         }
+        Section { OpenInMenu(session: session) }
         Section {
             Button { Task { await model.setPinned(session.id, !session.pinned) } } label: {
                 Label(session.pinned ? "Unpin from Sidebar" : "Pin to Sidebar", systemImage: session.pinned ? "star.slash" : "star")

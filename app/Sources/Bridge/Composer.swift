@@ -1227,6 +1227,8 @@ struct ComposeSheet: View {
     @ObservedObject private var data = ComposerData.shared
     @FocusState private var focused: Bool
 
+    var popoverShown: Bool { NSApp.windows.contains { $0.isVisible && String(describing: type(of: $0)).contains("Popover") } }
+
     var isSlack: Bool { text.v.trimmingCharacters(in: .whitespaces).range(of: #"^https://[^/]*slack\.com/archives/"#, options: .regularExpression) != nil }
     var empty: Bool { text.v.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && items.v.isEmpty }
 
@@ -1268,6 +1270,7 @@ struct ComposeSheet: View {
         .onAppear {
             focused = true
             text.v = model.composeText
+            direct.v = model.composeDirect
             model.composeText = ""
             project.v = model.composeProject ?? model.projectFilter ?? model.defaultProject?.id ?? ""
             let d = model.config["followup"]
@@ -1276,7 +1279,10 @@ struct ComposeSheet: View {
             effort.v = d["effort"].string
             mode.v = d["permissionMode"].nonEmpty ?? "bypassPermissions"
         }
-        .onKeyPress(.escape) { model.composeOpen = false; return .handled }
+        // A picker's popover takes Esc for itself; the sheet only closes on the next one.
+        .onKeyPress(.escape) { if popoverShown { return .ignored }; model.composeOpen = false; return .handled }
+        // Closing keeps what you typed for next time; sending clears it.
+        .onDisappear { model.composeText = text.v; model.composeDirect = direct.v }
         .onChange(of: data.snapshotOpen) { if data.snapshotOpen.hasPrefix("compose-") { direct.v = true } }
         .task(id: project.v) {
             // A new project: back to a fresh worktree right away, then its own branches.
@@ -1381,7 +1387,11 @@ struct ComposeSheet: View {
             if !b.isEmpty { ws["branch"] = b }
         }
         Task {
-            if await model.createTask(full, direct: direct.v, project: project.v.isEmpty ? nil : project.v, opts: opts, workspace: ws) { model.composeOpen = false }
+            if await model.createTask(full, direct: direct.v, project: project.v.isEmpty ? nil : project.v, opts: opts, workspace: ws) {
+                text.v = ""
+                items.v = []
+                model.composeOpen = false
+            }
             busy.v = false
         }
     }

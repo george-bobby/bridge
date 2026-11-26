@@ -106,7 +106,7 @@ struct DecisionRow: View {
                 Spacer()
                 Text(Fmt.ago(d["createdAt"].double)).font(T.ui(11.5)).foregroundStyle(T.text3)
             }
-            MarkdownText(text: d["text"].string, size: 12.5, color: T.text2)
+            MarkdownText(text: d["text"].string, size: 12.5, color: NT.text2)
             HStack(spacing: 8) {
                 LField(placeholder: kind == "action" ? "Anything to add (optional)" : kind == "resume" ? "Note for the worker (optional)" : "Your answer", text: $answer.v) { submit("answer") }
                 Button("Tomorrow") { submit("defer", tomorrow()) }.buttonStyle(LButton()).help("Hide until tomorrow")
@@ -165,7 +165,7 @@ struct SlackItemRow: View {
         let skip = item["verdict"].string == "skip"
         VStack(alignment: .leading, spacing: 10) {
             head
-            MarkdownText(text: Session.plain(item["text"].string), size: 12.5, color: T.text2)
+            MarkdownText(text: Session.plain(item["text"].string), size: 12.5, color: NT.text2)
                 .lineLimit(6)
             if let r = item["reason"].nonEmpty {
                 Label("Orchestrator: \(r)", systemImage: "sparkles").font(T.ui(11.5)).foregroundStyle(T.text3)
@@ -354,72 +354,122 @@ struct PaletteItem: Identifiable {
     let title: String
     var detail: String = ""
     var hint: String = ""
+    var group: String = "Actions"
     let run: () -> Void
 }
 
+/// ⌘K: one field for commands, sessions, PRs, issues and transcript search,
+/// grouped like Linear's and Raycast's, keyboard first.
 struct CommandPalette: View {
     @Environment(AppModel.self) var model
     @StateObject private var query = Box("")
     @StateObject private var sel = Box(0)
     @StateObject private var hits = Box([JSON]())
+    @StateObject private var searching = Box(false)
     @FocusState private var focused: Bool
-    @Namespace private var ns
+
+    static let groups = ["Suggestions", "Actions", "Go to", "Sessions", "Pull requests", "Issues", "Transcripts"]
 
     var body: some View {
         let items = results
         VStack(spacing: 0) {
             VStack(spacing: 0) {
-                HStack(spacing: 10) {
-                    Image(systemName: "magnifyingglass").foregroundStyle(T.text3)
-                    TextField("Type a command or search sessions, PRs, issues and transcripts…", text: $query.v)
-                        .textFieldStyle(.plain).font(T.ui(14)).focused($focused)
-                        .onSubmit { pick(items) }
-                }
-                .padding(.horizontal, 16).frame(height: 50)
+                field
                 Hairline()
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(spacing: 0) {
-                            ForEach(Array(items.enumerated()), id: \.element.id) { i, it in
-                                HStack(spacing: 10) {
-                                    it.icon.frame(width: 16)
-                                    Text(it.title).font(T.ui(13)).foregroundStyle(T.text).lineLimit(1)
-                                    if !it.detail.isEmpty { Text(it.detail).font(T.ui(12)).foregroundStyle(T.text3).lineLimit(1) }
-                                    Spacer()
-                                    if !it.hint.isEmpty { Kbd(keys: it.hint) }
-                                }
-                                .padding(.horizontal, 14).frame(height: 36)
-                                .background {
-                                    if i == sel.v {
-                                        RoundedRectangle(cornerRadius: 7, style: .continuous).fill(T.accent.opacity(0.22))
-                                            .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).stroke(T.accent.opacity(0.35), lineWidth: 1))
-                                            .matchedGeometryEffect(id: "palette-sel", in: ns)
-                                    }
-                                }
-                                .contentShape(Rectangle())
-                                .onTapGesture { sel.v = i; pick(items) }
-                                .onHover { if $0 { sel.v = i } }
-                                .id(i)
-                            }
-                            if items.isEmpty { Text("No results").font(T.ui(12.5)).foregroundStyle(T.text3).padding(20) }
-                        }
-                        .padding(6)
-                    }
-                    .frame(maxHeight: 400)
-                    .animation(M.snappy, value: sel.v)
-                    .onChange(of: sel.v) { proxy.scrollTo(sel.v) }
-                }
+                list(items)
+                Hairline()
+                footer(items.count)
             }
-            .frame(width: 640)
-            .floatingPanel()
-            .padding(.top, 110)
+            .frame(width: 680)
+            .floatingPanel(radius: 16)
+            .padding(.top, 96)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onAppear { focused = true }
-        .onKeyPress(.downArrow) { sel.v = min(sel.v + 1, max(items.count - 1, 0)); return .handled }
-        .onKeyPress(.upArrow) { sel.v = max(sel.v - 1, 0); return .handled }
-        .onKeyPress(.escape) { close(); return .handled }
+        .onKeyPress(.downArrow) { move(1, items.count); return .handled }
+        .onKeyPress(.upArrow) { move(-1, items.count); return .handled }
+        .onKeyPress(.escape) { if query.v.isEmpty { close() } else { query.v = "" }; return .handled }
+        .onKeyPress(keys: ["n", "p"], phases: .down) { k in
+            guard k.modifiers == .control else { return .ignored }
+            move(k.characters == "n" ? 1 : -1, items.count); return .handled
+        }
         .onChange(of: query.v) { sel.v = 0; search() }
+    }
+
+    var field: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "magnifyingglass").font(.system(size: 15, weight: .medium))
+                .foregroundStyle(query.v.isEmpty ? T.text3 : T.accent)
+                .animation(M.hover, value: query.v.isEmpty)
+            TextField("", text: $query.v, prompt: Text("Search or type a command…").foregroundStyle(T.text3))
+                .textFieldStyle(.plain).font(T.ui(16)).focused($focused)
+                .onSubmit { pick(results) }
+            if searching.v { ProgressView().controlSize(.small).transition(.opacity) }
+            if !query.v.isEmpty {
+                Button { query.v = "" } label: {
+                    Image(systemName: "xmark.circle.fill").font(.system(size: 13)).foregroundStyle(T.text3)
+                }
+                .buttonStyle(.plain).help("Clear").transition(.opacity)
+            }
+            Kbd(keys: "esc")
+        }
+        .padding(.horizontal, 18).frame(height: 56)
+        .animation(M.hover, value: query.v.isEmpty)
+    }
+
+    func list(_ items: [PaletteItem]) -> some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(items.enumerated()), id: \.element.id) { i, it in
+                        if i == 0 || items[i - 1].group != it.group {
+                            Text(it.group).font(T.ui(11, .semibold)).foregroundStyle(T.text3)
+                                .padding(.horizontal, 12).padding(.top, i == 0 ? 6 : 14).padding(.bottom, 5)
+                        }
+                        PaletteRow(item: it, query: query.v, selected: i == sel.v)
+                            .onTapGesture { sel.v = i; pick(items) }
+                            .onHover { if $0 { sel.v = i } }
+                            .id(i)
+                    }
+                    if items.isEmpty { empty }
+                }
+                .padding(.horizontal, 8).padding(.vertical, 6)
+            }
+            .scrollIndicators(.never)
+            .frame(maxHeight: 420)
+            .fixedSize(horizontal: false, vertical: true)
+            .onChange(of: sel.v) { withAnimation(M.hover) { proxy.scrollTo(sel.v) } }
+        }
+    }
+
+    var empty: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "text.magnifyingglass").font(.system(size: 22, weight: .light)).foregroundStyle(T.text3)
+            Text(query.v.count < 3 ? "Keep typing to search transcripts" : searching.v ? "Searching transcripts…" : "No results for \u{201C}\(query.v)\u{201D}")
+                .font(T.ui(13, .medium)).foregroundStyle(T.text2)
+        }
+        .frame(maxWidth: .infinity).padding(.vertical, 34)
+    }
+
+    func footer(_ count: Int) -> some View {
+        HStack(spacing: 14) {
+            hintKey("↑↓", "Navigate")
+            hintKey("↩", "Open")
+            hintKey("esc", query.v.isEmpty ? "Close" : "Clear")
+            Spacer()
+            Text(verbatim: count == 1 ? "1 result" : "\(count) results").font(T.ui(11.5)).foregroundStyle(T.text3).monospacedDigit()
+        }
+        .padding(.horizontal, 16).frame(height: 36)
+        .background(T.bg.opacity(0.35))
+    }
+
+    func hintKey(_ k: String, _ label: String) -> some View {
+        HStack(spacing: 6) { Kbd(keys: k); Text(label).font(T.ui(11.5)).foregroundStyle(T.text3) }
+    }
+
+    func move(_ d: Int, _ n: Int) {
+        guard n > 0 else { return }
+        sel.v = (sel.v + d + n) % n
     }
 
     func close() { model.paletteOpen = false }
@@ -433,34 +483,40 @@ struct CommandPalette: View {
 
     func search() {
         let q = query.v.trimmingCharacters(in: .whitespaces)
-        guard q.count >= 3 else { hits.v = []; return }
+        guard q.count >= 3 else { hits.v = []; searching.v = false; return }
+        searching.v = true
         Task {
             try? await Task.sleep(nanoseconds: 160_000_000)
             guard q == query.v.trimmingCharacters(in: .whitespaces) else { return }
             hits.v = (try? await API.get("/api/search?q=\(API.q(q))"))?["hits"].array ?? []
+            if q == query.v.trimmingCharacters(in: .whitespaces) { searching.v = false }
         }
     }
 
     var results: [PaletteItem] {
         let q = query.v.lowercased().trimmingCharacters(in: .whitespaces)
-        func sym(_ s: String, _ c: Color = T.text2) -> AnyView { AnyView(Image(systemName: s).font(.system(size: 12)).foregroundStyle(c)) }
+        func sym(_ s: String, _ c: Color = T.text2) -> AnyView { AnyView(Image(systemName: s).font(.system(size: 12, weight: .medium)).foregroundStyle(c)) }
         var all: [PaletteItem] = [
-            PaletteItem(id: "new", icon: sym("square.and.pencil"), title: "New task", hint: "⌘N") { model.composeOpen = true },
+            PaletteItem(id: "new", icon: sym("square.and.pencil"), title: "New task", hint: "⌘N", group: "Suggestions") { model.composeOpen = true },
+            PaletteItem(id: "import", icon: sym("square.and.arrow.down.on.square"), title: "Import a chat from Claude Code, Codex, Cursor or Devin…", hint: "⇧⌘I", group: "Suggestions") { model.importOpen = true },
             PaletteItem(id: "project", icon: sym("folder.badge.plus"), title: "Add a project…", hint: "⇧⌘P") { model.addProject() },
             PaletteItem(id: "refresh", icon: sym("arrow.clockwise"), title: "Refresh GitHub and Linear", hint: "⌘R") { Task { await model.loadSources(refresh: true) } },
         ]
         for (i, n) in navOrder.enumerated() {
-            all.insert(PaletteItem(id: "go-\(n.label)", icon: sym(n.icon), title: "Go to \(n.label)", hint: "⌘\(i + 1)") { model.navigate(n.route) }, at: 1 + i)
+            all.append(PaletteItem(id: "go-\(n.label)", icon: sym(n.icon), title: n.label, hint: "⌘\(i + 1)", group: "Go to") { model.navigate(n.route) })
         }
-        all.insert(PaletteItem(id: "go-settings", icon: sym("gearshape"), title: "Go to Settings", hint: "⌘,") { model.navigate(.settings) }, at: 1 + navOrder.count)
-        all.append(PaletteItem(id: "board-view", icon: sym("rectangle.split.3x1"), title: "Sessions as a board") { model.route = .board })
-        all.append(PaletteItem(id: "list-view", icon: sym("list.bullet"), title: "Sessions as a list") { model.route = .sessions })
+        all.append(PaletteItem(id: "go-settings", icon: sym("gearshape"), title: "Settings", hint: "⌘,", group: "Go to") { model.navigate(.settings) })
+        all.append(PaletteItem(id: "board-view", icon: sym("rectangle.split.3x1"), title: "Sessions as a board", group: "Go to") { model.route = .board })
+        all.append(PaletteItem(id: "list-view", icon: sym("list.bullet"), title: "Sessions as a list", group: "Go to") { model.route = .sessions })
         if case .session(let id) = model.route {
             all.append(PaletteItem(id: "web", icon: sym("globe"), title: "New browser tab", hint: "⌘T") { model.openBrowser(id, url: "") })
             all.append(PaletteItem(id: "prev", icon: sym("chevron.up"), title: "Previous chat", hint: "⌥⌘↑") { model.stepChat(-1) })
             all.append(PaletteItem(id: "next", icon: sym("chevron.down"), title: "Next chat", hint: "⌥⌘↓") { model.stepChat(1) })
+            if let s = model.sessions.first(where: { $0.id == id }), model.isLive(s) {
+                all.insert(PaletteItem(id: "stop", icon: sym("stop.circle", T.red), title: "Stop the running turn", hint: "⌘.", group: "Suggestions") { Task { await model.stop(id) } }, at: 0)
+            }
             if let s = model.sessions.first(where: { $0.id == id }), s.isOrchestrator {
-                all.append(PaletteItem(id: "brief", icon: sym("sparkles"), title: "Brief me") { Task { await model.brief(id) } })
+                all.append(PaletteItem(id: "brief", icon: sym("sparkles", T.purple), title: "Brief me", group: "Suggestions") { Task { await model.brief(id) } })
             }
             if let s = model.sessions.first(where: { $0.id == id }), s.isOrchestrator, !model.isLive(s) {
                 all.append(PaletteItem(id: "clear", icon: sym("eraser"), title: "Clear orchestrator chat") { Task { await model.clearChat(id) } })
@@ -471,24 +527,84 @@ struct CommandPalette: View {
             }
         }
         for p in model.projects {
-            all.append(PaletteItem(id: "o-\(p.id)", icon: sym("sparkles", T.purple), title: "Orchestrator · \(p.name)") { model.openOrchestrator(p.id) })
+            all.append(PaletteItem(id: "o-\(p.id)", icon: sym("sparkles", T.purple), title: "Orchestrator · \(p.name)", group: "Go to") { model.openOrchestrator(p.id) })
             all.append(PaletteItem(id: "n-\(p.id)", icon: sym("square.and.pencil"), title: "New task in \(p.name)") { model.compose(in: p.id) })
         }
         for s in model.boardSessions {
-            all.append(PaletteItem(id: "s-\(s.id)", icon: AnyView(SessionIcon(session: s, size: 13)), title: s.title, detail: [s.issueKey, s.snippet].filter { !$0.isEmpty }.joined(separator: " · ")) { model.open(s.id) })
+            all.append(PaletteItem(id: "s-\(s.id)", icon: AnyView(SessionIcon(session: s, size: 13)), title: s.title, detail: [s.issueKey, s.snippet].filter { !$0.isEmpty }.joined(separator: " · "), group: "Sessions") { model.open(s.id) })
         }
         for pr in model.openPulls + model.reviewPulls {
-            all.append(PaletteItem(id: "p-\(pr.url)", icon: AnyView(PRStateIcon(pr: pr)), title: pr.title, detail: "\(pr.repoName)#\(pr.number)") { openURL(pr.url) })
+            all.append(PaletteItem(id: "p-\(pr.url)", icon: AnyView(PRStateIcon(pr: pr)), title: pr.title, detail: "\(pr.repoName)#\(pr.number)", group: "Pull requests") { openURL(pr.url) })
         }
         for i in model.issues where i.active {
-            all.append(PaletteItem(id: "i-\(i.key)", icon: AnyView(StatusIcon(kind: i.status, color: hexColor(i.stateColor), size: 13)), title: i.title, detail: i.key) { openURL(i.url) })
+            all.append(PaletteItem(id: "i-\(i.key)", icon: AnyView(StatusIcon(kind: i.status, color: hexColor(i.stateColor), size: 13)), title: i.title, detail: i.key, group: "Issues") { openURL(i.url) })
         }
-        let matched = q.isEmpty ? Array(all.prefix(10)) : all.filter { "\($0.title) \($0.detail)".lowercased().contains(q) }
+        let order = Dictionary(uniqueKeysWithValues: Self.groups.enumerated().map { ($1, $0) })
+        func sorted(_ xs: [PaletteItem]) -> [PaletteItem] {
+            xs.enumerated().sorted { (order[$0.element.group] ?? 9, $0.offset) < (order[$1.element.group] ?? 9, $1.offset) }.map(\.element)
+        }
+        if q.isEmpty {
+            // Nothing typed: what you'd reach for, the pages, the latest sessions.
+            let pick = all.filter { $0.group == "Suggestions" } + all.filter { $0.group == "Go to" } + Array(all.filter { $0.group == "Sessions" }.prefix(5))
+            return sorted(pick)
+        }
+        let words = q.split(separator: " ").map(String.init)
+        let matched = all.filter { it in
+            let hay = "\(it.title) \(it.detail) \(it.group)".lowercased()
+            return words.allSatisfy { hay.contains($0) }
+        }
         let seen = Set(matched.map(\.id))
         let found = hits.v.filter { !seen.contains("s-\($0["runId"].string)") }.map { h in
-            PaletteItem(id: "h-\(h["runId"].string)", icon: sym("text.magnifyingglass"), title: h["who"].string, detail: h["snippet"].string) { model.open(h["runId"].string) }
+            PaletteItem(id: "h-\(h["runId"].string)", icon: sym("text.magnifyingglass"), title: h["who"].string, detail: h["snippet"].string, group: "Transcripts") { model.open(h["runId"].string) }
         }
-        return Array((matched + found).prefix(40))
+        return Array(sorted(matched + found).prefix(60))
+    }
+}
+
+/// A palette row: an icon tile, the title with the query's words lit, detail, hint.
+struct PaletteRow: View {
+    let item: PaletteItem
+    let query: String
+    let selected: Bool
+
+    var body: some View {
+        HStack(spacing: 11) {
+            item.icon
+                .frame(width: 26, height: 26)
+                .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(selected ? T.accent.opacity(0.18) : T.raised))
+                .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).stroke(T.line, lineWidth: selected ? 0 : 1))
+            Text(lit(item.title)).font(T.ui(13.5)).foregroundStyle(T.text).lineLimit(1)
+            if !item.detail.isEmpty { Text(item.detail).font(T.ui(12)).foregroundStyle(T.text3).lineLimit(1).truncationMode(.tail) }
+            Spacer(minLength: 8)
+            if !item.hint.isEmpty { Kbd(keys: item.hint) }
+            if selected {
+                Image(systemName: "return").font(.system(size: 10.5, weight: .semibold)).foregroundStyle(T.text2)
+                    .transition(.opacity)
+            }
+        }
+        .padding(.horizontal, 10).frame(height: 42)
+        .background {
+            if selected {
+                RoundedRectangle(cornerRadius: 9, style: .continuous).fill(T.selected)
+                    .overlay(alignment: .leading) { Capsule().fill(T.accent).frame(width: 3, height: 18).padding(.leading, 1) }
+            }
+        }
+        .contentShape(Rectangle())
+    }
+
+    /// The title with every query word bold.
+    func lit(_ s: String) -> AttributedString {
+        var out = AttributedString(s)
+        for w in query.split(separator: " ") where !w.isEmpty {
+            var from = s.startIndex
+            while let r = s.range(of: w, options: .caseInsensitive, range: from..<s.endIndex) {
+                if let lo = AttributedString.Index(r.lowerBound, within: out), let hi = AttributedString.Index(r.upperBound, within: out) {
+                    out[lo..<hi].font = T.ui(13.5, .bold)
+                }
+                from = r.upperBound
+            }
+        }
+        return out
     }
 }
 

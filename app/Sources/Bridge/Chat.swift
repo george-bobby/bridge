@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 // MARK: - Chat
@@ -43,6 +44,9 @@ struct ChatView: View {
         }
         .animation(M.snappy, value: showsInspector)
         .animation(M.snappy, value: model.isSplit)
+        .onReceive(NotificationCenter.default.publisher(for: .richQuote)) { n in
+            if let t = n.object as? String { model.quoteIntoComposer(t) }
+        }
         .task(id: id) {
             let tab = model.chatTab
             let known = tab == "chat" || tab == "changes" || (tab == "term" && model.terminalTabs.contains(id))
@@ -114,11 +118,12 @@ struct ChatView: View {
                         .transition(.scale.combined(with: .opacity))
                 }
                 if s.isOrchestrator { BriefButton(orchestrator: s.id) }
+                OpenInButton(session: s)
                 IconButton(icon: s.pinned ? "star.fill" : "star", help: s.pinned ? "Unpin" : "Pin to the sidebar") { Task { await model.setPinned(s.id, !s.pinned) } }
                 Menu {
-                    Button("Split Right") { model.splitRight() }.keyboardShortcut("\\")
+                    Button { model.splitRight() } label: { Label("Split Right", systemImage: "rectangle.split.2x1") }.keyboardShortcut("\\")
                     Divider()
-                    if !s.permalink.isEmpty { Button("Read the Slack Thread") { model.openThread(s.permalink) } }
+                    if !s.permalink.isEmpty { Button { model.openThread(s.permalink) } label: { Label("Read the Slack Thread", systemImage: "number") } }
                     SessionMenu(session: s, inChat: true)
                 } label: { Image(systemName: "ellipsis").font(.system(size: 13.5)).foregroundStyle(T.text2).frame(width: 28, height: 28) }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).frame(width: 32)
@@ -363,9 +368,16 @@ struct Transcript: View {
             .onScrollGeometryChange(for: Bool.self) { g in
                 g.contentOffset.y + g.containerSize.height >= g.contentSize.height - 24
             } action: { _, bottom in
-                if nav.atBottom != bottom { nav.atBottom = bottom }
+                nav.bottomChanged(bottom)
             }
-            .onScrollPhaseChange { _, phase in if phase == .interacting { nav.scrolledByHand() } }
+            // Streaming text, a new step or an ask card: stay at the end if you were there.
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { old, new in
+                if new > old + 0.5, nav.following, nav.pinned == nil, !nav.userScrolling { proxy.scrollTo("end", anchor: .bottom) }
+            }
+            .onScrollPhaseChange { _, phase in
+                nav.userScrolling = phase == .interacting || phase == .decelerating
+                if phase == .interacting { nav.scrolledByHand() }
+            }
             .overlay(alignment: .topTrailing) {
                 MessageStepper(nav: nav, list: nav.list, messages: messages)
                     .padding(.top, 14).padding(.trailing, 10).padding(.leading, 16)
@@ -411,54 +423,71 @@ struct MessageHead: View {
 struct UserMessage: View {
     let m: JSON
     let run: JSON
+    @StateObject private var hover = Box(false)
     var body: some View {
         let role = m["role"].string
         let fromSlack = role == "slack" || role == "thread"
         let name = fromSlack ? (m["who"].nonEmpty ?? run["who"].nonEmpty ?? "Slack") : "You"
+        let text = fromSlack ? Session.plain(m["text"].string) : m["text"].string
         HStack(alignment: .top, spacing: 14) {
             Avatar(name: name, size: 28)
             VStack(alignment: .leading, spacing: 6) {
-                MessageHead(name: name, detail: fromSlack ? (run["channel"].nonEmpty.map { "in \($0)" } ?? "Slack") : "", ts: m["ts"].double)
-                MarkdownText(text: fromSlack ? Session.plain(m["text"].string) : m["text"].string)
+                HStack(spacing: 0) {
+                    MessageHead(name: name, detail: fromSlack ? (run["channel"].nonEmpty.map { "in \($0)" } ?? "Slack") : "", ts: m["ts"].double)
+                    Spacer(minLength: 8)
+                    MessageActions(text: text, shown: hover.v)
+                }
+                .frame(height: 18)
+                MarkdownText(text: text)
                 if m["queued"].bool { Chip(text: "Queued", icon: "clock") }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .messageActions(fromSlack ? Session.plain(m["text"].string) : m["text"].string)
+        .hoverBox(hover)
     }
 }
 
-struct MessageActions: ViewModifier {
+/// Copy and Quote, in the message's own header line (never over its content,
+/// so they can't steal a click from a tool row or a selection).
+struct MessageActions: View {
     @Environment(AppModel.self) var model
     let text: String
-    @StateObject private var hover = Box(false)
+    let shown: Bool
     @StateObject private var copied = Box(false)
 
-    func body(content: Content) -> some View {
-        content
-            .overlay(alignment: .topTrailing) {
-                if hover.v && !text.isEmpty {
-                    HStack(spacing: 2) {
-                        IconButton(icon: copied.v ? "checkmark" : "doc.on.doc", help: "Copy") {
-                            copyToPasteboard(text)
-                            withAnimation(M.pop) { copied.v = true }
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { withAnimation(M.hover) { copied.v = false } }
-                        }
-                        IconButton(icon: "text.quote", help: "Quote in your reply (select text and press ⌘L to quote just that)") { model.quoteIntoComposer(text) }
-                    }
-                    .padding(2)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(T.line, lineWidth: 1))
-                    .offset(y: -6)
-                    .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .topTrailing)))
-                }
+    var body: some View {
+        HStack(spacing: 2) {
+            MiniAction(icon: copied.v ? "checkmark" : "doc.on.doc", help: "Copy message") {
+                copyToPasteboard(text)
+                withAnimation(M.pop) { copied.v = true }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { withAnimation(M.hover) { copied.v = false } }
             }
-            .hoverBox(hover)
+            MiniAction(icon: "text.quote", help: "Quote in your reply (select text and press ⌘L to quote just that)") { model.quoteIntoComposer(text) }
+        }
+        .opacity(shown && !text.isEmpty ? 1 : 0)
+        .allowsHitTesting(shown && !text.isEmpty)
+        .animation(M.hover, value: shown)
     }
 }
 
-extension View {
-    func messageActions(_ text: String) -> some View { modifier(MessageActions(text: text)) }
+struct MiniAction: View {
+    let icon: String
+    let help: String
+    let action: () -> Void
+    @StateObject private var hover = Box(false)
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: icon).font(.system(size: 11, weight: .medium))
+                .foregroundStyle(hover.v ? T.text : T.text3)
+                .frame(width: 24, height: 20)
+                .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(hover.v ? T.hover : .clear))
+                .contentShape(Rectangle())
+                .contentTransition(.symbolEffect(.replace))
+        }
+        .buttonStyle(Pressable(scale: 0.88))
+        .help(help)
+        .hoverBox(hover)
+    }
 }
 
 struct ClaudeMark: View {
@@ -473,6 +502,7 @@ struct ClaudeMark: View {
 struct AssistantMessage: View {
     let m: JSON
     let runId: String
+    @StateObject private var hover = Box(false)
 
     var body: some View {
         let state = m["state"].string
@@ -480,7 +510,12 @@ struct AssistantMessage: View {
         HStack(alignment: .top, spacing: 14) {
             AgentMark(agent: agent)
             VStack(alignment: .leading, spacing: 10) {
-                MessageHead(name: agent.label, detail: [m["label"].string, m["model"].string].filter { !$0.isEmpty }.joined(separator: " · "), ts: m["ts"].double)
+                HStack(spacing: 0) {
+                    MessageHead(name: agent.label, detail: [m["label"].string, m["model"].string].filter { !$0.isEmpty }.joined(separator: " · "), ts: m["ts"].double)
+                    Spacer(minLength: 8)
+                    MessageActions(text: replyText, shown: hover.v && state != "running")
+                }
+                .frame(height: 18)
                 let steps = m["steps"].array
                 if steps.isEmpty && !m["text"].string.isEmpty { MarkdownText(text: m["text"].string) }
                 let tasks = m["tasks"].array
@@ -489,7 +524,7 @@ struct AssistantMessage: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .messageActions(replyText)
+        .hoverBox(hover)
     }
 
     var replyText: String {
@@ -503,6 +538,8 @@ struct AssistantMessage: View {
         } else if state == "error" || state == "failed" {
             Label(m["error"].nonEmpty ?? "The session ended with an error", systemImage: "exclamationmark.triangle.fill")
                 .font(T.ui(12)).foregroundStyle(T.red)
+        } else if state == "stopped" && m["durationMs"].double == 0 && m["turns"].int == 0 {
+            Label("Stopped", systemImage: "stop.circle").font(T.ui(11.5)).foregroundStyle(T.orange)
         } else if m["durationMs"].double > 0 || m["turns"].int > 0 {
             HStack(spacing: 10) {
                 if m["durationMs"].double > 0 { Text(duration(m["durationMs"].double)) }
@@ -573,7 +610,7 @@ struct ThinkingView: View {
                 }
                 .buttonStyle(.plain)
                 if open.v {
-                    Text(text).font(T.ui(12.5)).foregroundStyle(T.text2).textSelection(.enabled)
+                    RichText(markdown: text, size: 12.5, color: NT.text2)
                         .padding(.leading, 12)
                         .overlay(alignment: .leading) { Rectangle().fill(T.line).frame(width: 2) }
                         .transition(.opacity.combined(with: .move(edge: .top)))
@@ -586,6 +623,8 @@ struct ThinkingView: View {
 struct ToolView: View {
     let step: JSON
     @StateObject private var open = Box(false)
+    /// Edits show their diff until you fold it.
+    @StateObject private var folded = Box(false)
     @StateObject private var hover = Box(false)
 
     var body: some View {
@@ -593,40 +632,49 @@ struct ToolView: View {
         let result = step["result"].string
         let failed = step["ok"] == .bool(false)
         let raw = (try? JSONDecoder().decode(JSON.self, from: Data(step["raw"].string.utf8))) ?? .null
+        let isEdit = ["Edit", "MultiEdit", "Write"].contains(name) && !raw.isNull
+        let expandable = isEdit || !result.isEmpty
+        let expanded = isEdit ? !folded.v : open.v
         if name == "TodoWrite" || name == "update_plan", !raw.isNull {
             TodoList(raw: raw)
         } else {
         VStack(alignment: .leading, spacing: 0) {
-            Button { if !result.isEmpty { withAnimation(M.snappy) { open.v.toggle() } } } label: {
+            Button {
+                guard expandable else { return }
+                withAnimation(M.snappy) { if isEdit { folded.v.toggle() } else { open.v.toggle() } }
+            } label: {
                 HStack(spacing: 8) {
                     Image(systemName: ToolView.icon(name)).font(.system(size: 11)).foregroundStyle(T.text3).frame(width: 14)
                     Text(ToolView.display(name)).font(T.ui(12, .medium)).foregroundStyle(T.text2)
                     Text(step["detail"].string).font(T.mono(11.5)).foregroundStyle(T.text3).lineLimit(1).truncationMode(.middle)
                     Spacer(minLength: 6)
-                    if step["ok"].isNull && result.isEmpty && step["ask"].isNull {
+                    if step["ok"].isNull && result.isEmpty && step["ask"].isNull && !isEdit {
                         EmptyView()
-                    } else if failed {
-                        Image(systemName: "xmark").font(.system(size: 9, weight: .bold)).foregroundStyle(T.red)
-                    } else if !result.isEmpty {
-                        if step["resultLines"].int > 0 { Text(verbatim: step["resultLines"].int == 1 ? "1 line" : "\(step["resultLines"].int) lines").font(T.ui(11)).foregroundStyle(T.text3) }
-                        Image(systemName: "chevron.right").font(.system(size: 8, weight: .bold)).foregroundStyle(T.text3)
-                            .rotationEffect(.degrees(open.v ? 90 : 0))
+                    } else {
+                        if failed { Image(systemName: "xmark").font(.system(size: 9, weight: .bold)).foregroundStyle(T.red) }
+                        if !isEdit && step["resultLines"].int > 0 { Text(verbatim: step["resultLines"].int == 1 ? "1 line" : "\(step["resultLines"].int) lines").font(T.ui(11)).foregroundStyle(T.text3) }
+                        if expandable {
+                            Image(systemName: "chevron.right").font(.system(size: 8, weight: .bold)).foregroundStyle(hover.v ? T.text2 : T.text3)
+                                .rotationEffect(.degrees(expanded ? 90 : 0))
+                        }
                     }
                 }
                 .padding(.horizontal, 10).frame(height: 28)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            if ["Edit", "MultiEdit", "Write"].contains(name), !raw.isNull {
+            .help(expandable ? (expanded ? "Collapse" : "Expand") : "")
+            if isEdit && !folded.v {
                 EditPreview(raw: raw).padding(.horizontal, 8).padding(.bottom, 8)
+                    .transition(.opacity)
             }
-            if open.v {
+            if (!isEdit && open.v) || (isEdit && failed && !folded.v) {
                 Hairline()
                 ScrollView {
-                    Text(result).font(T.mono(11)).foregroundStyle(failed ? T.red : T.text2)
-                        .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding(10)
+                    RichText(plain: result, color: failed ? NT.red : NT.text2)
+                        .frame(maxWidth: .infinity, alignment: .leading).padding(10)
                 }
-                .frame(maxHeight: 260)
+                .frame(maxHeight: 320)
                 .transition(.opacity)
             }
         }
@@ -696,7 +744,7 @@ struct HarnessMessage: View {
                 Text(Fmt.clock(m["ts"].double)).font(T.ui(11))
             }
             .foregroundStyle(T.text3)
-            MarkdownText(text: m["text"].string.replacingOccurrences(of: #"^\[harness\]\s*"#, with: "", options: .regularExpression), size: 12.5, color: T.text2)
+            MarkdownText(text: m["text"].string.replacingOccurrences(of: #"^\[harness\]\s*"#, with: "", options: .regularExpression), size: 12.5, color: NT.text2)
         }
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 8).fill(T.raised.opacity(0.4)))
@@ -736,7 +784,7 @@ struct AskCard: View {
                 decision(yes: "Approve and build", no: "Send back", why: "What to change about the plan (optional)")
             } else {
                 if !ask["detail"].string.isEmpty {
-                    Text(ask["detail"].string).font(T.mono(11.5)).foregroundStyle(T.text).textSelection(.enabled)
+                    RichText(plain: ask["detail"].string, font: .monospacedSystemFont(ofSize: 11.5, weight: .regular), color: NT.text)
                         .padding(10).frame(maxWidth: .infinity, alignment: .leading)
                         .background(RoundedRectangle(cornerRadius: 6).fill(T.panel))
                 }
@@ -943,10 +991,13 @@ struct Composer: View {
             Spacer(minLength: 0)
             ContextButton(runId: runId, run: model.runData(runId), agent: agent, live: live)
             if live && !trimmedEmpty { stopAndSendButton }
-            if barWidth.v > 620 { Text("⌘↩").font(T.ui(11)).foregroundStyle(T.text3).transition(.opacity) }
-            sendButton
+            if barWidth.v > 620 && !(live && trimmedEmpty && items.isEmpty) { Text("⌘↩").font(T.ui(11)).foregroundStyle(T.text3).transition(.opacity) }
+            if live { stopButton.transition(.scale.combined(with: .opacity)) }
+            if !live || !trimmedEmpty || !items.isEmpty { sendButton.transition(.scale.combined(with: .opacity)) }
         }
         .padding(10)
+        .animation(M.pop, value: live)
+        .animation(M.pop, value: trimmedEmpty)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { barWidth.v = $0 }
     }
 
@@ -973,6 +1024,20 @@ struct Composer: View {
         .buttonStyle(LButton()).help("Interrupt the running turn and send this now (⌘↩ queues it instead)")
     }
 
+    /// While a turn streams: stop it, like every chat app's stop square (⌘.).
+    var stopButton: some View {
+        Button { Task { await model.stop(runId) } } label: {
+            RoundedRectangle(cornerRadius: 2.5).fill(T.panel).frame(width: 9, height: 9)
+                .frame(width: 26, height: 26)
+                .background(Circle().fill(T.text))
+                .overlay(Circle().stroke(T.text.opacity(0.25), lineWidth: 3).scaleEffect(1.18).opacity(0.6))
+        }
+        .buttonStyle(Pressable(scale: 0.88))
+        .keyboardShortcut(".", modifiers: .command)
+        .disabled(model.composeOpen || model.importOpen || model.paletteOpen || runId != model.openId)
+        .help("Stop the running turn (⌘.)")
+    }
+
     var sendButton: some View {
         let empty = trimmedEmpty && items.isEmpty
         return Button {
@@ -989,7 +1054,7 @@ struct Composer: View {
         .keyboardShortcut(.return, modifiers: .command)
         // Covered by the New Task sheet or ⌘K: ⌘↩ belongs to them.
         // ⌘↩ belongs to the focused pane's composer when chats are side by side.
-        .disabled(sending.v || model.composeOpen || model.paletteOpen || runId != model.openId)
+        .disabled(sending.v || model.composeOpen || model.importOpen || model.paletteOpen || runId != model.openId)
     }
 
     @ViewBuilder var dropOverlay: some View {
@@ -1111,61 +1176,13 @@ func inline(_ s: String) -> AttributedString {
 struct MarkdownText: View {
     let text: String
     var size: CGFloat = 13
-    var color: Color = T.text
+    var color: NSColor = NT.text
 
     enum Block: Hashable {
         case para(String), heading(Int, String), bullet(String, Int), numbered(String, String), quote(String), code(String, String), rule
     }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(MarkdownText.parse(text).enumerated()), id: \.offset) { _, b in block(b) }
-        }
-        .textSelection(.enabled)
-        .tint(T.accent)
-    }
-
-    @ViewBuilder func block(_ b: Block) -> some View {
-        switch b {
-        case .para(let s):
-            Text(inline(s)).font(T.ui(size)).foregroundStyle(color).lineSpacing(3).fixedSize(horizontal: false, vertical: true)
-        case .heading(let level, let s):
-            Text(inline(s)).font(T.ui(level == 1 ? size + 4 : level == 2 ? size + 2 : size + 0.5, .semibold)).foregroundStyle(T.text).padding(.top, 4)
-        case .bullet(let s, let depth):
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text("•").font(T.ui(size)).foregroundStyle(T.text3)
-                Text(inline(s)).font(T.ui(size)).foregroundStyle(color).lineSpacing(3).fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(.leading, CGFloat(depth) * 16)
-        case .numbered(let n, let s):
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(n).font(T.ui(size)).foregroundStyle(T.text3).monospacedDigit()
-                Text(inline(s)).font(T.ui(size)).foregroundStyle(color).lineSpacing(3).fixedSize(horizontal: false, vertical: true)
-            }
-        case .quote(let s):
-            Text(inline(s)).font(T.ui(size)).foregroundStyle(T.text2)
-                .padding(.leading, 12)
-                .overlay(alignment: .leading) { Rectangle().fill(T.line).frame(width: 2) }
-        case .code(let lang, let s):
-            VStack(alignment: .leading, spacing: 0) {
-                if !lang.isEmpty {
-                    HStack {
-                        Text(lang).font(T.ui(11)).foregroundStyle(T.text3)
-                        Spacer()
-                        Button { copyToPasteboard(s) } label: { Image(systemName: "doc.on.doc").font(.system(size: 10.5)).foregroundStyle(T.text3) }.buttonStyle(.plain)
-                    }
-                    .padding(.horizontal, 10).padding(.top, 7)
-                }
-                ScrollView(.horizontal, showsIndicators: false) {
-                    Text(s).font(T.mono(11.5)).foregroundStyle(T.text).padding(10)
-                }
-            }
-            .background(RoundedRectangle(cornerRadius: 7).fill(T.bg))
-            .overlay(RoundedRectangle(cornerRadius: 7).stroke(T.lineSoft, lineWidth: 1))
-        case .rule:
-            Hairline()
-        }
-    }
+    var body: some View { RichText(markdown: text, size: size, color: color) }
 
     static func parse(_ text: String) -> [Block] {
         var out: [Block] = []
@@ -1234,7 +1251,7 @@ struct BriefButton: View {
     var body: some View {
         Menu {
             ForEach(["3h", "8h", "24h", "3d"], id: \.self) { w in
-                Button("The last \(w)") { Task { await model.brief(orchestrator, since: w) } }
+                Button { Task { await model.brief(orchestrator, since: w) } } label: { Label("The last \(w)", systemImage: "clock.arrow.circlepath") }
             }
         } label: { Label("Brief me", systemImage: "sparkles") } primaryAction: {
             Task { await model.brief(orchestrator) }

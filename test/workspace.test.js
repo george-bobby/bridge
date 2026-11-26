@@ -26,6 +26,8 @@ const ENV = {
   LINEAR_API_KEY: "",
   CODEX_BIN: path.join(tmp, "fake-codex"),
   CLAUDE_CONFIG_DIR: path.join(tmp, "claude-home"),
+  BRIDGE_HISTORY_HOME: path.join(tmp, "home"),
+  STUB_LOG: path.join(tmp, "stub.log"),
 };
 
 const RUN_ID = "1700000001.000100";
@@ -299,4 +301,70 @@ test("compact: /compact for Claude, a self-handoff for the other agents; files a
   assert.ok(stub, "Claude's own command list comes from its initialize handshake");
   assert.strictEqual(stub.description, "A skill the stub reports");
   assert.strictEqual(stub.scope, "user");
+});
+
+test("an orchestrator works in its project's checkout; clearing a chat that started elsewhere moves it there", async () => {
+  const p = (await get("/api/projects")).projects[0];
+  const orch = await post(`/api/projects/${p.id}/orchestrator`);
+  let run = (await get(`/api/runs/${orch.runId}`)).run;
+  assert.strictEqual(run.opts.workdir, p.path, "this repo means the project, not Bridge's own folder");
+  // An older chat minted in Bridge's folder keeps it while it has a session…
+  const file = path.join(DATA, "runs", `${orch.runId}.json`);
+  fs.writeFileSync(file, JSON.stringify({ ...run, sessionId: "s-1", opts: { ...run.opts, workdir: ROOT } }));
+  await post(`/api/projects/${p.id}/orchestrator`);
+  assert.strictEqual((await get(`/api/runs/${orch.runId}`)).run.opts.workdir, ROOT);
+  // …and moves once it's cleared.
+  await post(`/api/runs/${orch.runId}/clear`);
+  run = (await get(`/api/runs/${orch.runId}`)).run;
+  assert.strictEqual(run.opts.workdir, p.path);
+});
+
+test("import a chat from an agent's own history: a worker in its folder that resumes the same session", async () => {
+  const fx = require("./fixtures");
+  const { repo } = fx.writeFixtures(ENV.BRIDGE_HISTORY_HOME);
+  const list = await get("/api/history");
+  const chat = list.chats.find((c) => c.agent === "claude");
+  assert.ok(chat && !chat.runId, "listed, not imported yet");
+  const preview = await get(`/api/history/claude/${chat.id}`);
+  assert.strictEqual(preview.cwd, repo);
+  assert.ok(preview.messages.length >= 2);
+
+  const out = await post("/api/history/import", { agent: "claude", id: chat.id });
+  assert.strictEqual(out.existing, false);
+  const run = (await get(`/api/runs/${out.taskId}`)).run;
+  assert.strictEqual(run.kind, "task");
+  assert.strictEqual(run.sessionId, fx.CLAUDE_ID, "Claude resumes its own session");
+  assert.strictEqual(run.opts.workdir, repo, "in the folder it ran in");
+  assert.deepStrictEqual(run.imported.agent, "claude");
+  assert.ok(run.messages.some((m) => m.role === "assistant" && m.steps.some((s) => s.name === "Bash")));
+  const summary = (await get("/api/runs")).runs.find((r) => r.runId === out.taskId);
+  assert.strictEqual(summary.task.status, "imported");
+  assert.strictEqual((await post("/api/history/import", { agent: "claude", id: chat.id })).taskId, out.taskId, "importing again opens the first import");
+  assert.strictEqual((await get("/api/history")).chats.find((c) => c.id === chat.id).runId, out.taskId);
+
+  fs.writeFileSync(ENV.STUB_LOG, "");
+  await post(`/api/runs/${out.taskId}/followup`, { text: "Carry on." });
+  await waitFor(async () => fs.readFileSync(ENV.STUB_LOG, "utf8").includes(fx.CLAUDE_ID));
+  const argv = fs.readFileSync(ENV.STUB_LOG, "utf8").trim().split("\n").map((l) => JSON.parse(l).argv).find((a) => a.includes(fx.CLAUDE_ID));
+  assert.strictEqual(argv[argv.indexOf(fx.CLAUDE_ID) - 1], "--resume");
+  await waitFor(async () => !(await get("/api/state")).jobs.running.includes(out.taskId));
+  await new Promise((r) => setTimeout(r, 600));
+  const after = (await get(`/api/runs/${out.taskId}`)).run;
+  assert.ok(!after.messages.some((m) => m.label === "nudge"), "an imported chat isn't nudged for a report");
+  const prompts = () => fs.readFileSync(ENV.STUB_LOG, "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter((x) => x.prompt).map((x) => JSON.stringify(x.prompt));
+  assert.ok(prompts()[0].includes("<instructions>"), "the first turn here brings Bridge's rules: a resumed session keeps its old system prompt");
+  await post(`/api/runs/${out.taskId}/followup`, { text: "And again." });
+  await waitFor(async () => prompts().length >= 2);
+  assert.ok(!prompts()[1].includes("<instructions>"), "only once");
+
+  const codex = await post("/api/history/import", { agent: "codex", id: fx.CODEX_ID });
+  const crun = (await get(`/api/runs/${codex.taskId}`)).run;
+  assert.deepStrictEqual([crun.opts.agent, crun.agentSessions.codex], ["codex", fx.CODEX_ID]);
+  assert.strictEqual((await post("/api/history/import", { agent: "nope", id: "x" })).status, 400);
+  // A chat whose folder is gone is listed as such and can't be carried on elsewhere.
+  fs.renameSync(repo, `${repo}-moved`);
+  assert.strictEqual((await get("/api/history")).chats.find((c) => c.agent === "codex").gone, true);
+  const devinOrCursor = (await get("/api/history")).chats.find((c) => c.agent === "cursor" || c.agent === "devin");
+  if (devinOrCursor) assert.match((await post("/api/history/import", { agent: devinOrCursor.agent, id: devinOrCursor.id })).error, /folder this chat ran in is gone/);
+  fs.renameSync(`${repo}-moved`, repo);
 });

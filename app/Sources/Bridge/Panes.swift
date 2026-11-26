@@ -621,7 +621,7 @@ struct PaneHeader: View {
                 Button { model.closeOtherPanes() } label: { Label("Close Other Panes", systemImage: "rectangle") }
                 if let s {
                     Divider()
-                    if !s.permalink.isEmpty { Button("Read the Slack Thread") { model.openThread(s.permalink) } }
+                    if !s.permalink.isEmpty { Button { model.openThread(s.permalink) } label: { Label("Read the Slack Thread", systemImage: "number") } }
                     SessionMenu(session: s, inChat: true)
                 }
             } label: {
@@ -706,6 +706,7 @@ struct PaneContent: View {
             GeometryReader { g in
                 VStack(spacing: 0) {
                     Transcript(run: model.runData(run), runId: run).frame(width: g.size.width)
+                    PlanPill(runId: run).frame(width: g.size.width)
                     TaskStrip(runId: run).frame(width: g.size.width)
                     Composer(runId: run).frame(width: g.size.width)
                 }
@@ -806,24 +807,24 @@ struct PaneCommands: Commands {
 
     var body: some Commands {
         CommandMenu("Pane") {
-            Button("Split Right") { model.splitRight() }
+            Button { model.splitRight() } label: { Label("Split Right", systemImage: "rectangle.split.2x1") }
                 .keyboardShortcut("\\")
                 .disabled(!model.isChatRoute)
-            Button("Close Pane") { model.closeFocusedPane() }
+            Button { model.closeFocusedPane() } label: { Label("Close Pane", systemImage: "xmark.rectangle") }
                 .keyboardShortcut("w", modifiers: [.command, .shift])
                 .disabled(!model.isSplit || !model.isChatRoute)
             Divider()
-            Button("Focus Previous Pane") { model.stepPane(-1) }
+            Button { model.stepPane(-1) } label: { Label("Focus Previous Pane", systemImage: "arrow.left.to.line") }
                 .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
                 .disabled(!model.isSplit || !model.isChatRoute)
-            Button("Focus Next Pane") { model.stepPane(1) }
+            Button { model.stepPane(1) } label: { Label("Focus Next Pane", systemImage: "arrow.right.to.line") }
                 .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
                 .disabled(!model.isSplit || !model.isChatRoute)
             Divider()
-            Button("Terminal") { if case .session(let id) = model.route { model.openTerminalTab(id) } }
+            Button { if case .session(let id) = model.route { model.openTerminalTab(id) } } label: { Label("Terminal", systemImage: "terminal") }
                 .keyboardShortcut("`", modifiers: .control)
                 .disabled(!model.isChatRoute)
-            Button("Changes") { if case .session(let id) = model.route { withAnimation(M.snappy) { model.showTab("changes", of: id) } } }
+            Button { if case .session(let id) = model.route { withAnimation(M.snappy) { model.showTab("changes", of: id) } } } label: { Label("Changes", systemImage: "plusminus") }
                 .disabled(!model.isChatRoute)
         }
     }
