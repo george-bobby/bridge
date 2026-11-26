@@ -12,14 +12,14 @@ const path = require("path");
 const { spawn, execFileSync } = require("child_process");
 
 const ROOT = path.join(__dirname, "..");
-const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "sb-workspace-")));
+const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "bridge-workspace-")));
 const DATA = path.join(tmp, "data");
 const PORT = 48600 + Math.floor(Math.random() * 1000);
 const URL_ = `http://127.0.0.1:${PORT}`;
 const ENV = {
   ...process.env,
-  SB_DATA_DIR: DATA,
-  CLAUDE_BIN: path.join(__dirname, "stub-claude.js"),
+  BRIDGE_DATA_DIR: DATA,
+  CLAUDE_BIN: path.join(__dirname, "stub.js"),
   BRIDGE_PORT: String(PORT),
   BRIDGE_ENV_FILE: path.join(tmp, "none.env"),
   TARGET_REPO: tmp,
@@ -58,7 +58,7 @@ printf '%s\\n' '{"type":"turn.completed","usage":{"input_tokens":100,"cached_inp
       messages: [{ role: "assistant", text: "The off-by-one is in paginateRows." }],
     }),
   );
-  server = spawn(process.execPath, [path.join(ROOT, "index.js")], { env: ENV, stdio: "ignore" });
+  server = spawn(process.execPath, [path.join(ROOT, "server")], { env: ENV, stdio: "ignore" });
   const end = Date.now() + 10000;
   while (Date.now() < end) {
     if (await fetch(`${URL_}/api/state`).then((r) => r.ok).catch(() => false)) return;
@@ -107,8 +107,8 @@ test("private feeds refuse cross-origin reads; Linear without a key says so", as
 });
 
 test(".worktreeinclude copies the listed untracked files into a new worktree", async () => {
-  process.env.SB_DATA_DIR = DATA;
-  const tasks = require("../lib/tasks");
+  process.env.BRIDGE_DATA_DIR = DATA;
+  const tasks = require("../server/tasks");
   const repo = path.join(tmp, "inc-repo");
   fs.mkdirSync(repo);
   const g = (...a) => execFileSync("git", a, { cwd: repo, stdio: "ignore" });
@@ -179,7 +179,7 @@ test("a session can switch agents: Codex runs through the same transcript, and t
 });
 
 test("a handoff briefs only what happened since the agent last worked, ignoring turns that failed", () => {
-  const { handoff } = require("../lib/agents");
+  const { handoff } = require("../server/agents");
   const run = {
     kind: "task", who: "Fix CSV", text: "CSV drops a row", prUrl: "https://github.com/acme/x/pull/1",
     messages: [

@@ -8,7 +8,7 @@ Slack only issues tokens to an app, so you create a small one once and install
 it to yourself:
 
 1. Open https://api.slack.com/apps and choose **Create New App → From a manifest**.
-2. Pick your workspace and paste [`slack-app-manifest.json`](slack-app-manifest.json).
+2. Pick your workspace and paste [`manifest.json`](manifest.json).
 3. **Install to Workspace** and allow it. (Some workspaces require an admin to
    approve new apps first; it's then approved once, for you.)
 4. Copy the **User OAuth Token** (`xoxp-…`) from **OAuth & Permissions**.

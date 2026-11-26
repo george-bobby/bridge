@@ -1,0 +1,635 @@
+import AppKit
+import SwiftUI
+import UserNotifications
+
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
+    let model = AppModel()
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        if Bundle.main.bundlePath.hasSuffix(".app") { UNUserNotificationCenter.current().delegate = self }
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+        model.boot()
+        if let dir = ProcessInfo.processInfo.environment["BRIDGE_SNAPSHOT_DIR"] { snapshots(to: dir) }
+    }
+
+    /// Dev aid: render every page of the window to PNGs, for checking the UI
+    /// without screen-recording permission. `BRIDGE_SNAPSHOT_DIR=/tmp/x Bridge`.
+    private func snapshots(to dir: String) {
+        let routes: [(String, Route)] = [("home", .home), ("board", .board), ("sessions", .sessions), ("pulls", .pulls), ("linear", .linear), ("inbox", .inbox), ("inbox-slack", .inbox), ("memory", .memory), ("slack", .slack), ("usage", .usage), ("settings", .settings), ("settings-agents", .settings), ("settings-integrations", .settings), ("settings-projects", .settings), ("settings-notifications", .settings), ("settings-advanced", .settings)]
+        let browser = ProcessInfo.processInfo.environment["BRIDGE_SNAPSHOT_URL"]
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            var pages = routes
+            let chat = ProcessInfo.processInfo.environment["BRIDGE_SNAPSHOT_CHAT"]
+            if let s = model.sessions.first(where: { $0.id == chat }) ?? model.boardSessions.first(where: { $0.worked }) ?? model.orchestrator { pages.append(("chat", .session(s.id))) }
+            pages.append(("palette", .board))
+            if let last = pages.first(where: { $0.0 == "chat" }) {
+                pages.append(("collapsed", last.1))
+                if browser != nil { pages.append(("browser", last.1)) }
+                pages += [("split", last.1), ("split-details", last.1), ("split-wide", last.1), ("split4", last.1), ("messages", last.1), ("messages-split", last.1), ("messages-list", last.1), ("drop", last.1), ("terminal", last.1)]
+            }
+            let hidden = model.sidebarHidden
+            if let only = ProcessInfo.processInfo.environment["BRIDGE_SNAPSHOT_PAGES"]?.split(separator: ",").map(String.init) {
+                pages = pages.filter { only.contains($0.0) }
+            }
+            for (name, route) in pages {
+                model.paletteOpen = name == "palette"
+                model.sidebarHidden = name == "collapsed"
+                if route == .inbox { model.inboxTab = name == "inbox-slack" ? "slack" : "decisions" }
+                if route == .settings { model.settingsPane = name.hasPrefix("settings-") ? String(name.dropFirst(9)) : "general" }
+                if name == "browser", case .session(let id) = route, let browser { model.open(id); model.openBrowser(id, url: browser) }
+                if name.hasPrefix("split") || name.hasPrefix("messages"), case .session(let id) = route { model.panes = [Pane(run: id)]; model.focusedPane = 0 }
+                if case .session(let id) = route { model.open(id) } else { model.route = route }
+                if name == "split" { model.splitRight(); model.splitRight() }
+                if name == "split4" { for _ in 0..<3 { model.splitRight() } }
+                // Two sessions side by side, the first with its details drawer.
+                if name == "split-details", case .session(let id) = route {
+                    let order = model.chatOrder
+                    if let i = order.firstIndex(of: id), i + 1 < order.count { model.openToSide(order[i + 1]) }
+                    model.toggleDetails(model.panes[0].id)
+                }
+                // A wide pane with its details column, a minimized one, and a third.
+                if name == "split-wide" {
+                    model.splitRight(); model.splitRight()
+                    model.panes[0].weight = 2
+                    model.collapsePane(model.panes[1].id)
+                    model.toggleDetails(model.panes[0].id)
+                    model.focusPane(2)
+                }
+                // A drag in flight over the last pane's middle, to check the drop highlight.
+                if name == "drop" { model.paneDragActive = true; model.dropZone = model.panes.last.map { DropZone(pane: $0.id, edge: model.isSplit ? .center : .trailing) } }
+                else if model.paneDragActive { model.paneDragActive = false; model.dropZone = nil }
+                if name == "terminal", case .session(let id) = route { model.openTerminalTab(id) }
+                if name == "slack", let m = model.mentions.first { model.openThread(m.permalink) }
+                var wait: UInt64 = 2_500_000_000
+                // A long chat stepped back six prompts, caught mid-flash;
+                // split: the long chat beside another, stepped in its pane.
+                if name.hasPrefix("messages"), let long = model.sessions.first(where: { $0.id.contains("web-124") }) {
+                    model.panes = [Pane(run: long.id)]; model.focusedPane = 0
+                    model.open(long.id)
+                    if name == "messages-split", case .session(let id) = route { model.openToSide(id); model.focusPane(0) }
+                    try? await Task.sleep(nanoseconds: 2_500_000_000)
+                    for _ in 0..<6 { model.messageNavs[long.id]?.step(-1); try? await Task.sleep(nanoseconds: 450_000_000) }
+                    if name == "messages-list" { model.messageNavs[long.id]?.list.show() }
+                    wait = 500_000_000
+                }
+                try? await Task.sleep(nanoseconds: wait)
+                guard let content = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil && $0.frame.width > 800 })?.contentView,
+                      let view = content.superview ?? Optional(content),
+                      let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(view.bounds.width * 2), pixelsHigh: Int(view.bounds.height * 2), bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { continue }
+                rep.size = view.bounds.size
+                view.cacheDisplay(in: view.bounds, to: rep)
+                try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: "\(dir)/\(name).png"))
+            }
+            model.sidebarHidden = hidden
+            // The sidebar's usage popover lives in its own window: render it directly.
+            let card = ImageRenderer(content: UsageCard(providers: model.usageProviders) {}.background(T.raised).preferredColorScheme(.dark))
+            card.scale = 2
+            if let img = card.nsImage, let tiff = img.tiffRepresentation, let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
+                try? png.write(to: URL(fileURLWithPath: "\(dir)/usage-popover.png"))
+            }
+        }
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler done: @escaping (UNNotificationPresentationOptions) -> Void) {
+        done([.banner, .sound])
+    }
+
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler done: @escaping () -> Void) {
+        let info = response.notification.request.content.userInfo
+        let id = info["runId"] as? String ?? "", link = info["slack"] as? String ?? ""
+        Task { @MainActor in
+            NSApp.activate(ignoringOtherApps: true)
+            NSApp.windows.first { $0.canBecomeMain }?.makeKeyAndOrderFront(nil)
+            if !link.isEmpty { self.model.openThread(link) } else if !id.isEmpty { self.model.open(id) }
+        }
+        done()
+    }
+}
+
+@main
+struct BridgeApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
+
+    var body: some Scene {
+        WindowGroup("Bridge", id: "main") {
+            RootView()
+                .environment(delegate.model)
+                .frame(minWidth: 1040, minHeight: 640)
+                .preferredColorScheme(.dark)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .windowBackgroundDragBehavior(.enabled)
+        .defaultSize(width: 1480, height: 920)
+        .commands { BridgeCommands(model: delegate.model); PaneCommands(model: delegate.model) }
+
+        MenuBarExtra {
+            MenuBarPanel().environment(delegate.model).preferredColorScheme(.dark)
+        } label: {
+            Image(systemName: delegate.model.needsCount > 0 ? "circle.hexagongrid.fill" : "circle.hexagongrid")
+        }
+        .menuBarExtraStyle(.window)
+    }
+}
+
+let navOrder: [(label: String, icon: String, route: Route)] = [
+    ("Home", "house", .home),
+    ("Inbox", "tray", .inbox),
+    ("Sessions", "rectangle.stack", .sessions),
+    ("Slack", "number", .slack),
+    ("GitHub", "arrow.triangle.pull", .pulls),
+    ("Linear", "circle.lefthalf.filled", .linear),
+    ("Memory", "book.closed", .memory),
+    ("Usage", "gauge.with.dots.needle.50percent", .usage),
+]
+
+struct BridgeCommands: Commands {
+    let model: AppModel
+
+    @MainActor func addSelection() {
+        let pb = NSPasteboard.general
+        let before = pb.changeCount
+        let saved = pb.string(forType: .string)
+        NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: nil)
+        if pb.changeCount != before, let picked = pb.string(forType: .string), !picked.isEmpty {
+            model.quoteIntoComposer(picked)
+            if let saved { pb.clearContents(); pb.setString(saved, forType: .string) }
+        } else {
+            model.focusComposer += 1
+        }
+    }
+
+    var body: some Commands {
+        CommandGroup(replacing: .appSettings) {
+            Button("Settings…") { model.navigate(.settings) }.keyboardShortcut(",")
+        }
+        CommandGroup(replacing: .newItem) {
+            Button("New Task…") { model.compose(in: model.projectFilter) }.keyboardShortcut("n")
+            Button("New Browser Tab") {
+                if case .session(let id) = model.route { model.openBrowser(id, url: "") }
+            }
+            .keyboardShortcut("t")
+        }
+        CommandGroup(after: .pasteboard) {
+            Divider()
+            Button("Add Selection to Chat") { addSelection() }.keyboardShortcut("l")
+        }
+        CommandGroup(before: .sidebar) {
+            Button("Toggle Sidebar") { model.toggleSidebar() }.keyboardShortcut("s", modifiers: [.command, .control])
+            Button("Toggle Details") { model.toggleDetails() }.keyboardShortcut("i", modifiers: [.command, .option])
+            Divider()
+        }
+        CommandMenu("Go") {
+            Button("Command Menu…") { model.paletteOpen = true }.keyboardShortcut("k")
+            Divider()
+            ForEach(Array(navOrder.enumerated()), id: \.offset) { i, item in
+                Button(item.label) { model.navigate(item.route) }.keyboardShortcut(KeyEquivalent(Character("\(i + 1)")))
+            }
+            Divider()
+            Button("Back") { model.back() }.keyboardShortcut("[")
+            Button("Forward") { model.forward() }.keyboardShortcut("]")
+            Button("Previous Chat") { model.stepChat(-1) }.keyboardShortcut(.upArrow, modifiers: [.command, .option])
+            Button("Next Chat") { model.stepChat(1) }.keyboardShortcut(.downArrow, modifiers: [.command, .option])
+            Divider()
+            Button("Orchestrator") { model.openOrchestrator(model.projectFilter) }.keyboardShortcut("o")
+            Button("Add Project…") { model.addProject() }.keyboardShortcut("p", modifiers: [.command, .shift])
+            Button("Refresh") { Task { await model.loadSources(refresh: true); await model.loadAll() } }.keyboardShortcut("r")
+            Divider()
+            Button("Open Legacy Web UI") { openURL(API.base.absoluteString) }
+        }
+    }
+}
+
+// MARK: - Root
+
+struct RootView: View {
+    @Environment(AppModel.self) var model
+    @Namespace private var nav
+
+    var body: some View {
+        HStack(spacing: 0) {
+            if !model.sidebarHidden {
+                Sidebar()
+                    .frame(width: T.sidebarWidth)
+                    .environment(\.navNS, nav)
+                    .transition(.move(edge: .leading).combined(with: .opacity))
+            }
+            ZStack {
+                T.panel
+                detail
+                    .id(model.pageId)
+                    .transition(.page)
+            }
+            .animation(M.page, value: model.pageId)
+            // A page's own minimum width must never grow the window.
+            .frame(minWidth: 0, maxWidth: .infinity)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(T.line.opacity(0.9), lineWidth: 1))
+            .shadow(color: .black.opacity(0.25), radius: 6, y: 1)
+            .padding(.vertical, T.panelInset)
+            .padding(.trailing, T.panelInset)
+            .padding(.leading, model.sidebarHidden ? T.panelInset : 0)
+        }
+        .background(VisualEffect(material: .sidebar))
+        .background(T.bg.opacity(0.55))
+        .background(WindowChrome())
+        .contentShape(Rectangle())
+        .gesture(SpatialTapGesture(count: 2).onEnded { if $0.location.y <= T.headerHeight + T.panelInset { titleBarDoubleClick() } })
+        .ignoresSafeArea()
+        .overlay(alignment: .topLeading) {
+            HStack(spacing: 2) {
+                IconButton(icon: "sidebar.left", help: model.sidebarHidden ? "Show sidebar (⌃⌘S)" : "Hide sidebar (⌃⌘S)") { model.toggleSidebar() }
+                IconButton(icon: "chevron.left", help: "Back (⌘[)") { model.back() }
+                    .disabled(model.backStack.isEmpty).opacity(model.backStack.isEmpty ? 0.35 : 1)
+                IconButton(icon: "chevron.right", help: "Forward (⌘])") { model.forward() }
+                    .disabled(model.forwardStack.isEmpty).opacity(model.forwardStack.isEmpty ? 0.35 : 1)
+            }
+            .frame(height: 28)
+            .padding(.leading, Chrome.buttonsLeft).padding(.top, Chrome.center - 14)
+            .ignoresSafeArea()
+        }
+        .overlay {
+            if model.paletteOpen || model.composeOpen {
+                Color.black.opacity(0.32).ignoresSafeArea()
+                    .onTapGesture { model.paletteOpen = false; model.composeOpen = false }
+                    .transition(.opacity)
+            }
+        }
+        .overlay { if model.paletteOpen { CommandPalette().transition(.panel) } }
+        .overlay { if model.composeOpen { ComposeSheet().transition(.panel) } }
+        .overlay(alignment: .bottom) { ToastView() }
+        .overlay { if !model.connected && !model.everConnected { ConnectingView().transition(.opacity) } }
+        .animation(M.pop, value: model.paletteOpen)
+        .animation(M.pop, value: model.composeOpen)
+        .animation(M.page, value: model.everConnected)
+    }
+
+    @ViewBuilder var detail: some View {
+        switch model.route {
+        case .home: HomeView()
+        case .inbox: InboxView()
+        case .slack: SlackView()
+        case .usage: UsageView()
+        case .board: BoardView()
+        case .sessions: SessionsView()
+        case .pulls: PullsView()
+        case .linear: LinearView()
+        case .memory: MemoryView()
+        case .settings: SettingsView()
+        case .session(let id): ChatView(id: id)
+        }
+    }
+}
+
+/// The hidden title bar leaves the header bars covering where AppKit would
+/// catch a title-bar double-click, so honor the system setting ourselves.
+@MainActor func titleBarDoubleClick() {
+    guard let window = NSApp.keyWindow ?? NSApp.windows.first(where: { $0.isVisible && $0.canBecomeMain }) else { return }
+    switch UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") {
+    case "None": break
+    case "Minimize": window.miniaturize(nil)
+    default: window.zoom(nil)
+    }
+}
+
+private struct NavNamespaceKey: EnvironmentKey { static let defaultValue: Namespace.ID? = nil }
+extension EnvironmentValues {
+    var navNS: Namespace.ID? {
+        get { self[NavNamespaceKey.self] }
+        set { self[NavNamespaceKey.self] = newValue }
+    }
+}
+
+struct NavHighlight: View {
+    @Environment(\.navNS) private var ns
+    let on: Bool
+    let hover: Bool
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 7, style: .continuous).fill(hover && !on ? T.sideHover : .clear)
+            if on {
+                if let ns {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous).fill(T.sideSelected).matchedGeometryEffect(id: "nav-selection", in: ns)
+                } else {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous).fill(T.sideSelected)
+                }
+            }
+        }
+    }
+}
+
+struct ConnectingView: View {
+    @Environment(AppModel.self) var model
+    var body: some View {
+        ZStack {
+            T.bg
+            VStack(spacing: 14) {
+                Logo(size: 56).modifier(Breathe()).padding(.bottom, 4)
+                Text("Starting Bridge…").font(T.ui(13, .medium)).foregroundStyle(T.text2)
+                ProgressView().controlSize(.small)
+                if !model.serverError.isEmpty {
+                    Text(model.serverError).font(T.ui(12)).foregroundStyle(T.orange).multilineTextAlignment(.center).frame(maxWidth: 420).textSelection(.enabled)
+                }
+            }
+        }
+        .ignoresSafeArea()
+    }
+}
+
+struct Breathe: ViewModifier {
+    @StateObject private var on = Box(false)
+    func body(content: Content) -> some View {
+        content
+            .scaleEffect(on.v ? 1.03 : 0.97)
+            .shadow(color: T.accent.opacity(on.v ? 0.5 : 0.18), radius: on.v ? 20 : 8, y: 4)
+            .onAppear { if !on.v { withAnimation(.easeInOut(duration: 1.4).repeatForever(autoreverses: true)) { on.v = true } } }
+    }
+}
+
+/// The app icon's squircle and bridge mark (scripts/icon.swift draws the
+/// same geometry into icon.png).
+struct Logo: View {
+    var size: CGFloat = 20
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: size * 0.225, style: .continuous)
+        // Heavier strokes and no hangers at sidebar sizes, as the icon does at 16/32px.
+        let small = size < 24
+        ZStack {
+            shape.fill(LinearGradient(stops: [.init(color: Color(red: 0.54, green: 0.56, blue: 0.97), location: 0),
+                                              .init(color: T.accent, location: 0.38),
+                                              .init(color: Color(red: 0.23, green: 0.17, blue: 0.61), location: 0.78),
+                                              .init(color: Color(red: 0.14, green: 0.09, blue: 0.37), location: 1)],
+                                      startPoint: UnitPoint(x: 0.15, y: 0), endPoint: UnitPoint(x: 0.85, y: 1)))
+            shape.fill(RadialGradient(colors: [.white.opacity(0.26), .clear], center: UnitPoint(x: 0.5, y: -0.1), startRadius: 0, endRadius: size * 0.85))
+            BridgeMark(weight: small ? 1.35 : 1, hangers: !small)
+                .scale(small ? 1.15 : 1, anchor: UnitPoint(x: 0.5, y: 0.55))
+                .fill(LinearGradient(colors: [.white, Color(red: 0.89, green: 0.89, blue: 1)], startPoint: .top, endPoint: .bottom))
+                .shadow(color: Color(red: 0.07, green: 0.04, blue: 0.25).opacity(0.45), radius: size * 0.03, y: size * 0.015)
+        }
+        .overlay(shape.strokeBorder(LinearGradient(colors: [.white.opacity(0.35), .white.opacity(0.04), .black.opacity(0.15)], startPoint: .top, endPoint: .bottom), lineWidth: max(0.5, size * 0.012)))
+        .frame(width: size, height: size)
+    }
+}
+
+/// Arch, deck, piers and hangers in unit space across the icon body.
+struct BridgeMark: Shape {
+    var weight: CGFloat = 1
+    var hangers = true
+    func path(in r: CGRect) -> Path {
+        let w = r.width
+        func U(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: r.minX + x * w, y: r.minY + y * r.height) }
+        let deckY: CGFloat = 0.615, archR: CGFloat = 0.255, stroke = 0.068 * weight * w
+        var out = Path()
+        func add(_ width: CGFloat, _ build: (inout Path) -> Void) {
+            var p = Path(); build(&p)
+            out.addPath(p.strokedPath(StrokeStyle(lineWidth: width, lineCap: .round, lineJoin: .round)))
+        }
+        add(stroke) { $0.addArc(center: U(0.5, deckY), radius: archR * w, startAngle: .degrees(180), endAngle: .degrees(0), clockwise: false) }
+        add(stroke) { $0.move(to: U(0.17, deckY)); $0.addLine(to: U(0.83, deckY)) }
+        for x in [0.5 - archR, 0.5 + archR] { add(stroke) { $0.move(to: U(x, deckY)); $0.addLine(to: U(x, 0.76)) } }
+        if hangers {
+            for dx: CGFloat in [-0.125, 0, 0.125] {
+                let top = deckY - (archR * archR - dx * dx).squareRoot()
+                add(0.03 * weight * w) { $0.move(to: U(0.5 + dx, top)); $0.addLine(to: U(0.5 + dx, deckY)) }
+            }
+        }
+        return out
+    }
+}
+
+// MARK: - Sidebar
+
+struct SideLabel: View {
+    let text: String
+    init(_ text: String) { self.text = text }
+    var body: some View {
+        Text(text).font(T.ui(11.5, .semibold)).foregroundStyle(T.text3)
+            .padding(.horizontal, 10).padding(.top, 20).padding(.bottom, 6)
+    }
+}
+
+struct NavItem: View {
+    @Environment(AppModel.self) var model
+    let icon: String
+    let label: String
+    let route: Route
+    var also: [Route] = []
+    var badge: Int = 0
+    var count: Int = 0
+    var hot = false
+    @StateObject private var hover = Box(false)
+
+    var body: some View {
+        let on = model.route == route || also.contains(model.route)
+        Button { model.route = route } label: {
+            HStack(spacing: 9) {
+                Image(systemName: icon).font(.system(size: 13.5, weight: .medium)).frame(width: 18)
+                    .foregroundStyle(on ? T.accent : T.text2)
+                    .symbolEffect(.bounce, value: on)
+                Text(label).font(T.ui(13.5, on ? .medium : .regular)).foregroundStyle(on ? T.text : T.text2)
+                Spacer()
+                if badge > 0 {
+                    Text(verbatim: "\(badge)").font(T.ui(10.5, .semibold)).foregroundStyle(.white).monospacedDigit()
+                        .contentTransition(.numericText())
+                        .padding(.horizontal, 5).frame(minWidth: 17, minHeight: 16)
+                        .background(Capsule().fill(hot ? T.orange : T.text3))
+                        .transition(.scale.combined(with: .opacity))
+                } else if count > 0 {
+                    HStack(spacing: 4) {
+                        if hot { Circle().fill(T.red).frame(width: 5, height: 5).transition(.scale) }
+                        Text(verbatim: "\(count)").font(T.ui(11.5)).foregroundStyle(T.text3).monospacedDigit()
+                            .contentTransition(.numericText())
+                    }
+                }
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 32)
+            .background(NavHighlight(on: on, hover: hover.v))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(Pressable(scale: 0.98))
+        .hoverBox(hover)
+    }
+}
+
+struct SessionNavItem: View {
+    @Environment(AppModel.self) var model
+    let session: Session
+    @StateObject private var hover = Box(false)
+
+    var body: some View {
+        let on = model.route == .session(session.id)
+        let meta = subtitle
+        HStack(alignment: meta == nil ? .center : .top, spacing: 10) {
+            Group {
+                if session.isOrchestrator {
+                    Image(systemName: "sparkles").font(.system(size: 12, weight: .medium)).foregroundStyle(T.purple)
+                } else {
+                    SessionIcon(session: session)
+                }
+            }
+            .frame(width: 18, height: 18)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(session.isOrchestrator ? "Orchestrator" : session.title).font(T.ui(13, on ? .medium : .regular)).foregroundStyle(on ? T.text : T.text2).lineLimit(1)
+                if let meta {
+                    Text(meta.0).font(T.ui(11.5)).foregroundStyle(meta.1).lineLimit(1)
+                        .transition(.opacity)
+                }
+            }
+            Spacer(minLength: 4)
+            if model.isAwaiting(session) { PulseDot(color: T.orange).padding(.top, meta == nil ? 0 : 6).transition(.scale.combined(with: .opacity)) }
+            else if session.unread && !on { Circle().fill(T.accent).frame(width: 6, height: 6).padding(.top, meta == nil ? 0 : 6).transition(.scale.combined(with: .opacity)) }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, meta == nil ? 0 : 6)
+        .frame(minHeight: 30)
+        .background(NavHighlight(on: on, hover: hover.v))
+        .contentShape(Rectangle())
+        // A tap, not a Button: a Button tracks the mouse itself and a drag
+        // never starts. ⌥-click opens the chat beside the focused pane.
+        .onTapGesture {
+            if NSEvent.modifierFlags.contains(.option) { model.openToSide(session.id) } else { model.open(session.id) }
+        }
+        .hoverBox(hover)
+        .onDrag { NSItemProvider(object: session.id as NSString) }
+        .help("⌥-click or drag onto the chat to open side by side")
+        .contextMenu { SessionMenu(session: session) }
+    }
+
+    var subtitle: (String, Color)? {
+        if model.isAwaiting(session) { return (session.askedFor.isEmpty ? "Waiting on you" : session.askedFor, T.orange) }
+        if model.isLive(session) { return (session.statusLine.isEmpty ? "Working…" : session.statusLine, T.yellow.opacity(0.85)) }
+        if let pr = model.pr(for: session.prUrl) {
+            let checks = pr.failing ? "checks failing" : pr.checks == "SUCCESS" ? "checks pass" : pr.checks == "PENDING" ? "checks running" : ""
+            return (["#\(pr.number)", pr.state == "MERGED" ? "merged" : pr.review == "APPROVED" ? "approved" : "", checks].filter { !$0.isEmpty }.joined(separator: " · "), pr.failing ? T.red.opacity(0.9) : T.text3)
+        }
+        if !session.prUrl.isEmpty { return ("#\(session.prNumber)", T.text3) }
+        return nil
+    }
+}
+
+/// A session's status in Linear's vocabulary; live ones spin.
+struct SessionIcon: View {
+    @Environment(AppModel.self) var model
+    let session: Session
+    var size: CGFloat = 14
+
+    var body: some View {
+        let col = model.column(of: session)
+        if model.isLive(session) && !model.isAwaiting(session) {
+            LiveIcon(size: size)
+        } else {
+            StatusIcon(kind: col.status, size: size)
+        }
+    }
+}
+
+struct LiveIcon: View {
+    var size: CGFloat = 14
+    @StateObject private var spin = Box(false)
+    var body: some View {
+        ZStack {
+            Circle().stroke(T.yellow.opacity(0.3), lineWidth: 1.5)
+            Circle().trim(from: 0, to: 0.3).stroke(T.yellow, style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                .rotationEffect(.degrees(spin.v ? 360 : 0))
+            Circle().fill(T.yellow).padding(size * 0.32)
+        }
+        .frame(width: size, height: size)
+        .onAppear { withAnimation(.linear(duration: 1).repeatForever(autoreverses: false)) { spin.v = true } }
+    }
+}
+
+struct PulseDot: View {
+    let color: Color
+    var size: CGFloat = 6
+    @StateObject private var on = Box(false)
+    var body: some View {
+        Circle().fill(color).frame(width: size, height: size)
+            .background(
+                Circle().stroke(color, lineWidth: 1.5)
+                    .scaleEffect(on.v ? 2.4 : 1)
+                    .opacity(on.v ? 0 : 0.8)
+            )
+            .onAppear { withAnimation(.easeOut(duration: 1.4).repeatForever(autoreverses: false)) { on.v = true } }
+    }
+}
+
+// MARK: - Toast
+
+struct ToastView: View {
+    @Environment(AppModel.self) var model
+    var body: some View {
+        Group {
+            if let t = model.toast {
+                HStack(spacing: 8) {
+                    Image(systemName: model.toastBad ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                        .foregroundStyle(model.toastBad ? T.red : T.green)
+                    Text(t).font(T.ui(12.5)).foregroundStyle(T.text).lineLimit(2)
+                }
+                .padding(.horizontal, 14).padding(.vertical, 9)
+                .background(.regularMaterial, in: Capsule())
+                .overlay(Capsule().stroke(T.line, lineWidth: 1))
+                .shadow(color: .black.opacity(0.35), radius: 18, y: 6)
+                .padding(.bottom, 22)
+                .transition(.move(edge: .bottom).combined(with: .opacity).combined(with: .scale(scale: 0.9)))
+            }
+        }
+        .animation(M.pop, value: model.toast)
+    }
+}
+
+// MARK: - Menu bar
+
+struct MenuBarPanel: View {
+    @Environment(AppModel.self) var model
+    @Environment(\.openWindow) var openWindow
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Logo(size: 16)
+                Text("Bridge").font(T.ui(13, .semibold))
+                Spacer()
+                Text(verbatim: "\(model.liveCount) running").font(T.ui(11.5)).foregroundStyle(T.text3)
+            }
+            .padding(12)
+            Hairline()
+            let needs = model.boardSessions.filter { model.column(of: $0) == .needs }
+            let live = model.boardSessions.filter { model.isLive($0) }
+            if needs.isEmpty && live.isEmpty {
+                Text("Nothing running, nothing waiting.").font(T.ui(12)).foregroundStyle(T.text3).padding(12)
+            }
+            ForEach(needs + live.filter { s in !needs.contains(where: { $0.id == s.id }) }) { s in
+                Button { show(s.id) } label: {
+                    HStack(spacing: 8) {
+                        SessionIcon(session: s)
+                        Text(s.title).font(T.ui(12.5)).lineLimit(1)
+                        Spacer()
+                        Text(Fmt.ago(s.updatedAt)).font(T.ui(11)).foregroundStyle(T.text3)
+                    }
+                    .padding(.horizontal, 12).frame(height: 30).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+            Hairline()
+            Button { show(nil) } label: {
+                HStack { Text("Open Bridge").font(T.ui(12.5)); Spacer(); Kbd(keys: "⌘O") }
+                    .padding(.horizontal, 12).frame(height: 32).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .frame(width: 320)
+        .background(T.panel)
+    }
+
+    func show(_ id: String?) {
+        NSApp.activate(ignoringOtherApps: true)
+        if let w = NSApp.windows.first(where: { $0.identifier?.rawValue.hasPrefix("main") ?? false }) { w.makeKeyAndOrderFront(nil) }
+        else { openWindow(id: "main") }
+        if let id { model.open(id) }
+    }
+}

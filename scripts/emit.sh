@@ -20,7 +20,7 @@
 # `memory` files a *proposal*, not a memory: it lands in data/runs/memories/,
 # which no session ever loads, and is promoted into the repo's real memory only
 # by a second run proposing the same `territory` or by an approval in the
-# dashboard. See lib/proposals.js.
+# dashboard. See server/proposals.js.
 #
 # Example:
 #   emit.sh 1784560120.179279 verdict "True positive — the row wraps at <900px"
@@ -37,7 +37,7 @@ shift 3 2>/dev/null || true
 
 [ -n "$RUN_ID" ] || exit 0
 
-# The dashboard's port lives in .env, so this and index.js agree without
+# The dashboard's port lives in .env, so this and the server agree without
 # either one hard-coding it. Already-set wins, as everywhere else.
 _ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 if [ -z "${BRIDGE_PORT:-}" ] && [ -f "$_ROOT/.env" ]; then

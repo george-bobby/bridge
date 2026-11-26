@@ -6,9 +6,9 @@
 .env.*.local
 
 # ─── Generated prompts ───────────────────────────────────────────────────────
-# scripts/install.sh renders templates/ into .claude/skills/ with this
+# scripts/install.sh renders skills/ into .claude/skills/ with this
 # machine's .env baked in, then symlinks the result into ~/.claude. The
-# templates are source; these are build output.
+# sources in skills/ are committed; these are build output.
 .claude/commands/
 .claude/skills/
 
@@ -35,9 +35,9 @@ package-lock.json
 *.swp
 *~
 
-# Your own copies of templates/ (e.g. a repo-specific skill). Rendered in
-# preference to templates/ and never committed.
-templates.local/
+# Your own copies of skills/ (e.g. a repo-specific skill). Rendered in
+# preference to skills/ and never committed.
+skills.local/
 
-# ─── Native app build output (scripts/build-app.sh) ─────────────────────────
+# ─── Native app build output (scripts/build.sh) ─────────────────────────────
 dist/
