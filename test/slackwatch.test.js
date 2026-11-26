@@ -118,6 +118,40 @@ test("an item whose thread got a chat stays started after that chat is deleted",
   assert.ok(!watch.open().some((i) => i.id === item.id));
 });
 
+test("a failing channel records an error without stopping mentions; a reopened item loses its old verdict", async () => {
+  store.writeConfig({ harness: { slackChannels: ["C0WATCH", "C0GONE"] } });
+  await watch.poll(); // marks C0GONE
+  const history = fake.history;
+  fake.history = async (a) => (a.channelId === "C0GONE" ? Promise.reject(new Error("channel_not_found")) : history(a));
+  fake.ms.push(mention(50));
+  const out = await watch.poll();
+  assert.match(out.error, /C0GONE: channel_not_found/);
+  const item = watch.open().find((i) => i.threadTs === ts(50));
+  assert.ok(item, "the mention was still filed");
+  watch.triage(item.id, "skip", "noise");
+  watch.dismiss(item.id);
+  fake.ms.push(mention(51, { thread: 50 }));
+  await watch.poll();
+  const back = watch.open().find((i) => i.id === item.id);
+  assert.equal(back.verdict, "", "a new ask gets a fresh look");
+  fake.history = history;
+  store.writeConfig({ harness: { slackChannels: ["C0WATCH"] } });
+});
+
+test("a dismiss made while a poll waits on Slack survives the poll", async () => {
+  const item = watch.open()[0];
+  const mentions = fake.mentions;
+  let release;
+  fake.mentions = () => new Promise((r) => (release = () => r(mentions())));
+  const p = watch.poll();
+  await new Promise((r) => setTimeout(r, 10));
+  watch.dismiss(item.id);
+  release();
+  await p;
+  fake.mentions = mentions;
+  assert.ok(!watch.open().some((i) => i.id === item.id));
+});
+
 test("off skips the poll unless forced", async () => {
   store.writeConfig({ harness: { slackWatch: "off" } });
   assert.deepEqual(await watch.poll(), { skipped: true });

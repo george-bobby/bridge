@@ -749,6 +749,7 @@ struct SlackWatchSettings: View {
     @Environment(AppModel.self) var model
     let q: String
     @StateObject private var channels = Box(JSON.null)
+    @StateObject private var channelsError = Box("")
 
     var h: JSON { model.config["harness"] }
     var watched: [String] { h["slackChannels"].array.map(\.string) }
@@ -775,13 +776,29 @@ struct SlackWatchSettings: View {
                 }
             }
         }
-        .task { if model.slack["configured"].bool, channels.v.isNull { channels.v = (try? await API.get("/api/slack/channels")) ?? .null } }
+        .task(id: model.slack["configured"].bool) { await loadChannels() }
+    }
+
+    /// Keyed to the connection: connecting Slack while this page is open loads them then.
+    func loadChannels() async {
+        guard model.slack["configured"].bool else { return }
+        channelsError.v = ""
+        do { channels.v = try await API.get("/api/slack/channels") } catch { channelsError.v = error.localizedDescription }
     }
 
     var channelMenu: some View {
         Menu {
             let list = channels.v["channels"].array
-            if list.isEmpty { Text(model.slack["configured"].bool ? "Loading channels…" : "Connect Slack first") }
+            if !model.slack["configured"].bool {
+                Text("Connect Slack first")
+            } else if !channelsError.v.isEmpty {
+                Text("Couldn't load channels: \(channelsError.v)")
+                Button("Retry") { Task { await loadChannels() } }
+            } else if channels.v.isNull {
+                Text("Loading channels…")
+            } else if list.isEmpty {
+                Text("You aren't in any channels")
+            }
             ForEach(list, id: \.self) { c in
                 let id = c["id"].string, on = watched.contains(id)
                 Button { save(["slackChannels": on ? watched.filter { $0 != id } : watched + [id]]) } label: {
