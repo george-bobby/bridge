@@ -60,4 +60,4 @@ jobs:
         with:
           node-version: 22
       - name: Build and package Bridge.app
-        run: ./scripts/build-app.sh
+        run: ./scripts/build.sh

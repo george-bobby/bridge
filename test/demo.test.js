@@ -10,7 +10,7 @@ const os = require("os");
 const path = require("path");
 const { spawn } = require("child_process");
 
-const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "sb-demo-")));
+const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "bridge-demo-")));
 const PORT = 49700 + Math.floor(Math.random() * 200);
 const URL_ = `http://127.0.0.1:${PORT}`;
 let server;
@@ -84,9 +84,9 @@ test(".env editing keeps secrets out of responses and comments in the file", asy
 });
 
 test("demo refuses to wipe a folder that isn't its own", () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sb-real-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-real-"));
   fs.writeFileSync(path.join(dir, "keep.json"), "{}");
-  assert.throws(() => require("../lib/demo").seed(dir), /refusing/);
+  assert.throws(() => require("../server/demo").seed(dir), /refusing/);
   assert.ok(fs.existsSync(path.join(dir, "keep.json")));
   fs.rmSync(dir, { recursive: true, force: true });
 });

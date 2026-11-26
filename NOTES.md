@@ -22,12 +22,12 @@ structured events instead of screen text, and permission prompts and
 | `bin/watch <id>` per worker | the server: job start/end events + a stall timer + a boot pass. No per-worker process to forget or chain untracked. |
 | end-of-turn guard (stop hook) | not needed: nothing can be left un-watched, because the watcher is the process that owns the workers |
 | orchestrator tab | the pinned **Orchestrator** chat; outcomes start a relay turn in it |
-| `bin/followup`, `status`, `cleanup`, ... | `bin/sb <cmd>` (talks to the dashboard's API) |
+| `bin/followup`, `status`, `cleanup`, ... | `bin/bridge <cmd>` (talks to the dashboard's API) |
 | first-run dialogs, trust prompt | none in headless `-p` mode |
 | shell rc prompts eating keystrokes | not applicable: nothing is typed into a shell |
-| CLAUDE.md for the orchestrator | `harness/orchestrator.md`, appended as its system prompt |
-| worker instructions | `harness/worker.md`, appended to every worker (typed tasks and Slack pipeline runs) |
-| kill-by-pattern hook in user settings | `harness/hooks/guard.js`, loaded per session with `claude --settings`; **nothing in `~/.claude` was changed** |
+| CLAUDE.md for the orchestrator | `prompts/orchestrator.md`, appended as its system prompt |
+| worker instructions | `prompts/worker.md`, appended to every worker (typed tasks and Slack pipeline runs) |
+| kill-by-pattern hook in user settings | `hooks/guard.js`, loaded per session with `claude --settings`; **nothing in `~/.claude` was changed** |
 
 Plain files remain the source of truth: `data/tasks/<id>/{brief.md, meta.json,
 report.md, system.md}`, `data/tasks/{decisions.json, todos.json, events.log}`.
@@ -129,7 +129,7 @@ children of the server and die with it, so **resume is a relaunch** (`--resume
 
 `npm test` runs the policy unit tests, report parsing, and the end-to-end
 suite: a real dashboard process on a random port, a scratch repo with a bare
-origin, and `test/stub-claude.js` forcing every outcome. Nothing touches
+origin, and `test/stub.js` forcing every outcome. Nothing touches
 `data/`, your repos, or usage.
 
 ## Workspace views and the native app (2026-11-25)
@@ -138,7 +138,7 @@ origin, and `test/stub-claude.js` forcing every outcome. Nothing touches
   PR's live state; only a manual placement is stored (`run.board`), written
   without bumping `updatedAt`, so a drag never marks a chat unread. Manual wins
   until unpinned. A run whose PR isn't among your open PRs (once loaded) counts as Done.
-- **Feeds** (`lib/sources.js`): one `gh api graphql` call for your open, review-requested
+- **Feeds** (`server/sources.js`): one `gh api graphql` call for your open, review-requested
   and recently merged PRs; Linear's GraphQL API with `LINEAR_API_KEY`. Each is cached
   for 60s and fetched once at a time. They're GETs but private, so they take the
   same loopback-origin check as writes.

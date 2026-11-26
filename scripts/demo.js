@@ -12,22 +12,22 @@
 const os = require("os");
 const path = require("path");
 
-// Its own folder, never SB_DATA_DIR: seeding wipes it.
+// Its own folder, never BRIDGE_DATA_DIR: seeding wipes it.
 const dataDir = process.env.BRIDGE_DEMO_DIR || path.join(os.tmpdir(), "bridge-demo");
 Object.assign(process.env, {
   BRIDGE_DEMO: "1",
-  SB_DATA_DIR: dataDir,
+  BRIDGE_DATA_DIR: dataDir,
   BRIDGE_PORT: process.env.BRIDGE_PORT || "4420",
   BRIDGE_ENV_FILE: path.join(dataDir, "none.env"),
-  CLAUDE_BIN: path.join(__dirname, "..", "test", "stub-claude.js"),
+  CLAUDE_BIN: path.join(__dirname, "..", "test", "stub.js"),
   TARGET_REPO: "/Users/you/Development/storefront",
   GITHUB_LOGIN: "alex-rivera",
   SLACK_USER_NAME: "Alex Rivera",
 });
 
-const demo = require("../lib/demo");
+const demo = require("../server/demo");
 demo.seed(dataDir);
-require("../index.js");
+require("../server");
 setTimeout(() => demo.writeSessions(dataDir), 300);
 console.log(`demo data in ${dataDir}`);
 console.log(`open the app against it:  BRIDGE_PORT=${process.env.BRIDGE_PORT} ~/Applications/Bridge.app/Contents/MacOS/Bridge`);

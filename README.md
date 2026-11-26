@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="native/macos/icon.png" width="88" alt="Bridge" />
+  <img src="app/icon.png" width="88" alt="Bridge" />
 </p>
 
 <h1 align="center">Bridge</h1>
@@ -83,7 +83,7 @@ npm run app               # build Bridge.app, install it to ~/Applications, open
 ```
 
 No `npm install`: the server has zero dependencies. `npm run app` builds the
-SwiftUI app in `native/macos` with `swift build`, copies it to
+SwiftUI app in `app` with `swift build`, copies it to
 `~/Applications` and opens it. Rebuild after moving the repo, because the repo
 path is baked in.
 
@@ -103,12 +103,12 @@ session you continue runs a stub agent, so it costs nothing.
 `npm start` renders the Slack pipeline skill, links it into
 `~/.claude/skills/`, and runs the server under launchd, so it comes back after
 a login. `npm stop` stops it, and `npm restart` picks up changes to `.env`,
-`lib/` or `templates/`. `npm run dev` runs it in the foreground, restarting on
+`server/` or `skills/`. `npm run dev` runs it in the foreground, restarting on
 server edits. The app starts the server itself if it isn't running.
 
 To give the pipeline your repo's own commands (checks, log queries, prod read
-paths), copy `templates/slack-fetch-pipeline/SKILL.md` to
-`templates.local/slack-fetch-pipeline/SKILL.md` and edit it. That copy is
+paths), copy `skills/slack-fetch-pipeline/SKILL.md` to
+`skills.local/slack-fetch-pipeline/SKILL.md` and edit it. That copy is
 gitignored and used in place of the generic one.
 
 The previous browser UI is kept in `legacy/` and still served at
@@ -118,7 +118,7 @@ http://localhost:4319.
 
 ```
 top box ── Slack link ──► chat + worker running the slack-fetch-pipeline skill
-        └─ anything else ► Orchestrator ── bin/sb spawn ──► worker
+        └─ anything else ► Orchestrator ── bin/bridge spawn ──► worker
                                                               │
    worker: own worktree + branch, writes data/tasks/<id>/report.md
                                                               │
@@ -144,12 +144,15 @@ browser notification if it needs you, and relayed to the orchestrator.
 where your answer goes straight back, and requested outward writes; any item
 can be deferred to a date), **Slack** (what the Slack watch found, below),
 **To-dos**, **Workers** (status, follow-up, relaunch, clean up) and
-**Activity** (what happened in the last 3h/8h/24h/3d). **Brief me** asks the
-orchestrator for a few-line catch-up. There are three modes: **normal**,
+**Activity** (what happened in the last 3h/8h/24h/3d). **Brief me** (here,
+in the orchestrator chat's header, `/brief` in its composer or ⌘K) gathers
+what's waiting, Slack, to-dos, workers and recent events on the server and
+hands it to the orchestrator in one turn, which answers with a few-line
+catch-up. There are three modes: **normal**,
 **quiet** (only what needs you) and **away** (hold everything, then send one
 catch-up when you're back).
 
-**Slack watch** (`lib/slackwatch.js`). With a Slack user token, the server
+**Slack watch** (`server/watch.js`). With a Slack user token, the server
 reads Slack every 2 minutes (Settings › Integrations), with plain API calls
 and no agent tokens:
 
@@ -163,8 +166,8 @@ and no agent tokens:
 
 The first check only sets a watermark, so turning it on never replays old
 mentions. **Watch** (the default) stops there. **Triage** also hands new items
-to the orchestrator, which starts the real work (`sb slack`) and records a
-verdict on the rest (`sb triage`). A skipped item stays in the Inbox with the
+to the orchestrator, which starts the real work (`bridge slack`) and records a
+verdict on the rest (`bridge triage`). A skipped item stays in the Inbox with the
 reason, so you can overrule it. Relay modes still apply: away holds them for
 the catch-up.
 
@@ -245,7 +248,7 @@ the PR.
 
 **Slack connector.** A user token (`xoxp-…`) from a small Slack app you
 install to yourself once ([guide](docs/slack.md),
-[manifest](docs/slack-app-manifest.json)). It acts as you: nothing to invite,
+[manifest](docs/manifest.json)). It acts as you: nothing to invite,
 nothing to add to channels. Without it, Slack still works through Claude Code's
 connector inside sessions; the token adds Bridge's own Slack view.
 
@@ -265,7 +268,7 @@ are removed from the environment sessions inherit.
 
 ## Safety
 
-Every session the dashboard starts loads `harness/hooks/guard.js` through
+Every session the dashboard starts loads `hooks/guard.js` through
 `claude --settings`. Nothing is written to `~/.claude`.
 
 - **Always refused:** `pkill`/`killall` or a `kill` that isn't an exact PID,
@@ -294,22 +297,22 @@ beside **Send** set the next job's:
 
 **Terminal** reopens the session in the chat's embedded terminal.
 
-## `bin/sb`
+## `bin/bridge`
 
 The harness's tools for its agents, not for you: everything it does has a
 place in the app. The orchestrator spawns and steers workers with it; workers
 declare their phase so a long wait doesn't look like a stall.
 
 ```bash
-bin/sb spawn --repo <path> --title "Fix CSV export" --brief-file brief.md
-bin/sb status --since 3h              # decisions waiting, to-dos, tasks, what happened
-bin/sb sessions | read <id>           # every chat in scope; one chat's briefing
-bin/sb followup <id> "also handle the empty case"   # queued if mid-turn
-bin/sb decide <d-id> "CSV" | dismiss <d-id> | defer <d-id> 2026-12-01
-bin/sb triage <slack-item-id> skip "social, no ask"   # the orchestrator's Slack verdicts
-bin/sb todo add <key> "Merge #42" | todo done <key>
-bin/sb relaunch <id> | cleanup <id> [--force]
-bin/sb declare waiting "CI, ~10 min"  # inside a worker: not stalled, just waiting
+bin/bridge spawn --repo <path> --title "Fix CSV export" --brief-file brief.md
+bin/bridge status --since 3h              # decisions waiting, to-dos, tasks, what happened
+bin/bridge sessions | read <id>           # every chat in scope; one chat's briefing
+bin/bridge followup <id> "also handle the empty case"   # queued if mid-turn
+bin/bridge decide <d-id> "CSV" | dismiss <d-id> | defer <d-id> 2026-12-01
+bin/bridge triage <slack-item-id> skip "social, no ask"   # the orchestrator's Slack verdicts
+bin/bridge todo add <key> "Merge #42" | todo done <key>
+bin/bridge relaunch <id> | cleanup <id> [--force]
+bin/bridge declare waiting "CI, ~10 min"  # inside a worker: not stalled, just waiting
 ```
 
 `cleanup` removes the worktree and keeps the branch. It refuses if there are
@@ -332,17 +335,18 @@ instructions.
 ## Layout
 
 ```
-index.js            dashboard server (Node stdlib only)
-lib/                env, store, jobs (sessions), harness (watcher), tasks, policy, memory,
-                    sources (GitHub PRs, Linear issues, dev-server ports)
-native/macos/       the desktop app (SwiftPM, SwiftUI); scripts/build-app.sh packages it
-bin/sb              harness CLI
-harness/            worker.md, orchestrator.md, hooks/guard.js
-templates/          the pipeline skill, rendered with values from .env
-legacy/             the previous browser UI (still served at :4319) and its WKWebView wrapper
-scripts/            install.sh, build-app.sh, emit.sh (run narration), launchd template
-test/               npm test: policy, report parsing, end-to-end with a stub agent
-data/               runtime state (gitignored)
+app/        the desktop app (SwiftPM, SwiftUI); scripts/build.sh packages it
+bin/        bridge, the agents' tool for the harness (spawn, status, declare, ...)
+data/       runtime state (gitignored; config.example.json is the template)
+docs/       Slack setup, its app manifest, screenshots
+hooks/      guard.js, the safety hook every session loads
+legacy/     the previous browser UI, still served at :4319
+prompts/    orchestrator.md and worker.md, the harness's instructions
+scripts/    install.sh, build.sh, demo.js, lint.js, emit.sh (run narration), launchd.plist, icon.swift
+server/     the Node server (stdlib only): index.js routes; jobs (sessions), harness, tasks,
+            watch (Slack), slack, sources (GitHub, Linear, ports), store, policy, memory, ...
+skills/     the Slack pipeline skill, rendered with values from .env (skills.local/ overrides it)
+test/       npm test: policy, report parsing, end to end against stub.js
 ```
 
 Design notes and the defaults chosen: [NOTES.md](NOTES.md).
@@ -361,9 +365,9 @@ npm test
 
 `npm run lint` syntax-checks every server script, parses the committed JSON
 and fails on any `require` outside Node's standard library. `npm test` runs a
-real server against a scratch repo using `test/stub-claude.js`, a fake agent.
+real server against a scratch repo using `test/stub.js`, a fake agent.
 It never touches `data/` and costs no usage. The app builds with
-`cd native/macos && swift build`.
+`cd app && swift build`.
 
 GitHub Actions runs all of this on every pull request and push to `main`
 (`.github/workflows/ci.yml`): lint, shellcheck and actionlint; the tests on
