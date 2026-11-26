@@ -33,7 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             if let last = pages.first(where: { $0.0 == "chat" }) {
                 pages.append(("collapsed", last.1))
                 if browser != nil { pages.append(("browser", last.1)) }
-                pages += [("split", last.1), ("split-details", last.1), ("split-wide", last.1), ("split4", last.1), ("messages", last.1), ("messages-split", last.1), ("messages-list", last.1), ("drop", last.1), ("terminal", last.1), ("task", last.1), ("task-live", last.1), ("task-bash", last.1)]
+                pages += [("split", last.1), ("split-details", last.1), ("split-wide", last.1), ("split4", last.1), ("messages", last.1), ("messages-split", last.1), ("messages-list", last.1), ("drop", last.1), ("terminal", last.1), ("console", last.1), ("task", last.1), ("task-live", last.1), ("task-bash", last.1)]
             }
             let hidden = model.sidebarHidden
             if let only = ProcessInfo.processInfo.environment["BRIDGE_SNAPSHOT_PAGES"]?.split(separator: ",").map(String.init) {
@@ -69,6 +69,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 if name == "drop" { model.paneDragActive = true; model.dropZone = model.panes.last.map { DropZone(pane: $0.id, edge: model.isSplit ? .center : .trailing) } }
                 else if model.paneDragActive { model.paneDragActive = false; model.dropZone = nil }
                 if name == "terminal", case .session(let id) = route { model.openTerminalTab(id) }
+                // The VS Code-style panel under the chat, with two shells.
+                if name == "console" {
+                    if ConsoleStore.shared.shells.isEmpty { ConsoleStore.shared.add(model.contextFolder); ConsoleStore.shared.add(NSHomeDirectory()) }
+                    ConsoleStore.shared.show()
+                } else if ConsoleStore.shared.open { ConsoleStore.shared.hide(model) }
                 // A finished subagent, a running one and a background command, each in its tab.
                 if name.hasPrefix("task"), case .session(let id) = route {
                     let tasks = model.agentTasks(id)
@@ -141,7 +146,7 @@ struct BridgeApp: App {
         .windowStyle(.hiddenTitleBar)
         .windowBackgroundDragBehavior(.enabled)
         .defaultSize(width: 1480, height: 920)
-        .commands { BridgeCommands(model: delegate.model); PaneCommands(model: delegate.model) }
+        .commands { BridgeCommands(model: delegate.model); PaneCommands(model: delegate.model); ConsoleCommands(model: delegate.model) }
 
         MenuBarExtra {
             MenuBarPanel().environment(delegate.model).preferredColorScheme(.dark)
@@ -197,12 +202,13 @@ struct BridgeCommands: Commands {
             Button { addSelection() } label: { Label("Add Selection to Chat", systemImage: "text.quote") }.keyboardShortcut("l")
         }
         CommandGroup(before: .sidebar) {
-            Button { model.toggleSidebar() } label: { Label("Toggle Sidebar", systemImage: "sidebar.left") }.keyboardShortcut("s", modifiers: [.command, .control])
+            Button { model.toggleSidebar() } label: { Label("Toggle Sidebar", systemImage: "sidebar.left") }.keyboardShortcut("b")
             Button { model.toggleDetails() } label: { Label("Toggle Details", systemImage: "sidebar.right") }.keyboardShortcut("i", modifiers: [.command, .option])
             Divider()
         }
         CommandMenu("Go") {
             Button { model.paletteOpen = true } label: { Label("Command Menu…", systemImage: "command") }.keyboardShortcut("k")
+            Button { model.paletteOpen = true } label: { Label("Quick Open…", systemImage: "magnifyingglass") }.keyboardShortcut("p")
             Divider()
             ForEach(Array(navOrder.enumerated()), id: \.offset) { i, item in
                 Button { model.navigate(item.route) } label: { Label(item.label, systemImage: item.icon) }.keyboardShortcut(KeyEquivalent(Character("\(i + 1)")))
@@ -214,7 +220,7 @@ struct BridgeCommands: Commands {
             Button { model.stepChat(1) } label: { Label("Next Chat", systemImage: "chevron.down") }.keyboardShortcut(.downArrow, modifiers: [.command, .option])
             Divider()
             Button { model.openOrchestrator(model.projectFilter) } label: { Label("Orchestrator", systemImage: "sparkles") }.keyboardShortcut("o")
-            Button { model.addProject() } label: { Label("Add Project…", systemImage: "folder.badge.plus") }.keyboardShortcut("p", modifiers: [.command, .shift])
+            Button { model.addProject() } label: { Label("Add Project…", systemImage: "folder.badge.plus") }
             Button { Task { await model.loadSources(refresh: true); await model.loadAll() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }.keyboardShortcut("r")
             Divider()
             Button { openURL(API.base.absoluteString) } label: { Label("Open Legacy Web UI", systemImage: "safari") }
@@ -236,13 +242,16 @@ struct RootView: View {
                     .environment(\.navNS, nav)
                     .transition(.move(edge: .leading).combined(with: .opacity))
             }
-            ZStack {
-                T.panel
-                detail
-                    .id(model.pageId)
-                    .transition(.page)
+            Workbench {
+                ZStack {
+                    T.panel
+                    detail
+                        .id(model.pageId)
+                        .transition(.page)
+                }
+                .animation(M.page, value: model.pageId)
             }
-            .animation(M.page, value: model.pageId)
+            .background(T.panel)
             // A page's own minimum width must never grow the window.
             .frame(minWidth: 0, maxWidth: .infinity)
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -252,6 +261,7 @@ struct RootView: View {
             .padding(.trailing, T.panelInset)
             .padding(.leading, model.sidebarHidden ? T.panelInset : 0)
         }
+        .onAppear { Keys.install(model) }
         .background(VisualEffect(material: .sidebar))
         .background(T.bg.opacity(0.55))
         .background(WindowChrome())
@@ -260,7 +270,7 @@ struct RootView: View {
         .ignoresSafeArea()
         .overlay(alignment: .topLeading) {
             HStack(spacing: 2) {
-                IconButton(icon: "sidebar.left", help: model.sidebarHidden ? "Show sidebar (⌃⌘S)" : "Hide sidebar (⌃⌘S)") { model.toggleSidebar() }
+                IconButton(icon: "sidebar.left", help: model.sidebarHidden ? "Show sidebar (⌘B)" : "Hide sidebar (⌘B)") { model.toggleSidebar() }
                 IconButton(icon: "chevron.left", help: "Back (⌘[)") { model.back() }
                     .disabled(model.backStack.isEmpty).opacity(model.backStack.isEmpty ? 0.35 : 1)
                 IconButton(icon: "chevron.right", help: "Forward (⌘])") { model.forward() }

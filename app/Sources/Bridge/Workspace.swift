@@ -45,7 +45,7 @@ struct Sidebar: View {
                     }
                     ForEach(model.projects) { p in ProjectSection(project: p) }
                     if model.projects.isEmpty {
-                        ActionRow(icon: "plus.rectangle.on.folder", label: "Add a project…", keys: "⇧⌘P") { model.addProject() }
+                        ActionRow(icon: "plus.rectangle.on.folder", label: "Add a project…", keys: "") { model.addProject() }
                     }
                 }
                 .padding(.horizontal, 10)
