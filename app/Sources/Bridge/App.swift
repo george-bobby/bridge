@@ -482,32 +482,23 @@ struct SessionNavItem: View {
     @Environment(AppModel.self) var model
     let session: Session
     @StateObject private var hover = Box(false)
+    @StateObject private var card = HoverIntent(delay: 0.6)
 
     var body: some View {
         let on = model.route == .session(session.id)
-        let meta = subtitle
-        HStack(alignment: meta == nil ? .center : .top, spacing: 10) {
-            Group {
-                if session.isOrchestrator {
-                    Image(systemName: "sparkles").font(.system(size: 12, weight: .medium)).foregroundStyle(T.purple)
-                } else {
-                    SessionIcon(session: session)
-                }
-            }
-            .frame(width: 18, height: 18)
+        let pr = model.pr(for: session.prUrl)
+        let twoLine = subtitle != nil || pr != nil || !session.prUrl.isEmpty
+        HStack(alignment: twoLine ? .top : .center, spacing: 10) {
+            icon.frame(width: 18, height: 18)
             VStack(alignment: .leading, spacing: 2) {
                 Text(session.isOrchestrator ? "Orchestrator" : session.title).font(T.ui(13, on ? .medium : .regular)).foregroundStyle(on ? T.text : T.text2).lineLimit(1)
-                if let meta {
-                    Text(meta.0).font(T.ui(11.5)).foregroundStyle(meta.1).lineLimit(1)
-                        .transition(.opacity)
-                }
+                metaLine(pr)
             }
             Spacer(minLength: 4)
-            if model.isAwaiting(session) { PulseDot(color: T.orange).padding(.top, meta == nil ? 0 : 6).transition(.scale.combined(with: .opacity)) }
-            else if session.unread && !on { Circle().fill(T.accent).frame(width: 6, height: 6).padding(.top, meta == nil ? 0 : 6).transition(.scale.combined(with: .opacity)) }
+            marker(twoLine)
         }
         .padding(.horizontal, 10)
-        .padding(.vertical, meta == nil ? 0 : 6)
+        .padding(.vertical, twoLine ? 6 : 0)
         .frame(minHeight: 30)
         .background(NavHighlight(on: on, hover: hover.v))
         .contentShape(Rectangle())
@@ -524,20 +515,76 @@ struct SessionNavItem: View {
             try? await Task.sleep(nanoseconds: 120_000_000)
             if !Task.isCancelled { model.prefetch(session.id) }
         }
+        .onHover { inside in if pr != nil { card.hover(inside) } }
+        .popover(isPresented: Binding(get: { card.open && pr != nil }, set: { if !$0 { card.hover(false) } }), arrowEdge: .trailing) {
+            if let pr { SessionHoverCard(session: session, pr: pr) }
+        }
         .onDrag { NSItemProvider(object: session.id as NSString) }
         .help("⌥-click or drag onto the chat to open side by side")
         .contextMenu { SessionMenu(session: session) }
     }
 
+    @ViewBuilder var icon: some View {
+        if session.isOrchestrator {
+            Image(systemName: "sparkles").font(.system(size: 12, weight: .medium)).foregroundStyle(T.purple)
+        } else {
+            SessionIcon(session: session)
+        }
+    }
+
+    @ViewBuilder func marker(_ twoLine: Bool) -> some View {
+        if model.isAwaiting(session) { PulseDot(color: T.orange).padding(.top, twoLine ? 6 : 0).transition(.scale.combined(with: .opacity)) }
+        else if session.unread && model.route != .session(session.id) { Circle().fill(T.accent).frame(width: 6, height: 6).padding(.top, twoLine ? 6 : 0).transition(.scale.combined(with: .opacity)) }
+    }
+
+    /// Under the title: what the session wants or is doing, else its PR
+    /// (state, number, CI) the way GitHub shows it.
+    @ViewBuilder func metaLine(_ pr: PullRequest?) -> some View {
+        if let meta = subtitle {
+            Text(meta.0).font(T.ui(11.5)).foregroundStyle(meta.1).lineLimit(1).transition(.opacity)
+        } else if let pr {
+            PRMetaLine(pr: pr).transition(.opacity)
+        } else if !session.prUrl.isEmpty {
+            HStack(spacing: 3) {
+                Image(systemName: "arrow.triangle.pull").font(.system(size: 10, weight: .semibold))
+                Text(verbatim: session.prNumber).font(T.ui(11.5)).monospacedDigit()
+            }
+            .foregroundStyle(T.text3)
+        }
+    }
+
     var subtitle: (String, Color)? {
         if model.isAwaiting(session) { return (session.askedFor.isEmpty ? "Waiting on you" : session.askedFor, T.orange) }
         if model.isLive(session) { return (session.statusLine.isEmpty ? "Working…" : session.statusLine, T.yellow.opacity(0.85)) }
-        if let pr = model.pr(for: session.prUrl) {
-            let checks = pr.failing ? "checks failing" : pr.checks == "SUCCESS" ? "checks pass" : pr.checks == "PENDING" ? "checks running" : ""
-            return (["#\(pr.number)", pr.state == "MERGED" ? "merged" : pr.review == "APPROVED" ? "approved" : "", checks].filter { !$0.isEmpty }.joined(separator: " · "), pr.failing ? T.red.opacity(0.9) : T.text3)
-        }
-        if !session.prUrl.isEmpty { return ("#\(session.prNumber)", T.text3) }
         return nil
+    }
+}
+
+/// "⇄ 12 Merged · ✓ passed" under a sidebar session, with the diff size
+/// while the PR is open.
+struct PRMetaLine: View {
+    let pr: PullRequest
+    var body: some View {
+        HStack(spacing: 5) {
+            PRBadge(pr: pr)
+            if ChecksBadge(pr: pr).look != nil {
+                Text("·").font(T.ui(11.5)).foregroundStyle(T.text3)
+                ChecksBadge(pr: pr)
+            }
+            if pr.open && pr.review == "APPROVED" {
+                Text("·").font(T.ui(11.5)).foregroundStyle(T.text3)
+                Text("approved").font(T.ui(11.5)).foregroundStyle(T.green)
+            }
+            Spacer(minLength: 4)
+            if pr.open && pr.additions + pr.deletions > 0 {
+                HStack(spacing: 4) {
+                    Text(verbatim: "+\(pr.additions)").foregroundStyle(T.green)
+                    Text(verbatim: "−\(pr.deletions)").foregroundStyle(T.red)
+                }
+                .font(T.ui(11)).monospacedDigit().fixedSize()
+            }
+        }
+        .lineLimit(1)
     }
 }
 
