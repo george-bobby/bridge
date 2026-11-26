@@ -425,18 +425,26 @@ async function createWorktree({ repo, branch, from: pick = "" }) {
   } catch (e) {
     if (/already exists/.test(e.message)) throw e;
   }
-  // The base: the default branch unless the task picked another (local
-  // `feature` or remote `origin/feature`).
+  // The base: the default branch unless the task picked another, local
+  // (`feature`) or remote-tracking (`upstream/feature`).
   const picked = String(pick || "").trim();
-  if (picked && (!/^[A-Za-z0-9._/-]{1,200}$/.test(picked) || picked.includes("..") || picked.startsWith("-"))) throw new Error(`bad base branch: ${picked}`);
-  const base = picked ? picked.replace(/^origin\//, "") : await defaultBranch(repo);
-  let from = picked && !picked.startsWith("origin/") ? picked : base;
+  if (picked) {
+    if (picked.startsWith("-")) throw new Error(`bad base branch: ${picked}`);
+    await git(["check-ref-format", "--allow-onelevel", `refs/heads/${picked}`], repo).catch(() => {
+      throw new Error(`bad base branch: ${picked}`);
+    });
+  }
+  const remotes = picked ? (await git(["remote"], repo).catch(() => "")).split("\n").filter(Boolean) : [];
+  const remote = remotes.find((r) => picked.startsWith(`${r}/`)) || "";
+  const base = picked ? (remote ? picked.slice(remote.length + 1) : picked) : await defaultBranch(repo);
+  const via = remote || "origin";
+  let from = picked || base;
   // Fresh base: fetch it, and branch from the remote copy so a stale local
   // copy never leaks into the task. No remote (scratch repos) or a branch
-  // that only exists here is fine: branch from the local one.
+  // that only exists here: branch from what was picked, if it's there.
   try {
-    await git(["fetch", "--quiet", "origin", base], repo, 120000);
-    from = `origin/${base}`;
+    await git(["fetch", "--quiet", via, base], repo, 120000);
+    from = `${via}/${base}`;
   } catch {
     if (picked) await git(["rev-parse", "--verify", "--quiet", `${from}^{commit}`], repo).catch(() => {
       throw new Error(`no branch called ${picked}`);
@@ -482,9 +490,9 @@ async function branches(repo) {
     const name = ref.replace(/^refs\/(heads|remotes)\//, "");
     // GitHub's merge-queue refs are machinery, not branches anyone starts from.
     if (remote && (name.endsWith("/HEAD") || !name.includes("/") || /\/gh-readonly-queue\//.test(`/${name}`))) continue;
-    // A remote branch with a local twin is the same choice.
+    // origin's copy of a local branch is the same choice; other remotes' aren't.
     const short = remote ? name.replace(/^[^/]+\//, "") : name;
-    if (remote && seen.has(short)) continue;
+    if (remote && name.startsWith("origin/") && seen.has(short)) continue;
     if (!remote) seen.add(name);
     list.push({ name, remote, date: Number(when) || 0, subject: String(subject || "").slice(0, 120), worktree: remote ? "" : inTree.get(name) || "", default: short === def });
   }

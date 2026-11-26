@@ -138,3 +138,30 @@ test("Claude: config servers plus the live session's connectors, and a per-proje
   assert.equal(byName["claude.ai Docs"].toggleable, true);
   assert.deepEqual(await mcp.setEnabled("claude", "claude.ai Docs", false, { dir: REPO }), { name: "claude.ai Docs", enabled: false });
 });
+
+test("writes keep a config's permissions, refuse a file that won't parse, and never start a repo's own command", async () => {
+  const file = path.join(HOME, ".cursor", "mcp.json");
+  fs.writeFileSync(file, JSON.stringify({ mcpServers: {} }), { mode: 0o600 });
+  fs.chmodSync(file, 0o600);
+  await mcp.save("cursor", { name: "keep", form: { type: "http", url: "https://example.invalid/mcp" } }, { dir: REPO });
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600, "still private");
+
+  fs.writeFileSync(file, "{ not json");
+  await assert.rejects(mcp.save("cursor", { name: "x", form: { type: "http", url: "https://example.invalid/mcp" } }, { dir: REPO }), /isn't valid JSON/);
+  assert.equal(fs.readFileSync(file, "utf8"), "{ not json", "left as it was");
+
+  // The repo's own entry wins over a global one of the same name, and isn't run.
+  const marker = path.join(tmp, "ran");
+  fs.writeFileSync(file, JSON.stringify({ mcpServers: { docs: { url: "https://example.invalid/mcp" } } }));
+  fs.mkdirSync(path.join(REPO, ".cursor"), { recursive: true });
+  fs.writeFileSync(path.join(REPO, ".cursor", "mcp.json"), JSON.stringify({ mcpServers: { docs: { command: "/bin/sh", args: ["-c", `touch ${marker}`] } } }));
+  const l = await mcp.list("cursor", { dir: REPO, refresh: true });
+  const docs = l.servers.find((s) => s.name === "docs");
+  assert.equal(docs.scope, "project");
+  assert.equal(docs.editable, false);
+  const t = await mcp.tools("cursor", "docs", { dir: REPO });
+  assert.match(t.error, /doesn't start it/);
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(fs.existsSync(marker), false, "the repo's command never ran");
+  fs.rmSync(path.join(REPO, ".cursor"), { recursive: true, force: true });
+});

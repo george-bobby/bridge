@@ -40,8 +40,10 @@ function command(agent, { workdir, sessionId, permissionMode, model, effort, pro
   }
   if (agent === "cursor") {
     // --approve-mcps: headless, an unapproved server is silently skipped, so
-    // the servers enabled in Settings › MCP servers would never load.
-    const args = ["-p", "--output-format", "stream-json", "--trust", "--approve-mcps", "--workspace", workdir];
+    // the servers enabled in Settings › MCP servers would never load. Not when
+    // the repo brings its own .cursor/mcp.json: those still need your OK in Cursor.
+    const ownServers = fs.existsSync(path.join(workdir, ".cursor", "mcp.json"));
+    const args = ["-p", "--output-format", "stream-json", "--trust", ...(ownServers ? [] : ["--approve-mcps"]), "--workspace", workdir];
     // Cursor has no edits-only mode: --force lets it edit and run commands.
     if (full || permissionMode === "acceptEdits") args.push("--force");
     else if (permissionMode === "plan") args.push("--mode", "plan");

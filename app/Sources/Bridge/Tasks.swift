@@ -527,6 +527,8 @@ struct CommandTaskBody: View {
     let task: AgentTask
     let runId: String
     @StateObject private var output = Box<JSON>(.null)
+    @StateObject private var failed = Box("")
+    @StateObject private var attempt = Box(0)
 
     var body: some View {
         let t = task
@@ -552,17 +554,27 @@ struct CommandTaskBody: View {
                     Spacer()
                     if !output.v["text"].string.isEmpty { IconButton(icon: "doc.on.doc", help: "Copy output", size: 24) { copyToPasteboard(output.v["text"].string) } }
                 }
-                OutputPane(text: TaskOutput.clean(output.v["text"].string), running: t.running, loaded: !output.v.isNull, exists: output.v["exists"].bool)
+                if !failed.v.isEmpty && !t.running {
+                    MCPLoadError(title: "Couldn't read the output", message: failed.v) { attempt.v += 1 }
+                } else {
+                    OutputPane(text: TaskOutput.clean(output.v["text"].string), running: t.running, loaded: !output.v.isNull, exists: output.v["exists"].bool)
+                }
             }
             if !t.summary.isEmpty && !t.running {
                 Label(t.summary, systemImage: t.status == "completed" ? "checkmark.circle" : "exclamationmark.triangle")
                     .font(T.ui(12)).foregroundStyle(t.status == "completed" ? T.text2 : T.orange)
             }
         }
-        .task(id: "\(t.id)|\(t.status)") {
+        .task(id: "\(t.id)|\(t.status)|\(attempt.v)") {
             // Tail while it runs; one last read once it's finished.
             repeat {
-                if let o = try? await API.get("/api/runs/\(API.q(runId))/tasks/\(API.q(t.id))/output"), o != output.v { output.v = o }
+                do {
+                    let o = try await API.get("/api/runs/\(API.q(runId))/tasks/\(API.q(t.id))/output")
+                    if o != output.v { output.v = o }
+                    failed.v = ""
+                } catch {
+                    failed.v = error.localizedDescription
+                }
                 if !t.running { break }
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
             } while !Task.isCancelled

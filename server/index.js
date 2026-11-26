@@ -515,7 +515,8 @@ async function handle(req, res) {
       const runId = url.searchParams.get("run") || body.run || "";
       const proj = projects.get(String(url.searchParams.get("project") || body.project || ""));
       const run = runId ? store.loadRun(runId) : null;
-      const dir = run ? jobs.sessionWorkdir(run, store.readConfig()) : proj && proj.path ? proj.path : jobs.resolveWorkdir(store.readConfig());
+      // Where the chat's next turn runs: that's what its agent loads servers for.
+      const dir = run ? jobs.resolveWorkdir(store.readConfig(), run) : proj && proj.path ? proj.path : jobs.resolveWorkdir(store.readConfig());
       const refresh = url.searchParams.get("refresh") === "1";
       const ok = (extra) => sendJson(res, 200, { ok: true, dir, ...extra });
       if (req.method === "GET" && p === "/api/mcp") return ok(await mcp.all({ dir, refresh }));
@@ -527,7 +528,7 @@ async function handle(req, res) {
       if (req.method === "POST" && !name) return ok(await mcp.save(agent, { name: body.name, original: body.original || "", form: body.form || {} }, { dir }));
       if (req.method === "GET" && verb === "tools") return ok(await mcp.tools(agent, name, { dir, refresh }));
       if (req.method === "POST" && verb === "enabled") return ok(await mcp.setEnabled(agent, name, body.enabled !== false, { dir }));
-      if (req.method === "POST" && verb === "login") return ok(mcp.login(agent, name, { dir }));
+      if (req.method === "POST" && verb === "login") return ok(await mcp.login(agent, name, { dir }));
       if (req.method === "DELETE" && name && !verb) return ok(await mcp.remove(agent, name, { dir }));
       return sendJson(res, 405, { ok: false, error: "method not allowed" });
     } catch (e) {
@@ -785,19 +786,23 @@ async function handle(req, res) {
       return sendJson(res, sent ? 200 : 409, sent ? { ok: true } : { ok: false, error: "the session has ended" });
     }
     if (req.method === "GET" && taskMatch[3] === "output") {
-      const file = task.outputFile || "";
+      // Only the file Claude named for this task: `<task id>.output`.
+      const file = task.outputFile && path.basename(task.outputFile) === `${task.id}.output` ? task.outputFile : "";
       let text = "";
       let size = 0;
+      let fd = null;
       try {
         const st = fs.statSync(file);
         size = st.size;
         const cap = 256 * 1024;
-        const fd = fs.openSync(file, "r");
+        fd = fs.openSync(file, "r");
         const buf = Buffer.alloc(Math.min(cap, size));
-        fs.readSync(fd, buf, 0, buf.length, Math.max(0, size - cap));
-        fs.closeSync(fd);
-        text = buf.toString("utf8");
-      } catch {}
+        const n = fs.readSync(fd, buf, 0, buf.length, Math.max(0, size - cap));
+        text = buf.subarray(0, n).toString("utf8");
+      } catch {
+      } finally {
+        if (fd != null) fs.closeSync(fd);
+      }
       return sendJson(res, 200, { ok: true, task: task.id, text, size, truncated: size > 256 * 1024, exists: !!file && fs.existsSync(file) });
     }
     return sendJson(res, 405, { ok: false, error: "method not allowed" });

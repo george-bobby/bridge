@@ -215,7 +215,7 @@ const say = (text) => ({ kind: "text", text, streaming: false });
 const tool = (name, detail, result = "", ok = true) => ({ kind: "tool", name, detail, result, ok, resultLines: result ? result.split("\n").length : 0 });
 /** Where the demo's background command writes; seed() fills it in. */
 let demoDir = require("os").tmpdir();
-const BG_OUT = () => path.join(demoDir, "demo-bg.output");
+const BG_OUT = () => path.join(demoDir, "tasks", "bk9x2m4q.output");
 const csvTasks = () => [
   {
     id: "a3f9c2e1", toolUseId: "tu-demo-callers", type: "agent", subagentType: "Explore", description: "Find every caller of paginateRows", status: "completed",
@@ -475,7 +475,7 @@ function seed(dataDir) {
   fs.mkdirSync(tdir, { recursive: true });
   fs.writeFileSync(marker, "Demo data from server/demo.js. Rebuilt on every `npm run demo`.\n");
   writeSessions(dataDir);
-  fs.writeFileSync(path.join(dataDir, "demo-bg.output"), [" RUN  v3.2.4 /Users/you/Development/storefront", "", " ✓ src/export/csv.test.ts (6 tests) 41ms", " ✓ src/export/xlsx.test.ts (4 tests) 58ms", " ✗ src/export/paginate.test.ts > paginateRows > emits the final partial page", "   → expected [ [0, 20], [20, 40] ] to deeply equal [ [0, 20], [20, 40], [40, 41] ]", "", " Test Files  1 failed | 2 passed (3)", "      Tests  1 failed | 10 passed (11)", "", " Watching for file changes..."].join("\n") + "\n");
+  fs.writeFileSync(path.join(tdir, "bk9x2m4q.output"), [" RUN  v3.2.4 /Users/you/Development/storefront", "", " ✓ src/export/csv.test.ts (6 tests) 41ms", " ✓ src/export/xlsx.test.ts (4 tests) 58ms", " ✗ src/export/paginate.test.ts > paginateRows > emits the final partial page", "   → expected [ [0, 20], [20, 40] ] to deeply equal [ [0, 20], [20, 40], [40, 41] ]", "", " Test Files  1 failed | 2 passed (3)", "      Tests  1 failed | 10 passed (11)", "", " Watching for file changes..."].join("\n") + "\n");
   for (const t of tasks) {
     fs.mkdirSync(path.join(tdir, t.id), { recursive: true });
     fs.writeFileSync(path.join(tdir, t.id, "meta.json"), JSON.stringify({ kind: "task", repo: REPO, base: "main", createdAt: now() - DAY, ...t }, null, 1));

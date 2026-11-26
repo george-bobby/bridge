@@ -84,6 +84,10 @@ final class MCPStore: ObservableObject {
     @Published var loading: Set<String> = []
     @Published var busy: Set<String> = []
     @Published var tools: [String: JSON] = [:]
+    /// Loads that failed outright (the server's unreachable), by list key.
+    @Published var errors: [String: String] = [:]
+    /// The newest load per key: an older answer landing late is dropped.
+    private var seq: [String: Int] = [:]
     @Published var selected = UserDefaults.standard.string(forKey: "mcp.agent") ?? "claude" {
         didSet { UserDefaults.standard.set(selected, forKey: "mcp.agent") }
     }
@@ -100,12 +104,28 @@ final class MCPStore: ObservableObject {
     func servers(_ agent: AgentKind, run: String? = nil) -> [MCPServer] { list(agent, run: run)["servers"].array.map(MCPServer.init) }
     func checking(_ agent: AgentKind, run: String? = nil) -> Bool { list(agent, run: run)["checking"].bool || loading.contains(Self.key(agent, run)) }
 
-    func load(_ agent: AgentKind, run: String? = nil, refresh: Bool = false) async {
+    /// Why the agent's list couldn't be read, if it couldn't: no answer, or the agent's CLI failed.
+    func error(_ agent: AgentKind, run: String? = nil) -> String? {
+        errors[Self.key(agent, run)] ?? list(agent, run: run)["error"].nonEmpty
+    }
+
+    @discardableResult
+    func load(_ agent: AgentKind, run: String? = nil, refresh: Bool = false) async -> Bool {
         let k = Self.key(agent, run)
+        seq[k, default: 0] += 1
+        let mine = seq[k]!
         if refresh { loading.insert(k) }
-        defer { if refresh { loading.remove(k) } }
-        if let out = try? await API.get("/api/mcp/\(agent.rawValue)\(Self.query(run, refresh: refresh))") {
+        defer { if refresh && seq[k] == mine { loading.remove(k) } }
+        do {
+            let out = try await API.get("/api/mcp/\(agent.rawValue)\(Self.query(run, refresh: refresh))")
+            guard seq[k] == mine else { return true }
+            errors[k] = nil
             if lists[k] != out { withAnimation(M.snappy) { lists[k] = out } }
+            return true
+        } catch {
+            guard seq[k] == mine else { return false }
+            errors[k] = error.localizedDescription
+            return false
         }
     }
 
@@ -122,14 +142,17 @@ final class MCPStore: ObservableObject {
             let run = k.contains("|") ? String(k.split(separator: "|", maxSplits: 1)[1]) : nil
             Task { await load(a, run: run) }
         }
-        tools = tools.filter { !$0.key.hasPrefix("\(a.rawValue)|") }
     }
+
+    /// Tools are per server and per folder: a repo can override a server.
+    static func toolKey(_ s: MCPServer, _ run: String?) -> String { "\(s.id)|\(run ?? "")" }
 
     func setEnabled(_ s: MCPServer, _ on: Bool, run: String?, model: AppModel) async {
         busy.insert(s.id)
         defer { busy.remove(s.id) }
         // Optimistic: the switch moves now; a refusal puts it back.
         let k = Self.key(s.agent, run)
+        let before = lists[k]
         if var o = lists[k]?.object, var arr = o["servers"]?.array, let i = arr.firstIndex(where: { $0["name"].string == s.name }) {
             var row = arr[i].object
             row["enabled"] = .bool(on)
@@ -138,11 +161,14 @@ final class MCPStore: ObservableObject {
             o["servers"] = .arr(arr)
             withAnimation(M.snappy) { lists[k] = .obj(o) }
         }
+        var ok = false
         await model.act {
             try await API.post("/api/mcp/\(s.agent.rawValue)/\(API.q(s.name))/enabled\(Self.query(run))", ["enabled": on])
+            ok = true
             model.say(on ? "Turned on \(s.name) for \(s.agent.label)" : "Turned off \(s.name) for \(s.agent.label)")
         }
-        await load(s.agent, run: run)
+        // Refused and the list can't be reread: show the switch where it was.
+        if !(await load(s.agent, run: run)) && !ok { withAnimation(M.snappy) { lists[k] = before } }
         if run != nil { await load(s.agent) }
     }
 
@@ -171,10 +197,14 @@ final class MCPStore: ObservableObject {
     }
 
     func loadTools(_ s: MCPServer, run: String?, refresh: Bool = false) async {
-        if tools[s.id] != nil && !refresh { return }
-        if refresh { tools[s.id] = nil }
-        let out = (try? await API.get("/api/mcp/\(s.agent.rawValue)/\(API.q(s.name))/tools\(Self.query(run, refresh: refresh))")) ?? .obj(["error": .str("Couldn't reach the server")])
-        tools[s.id] = out
+        let k = Self.toolKey(s, run)
+        if tools[k] != nil && !refresh { return }
+        if refresh { tools[k] = nil }
+        do {
+            tools[k] = try await API.get("/api/mcp/\(s.agent.rawValue)/\(API.q(s.name))/tools\(Self.query(run, refresh: refresh))")
+        } catch {
+            tools[k] = .obj(["tools": .arr([]), "error": .str(error.localizedDescription)])
+        }
     }
 }
 
@@ -400,7 +430,9 @@ struct AgentServers: View {
         let servers = store.servers(agent).filter { Prefs.hit(q, $0.name, $0.line, $0.source, agent.label, "mcp server tools") }
         let groups = ["Yours", "In this project", "From plugins", "claude.ai connectors"]
         VStack(alignment: .leading, spacing: 0) {
-            if q.isEmpty && l.isNull {
+            if q.isEmpty, let err = store.error(agent) {
+                MCPLoadError(message: err) { Task { await store.load(agent, refresh: true) } }.padding(.bottom, 28)
+            } else if q.isEmpty && l.isNull {
                 ProgressView().controlSize(.small).frame(maxWidth: .infinity).padding(40)
             } else if q.isEmpty && !l["installed"].bool {
                 notInstalled
@@ -523,6 +555,28 @@ struct MCPRow: View {
     }
 }
 
+/// The list couldn't be read: why, and a way to try again.
+struct MCPLoadError: View {
+    var title = "Couldn't load the servers"
+    let message: String
+    let retry: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 13)).foregroundStyle(T.orange)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(T.ui(12.5, .medium)).foregroundStyle(T.text)
+                Text(message).font(T.ui(11.5)).foregroundStyle(T.text3).lineLimit(3).fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            Button("Retry", action: retry).buttonStyle(LButton())
+        }
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(T.orange.opacity(0.06)))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(T.orange.opacity(0.25), lineWidth: 1))
+    }
+}
+
 // MARK: - Editor
 
 struct KV: Identifiable, Equatable {
@@ -561,7 +615,9 @@ final class MCPForm: ObservableObject {
 
     /// `npx -y pkg --flag "a b"` pasted whole into Command: split it up.
     func splitCommand() {
-        guard args.isEmpty, command.contains(" ") else { return }
+        let raw = command.trimmingCharacters(in: .whitespaces)
+        // A real path with a space in it ("/Applications/My App/bin/mcp") is one command.
+        guard args.isEmpty, raw.contains(" "), !FileManager.default.isExecutableFile(atPath: (raw as NSString).expandingTildeInPath) else { return }
         var parts: [String] = []
         var cur = ""
         var quote: Character? = nil
@@ -748,6 +804,8 @@ struct MCPEditor: View {
                 }
             }
             for a in done { await MCPStore.shared.load(a) }
+            // A retry after a partial failure only tries the agents still missing it.
+            if !form.error.isEmpty, editing == nil { for a in done { form.targets.remove(a) } }
             form.saving = false
             if form.error.isEmpty {
                 model.say(editing != nil ? "Saved \(name)" : "Added \(name) to \(done.map(\.label).joined(separator: ", "))")
@@ -819,7 +877,7 @@ struct MCPToolsSheet: View {
     @StateObject private var query = Box("")
     @StateObject private var open = Box<Set<String>>([])
 
-    var data: JSON? { store.tools[server.id] }
+    var data: JSON? { store.tools[MCPStore.toolKey(server, run)] }
     /// Fits a short list; scrolls past a screenful.
     var height: CGFloat {
         guard let d = data, !d["tools"].array.isEmpty else { return 300 }
@@ -1033,7 +1091,9 @@ struct MCPPanel: View {
             }
             .padding(.horizontal, 14).frame(height: 42)
             Hairline()
-            if store.list(agent, run: runId).isNull {
+            if let err = store.error(agent, run: runId) {
+                MCPLoadError(message: err) { Task { await store.load(agent, run: runId, refresh: true) } }.padding(10)
+            } else if store.list(agent, run: runId).isNull {
                 ProgressView().controlSize(.small).frame(height: 80)
             } else if servers.isEmpty {
                 Text("\(agent.label) has no MCP servers yet").font(T.ui(12)).foregroundStyle(T.text3).frame(height: 70)

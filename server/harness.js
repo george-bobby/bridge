@@ -488,6 +488,13 @@ async function cleanup(taskId, { force = false } = {}) {
   if (jobs.isRunning(taskId)) throw new Error("stop the worker before cleaning up its worktree");
   const meta = tasks.readMeta(taskId);
   if (!meta) throw new Error(`no such task: ${taskId}`);
+  // Another live task working in this checkout (it adopted it): leave it be.
+  const borrower = meta.worktree && !meta.adopted ? tasks.list().find((t) => t.id !== taskId && t.adopted && t.worktree && path.resolve(t.worktree) === path.resolve(meta.worktree) && !["cleaned", "deleted"].includes(t.status)) : null;
+  if (borrower) {
+    const err = new Error(`refusing: ${borrower.id} is working in ${meta.worktree}. Clean that task up first.`);
+    err.refused = true;
+    throw err;
+  }
   if (!meta.worktree || meta.adopted) {
     tasks.writeMeta(taskId, { status: "cleaned", cleanedAt: now() });
     return { removed: false, note: meta.adopted ? `${meta.adopted === "local" ? "the main checkout" : "an existing worktree"} isn't Bridge's to remove: left in place` : "no worktree recorded" };
