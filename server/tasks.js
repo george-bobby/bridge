@@ -587,7 +587,22 @@ async function removeWorktree({ repo, worktree, force }) {
   await git(args, repo, 60000);
 }
 
+/** A task's title from its brief: the first line that says something, not a
+ *  pasted file path (a screenshot dropped in ahead of the ask). */
+const PATH_LINE = /^["']?(?:file:\/\/|~\/|\/)\S.*\.[A-Za-z0-9]{1,5}["']?$/;
+function titleFrom(text) {
+  const lines = String(text || "").split("\n").map((l) => l.trim().replace(/^#+\s*/, "")).filter(Boolean);
+  const pick = lines.find((l) => !PATH_LINE.test(l)) || lines[0] || "task";
+  return pick.slice(0, 80).trim();
+}
+
+/** A stored title that is only a path (tasks named before titleFrom) reads
+ *  as its brief's first real line instead. */
+const shownTitle = (title, brief) => (PATH_LINE.test(String(title || "").trim()) && brief ? titleFrom(brief) : title || "");
+
 module.exports = {
+  titleFrom,
+  shownTitle,
   DIR,
   FILES,
   REPORT_STATUSES,

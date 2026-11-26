@@ -1740,7 +1740,12 @@ function wire(child, runId, msgId, kind) {
   };
 
   // A stop you asked for is "stopped", not a crash with SIGTERM's exit code.
-  child.on("close", (code) => finish((running.get(runId) || {}).stopped ? "stopped" : code === 0 ? "closed" : `exit ${code}`));
+  const end = (code) => finish((running.get(runId) || {}).stopped ? "stopped" : code === 0 ? "closed" : `exit ${code}`);
+  child.on("close", end);
+  // A tool's subprocess that inherited the session's stdout keeps the pipe,
+  // and so `close`, open after the session itself has exited.
+  const owner = running.get(runId);
+  child.on("exit", (code) => setTimeout(() => running.get(runId) === owner && end(code), 5000).unref());
   child.on("error", (err) => {
     stderr += String(err.message || err);
     finish("spawn failed");
@@ -1866,8 +1871,10 @@ function stopTask(runId, taskId) {
 }
 
 function stop(runId) {
+  // Messages queued behind this turn would start the next one the moment it ends.
+  pending.delete(runId);
   const job = running.get(runId);
-  if (!job) return false;
+  if (!job) return settleStopped(runId);
   job.stopped = true;
   job.child.kill("SIGTERM");
   // SIGTERM is usually enough; a wedged session gets 3s then the hammer.
@@ -1877,6 +1884,42 @@ function stop(runId) {
     } catch {}
   }, 3000).unref();
   return true;
+}
+
+/** Stop with no process behind it: a queued task, or a chat whose file still
+ *  says "running" after its process died. Settle it so Stop always ends it. */
+function settleStopped(runId) {
+  let changed = false;
+  const meta = tasks.readMeta(runId);
+  if (meta && meta.status === "queued") {
+    tasks.writeMeta(runId, { status: "stopped" });
+    tasks.appendEvent({ taskId: runId, name: "stopped", text: "stopped from the dashboard before it started" });
+    changed = true;
+  }
+  const run = store.loadRun(runId);
+  if (run) {
+    let dirty = false;
+    if (run.action === "running") {
+      run.action = "pending";
+      run.startedBy = "";
+      dirty = true;
+    }
+    for (const m of run.messages || []) {
+      if (m.role === "assistant" && m.state === "running") {
+        m.state = "stopped";
+        dirty = true;
+      }
+    }
+    if (dirty) {
+      store.saveRun(run);
+      changed = true;
+    }
+  }
+  if (changed) {
+    bus.broadcast("run-updated", { runId });
+    bus.broadcast("runs", { runs: store.listRunSummaries() });
+  }
+  return changed;
 }
 
 /* ---------------------------------------------------------------- terminal */

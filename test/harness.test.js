@@ -432,6 +432,21 @@ test("no cap: every task starts at once, even past an old saved maxWorkers", asy
   await waitFor(statusIs(c.taskId, "ready-for-review"), 20000, "third task ran");
 });
 
+test("a stale running chat with no process behind it stops when asked", async () => {
+  const t = await spawnTask("ghost", "stub:report=ready-for-review");
+  await waitFor(statusIs(t.taskId, "ready-for-review"), 15000);
+  await waitFor(idle(t.taskId), 5000, "idle");
+  const file = path.join(DATA, "runs", `${t.taskId}.json`);
+  const run = JSON.parse(fs.readFileSync(file, "utf8"));
+  run.action = "running";
+  run.messages.filter((m) => m.role === "assistant").pop().state = "running";
+  fs.writeFileSync(file, JSON.stringify(run));
+  assert.equal((await api("POST", `/api/runs/${t.taskId}/stop`)).ok, true);
+  const after = (await api("GET", `/api/runs/${t.taskId}`)).run;
+  assert.equal(after.action, "pending");
+  assert.equal(after.messages.filter((m) => m.role === "assistant").pop().state, "stopped");
+});
+
 test("Slack replies filed into a chat reach its agent on the next turn, once", async () => {
   const t = await spawnTask("thread news", "stub:report=ready-for-review");
   await waitFor(statusIs(t.taskId, "ready-for-review"), 15000);
