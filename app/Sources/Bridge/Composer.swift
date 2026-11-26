@@ -712,12 +712,12 @@ struct ContextButton: View {
 
     var body: some View {
         let msgs = run["messages"].array
-        let last = msgs.last { $0["role"].string == "assistant" && $0["usage"]["input"].int + $0["usage"]["cacheRead"].int > 0 }
         let window = msgs.last { $0["contextWindow"].double > 0 }?["contextWindow"].double ?? 200_000
+        let last = msgs.last { $0["role"].string == "assistant" && Self.prompt($0["usage"], window: window) > 0 }
         let worked = msgs.contains { $0["role"].string == "assistant" && ["done", "stopped"].contains($0["state"].string) }
         if last != nil || worked {
             let m = last ?? .null
-            let used = m["usage"]["input"].double + m["usage"]["cacheRead"].double + m["usage"]["cacheWrite"].double
+            let used = Self.prompt(m["usage"], window: window)
             let f = min(1, used / max(window, 1))
             let tone = f > 0.85 ? T.red : f > 0.65 ? T.orange : T.text2
             Button { open.v.toggle() } label: {
@@ -740,6 +740,15 @@ struct ContextButton: View {
             .popover(isPresented: $open.v, arrowEdge: .top) { panel(used: used, window: window, f: f, tone: tone, compacted: m["compact"]) }
             .onChange(of: data.snapshotOpen) { if data.snapshotOpen == "context" { open.v = true } else if open.v && !data.snapshotOpen.isEmpty { open.v = false } }
         }
+    }
+
+    /// The last API call's prompt size (`usage.context`). The other usage fields
+    /// sum every call in the turn, so they only stand in when that sum still fits
+    /// the window (one-call turns, agents that don't report per call).
+    static func prompt(_ u: JSON, window: Double) -> Double {
+        if u["context"].double > 0 { return u["context"].double }
+        let sum = u["input"].double + u["cacheRead"].double + u["cacheWrite"].double
+        return sum <= window ? sum : 0
     }
 
     func panel(used: Double, window: Double, f: Double, tone: Color, compacted: JSON) -> some View {

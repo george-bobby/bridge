@@ -163,13 +163,13 @@ async function stream(n) {
   ev({ type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: '{"command":' } });
   ev({ type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: '"ls"}' } });
   ev({ type: "content_block_stop", index: 1 });
-  ev({ type: "message_delta", usage: { output_tokens: 40 } });
+  ev({ type: "message_delta", usage: { output_tokens: 40, input_tokens: 10, cache_read_input_tokens: 9000, cache_creation_input_tokens: 500 } });
   out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "tu-stream", name: "Bash", input: { command: "ls" } }] } });
   await sleep(30);
   out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "tu-stream", content: "a.txt\nb.txt" }] } });
   ev({ type: "message_start" });
   await text(0);
-  ev({ type: "message_delta", usage: { output_tokens: 30 } });
+  ev({ type: "message_delta", usage: { output_tokens: 30, input_tokens: 5, cache_read_input_tokens: 9500, cache_creation_input_tokens: 200 } });
 }
 
 async function tasks() {
