@@ -361,4 +361,10 @@ test("import a chat from an agent's own history: a worker in its folder that res
   const crun = (await get(`/api/runs/${codex.taskId}`)).run;
   assert.deepStrictEqual([crun.opts.agent, crun.agentSessions.codex], ["codex", fx.CODEX_ID]);
   assert.strictEqual((await post("/api/history/import", { agent: "nope", id: "x" })).status, 400);
+  // A chat whose folder is gone is listed as such and can't be carried on elsewhere.
+  fs.renameSync(repo, `${repo}-moved`);
+  assert.strictEqual((await get("/api/history")).chats.find((c) => c.agent === "codex").gone, true);
+  const devinOrCursor = (await get("/api/history")).chats.find((c) => c.agent === "cursor" || c.agent === "devin");
+  if (devinOrCursor) assert.match((await post("/api/history/import", { agent: devinOrCursor.agent, id: devinOrCursor.id })).error, /folder this chat ran in is gone/);
+  fs.renameSync(`${repo}-moved`, repo);
 });

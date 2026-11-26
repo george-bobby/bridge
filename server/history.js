@@ -543,11 +543,14 @@ function cursorRead(id) {
 const devinDb = () => path.join(HOME(), ".local", "share", "devin", "cli", "sessions.db");
 
 function devinSummaries() {
-  const rows = query(devinDb(), "select id, working_directory, title, created_at, last_activity_at from sessions where hidden = 0 order by last_activity_at desc limit 400");
+  // One query, first prompts included: the CLI fallback is a subprocess per query.
+  const rows = query(
+    devinDb(),
+    "select s.id, s.working_directory, s.title, s.created_at, s.last_activity_at, (select p.content from prompt_history p where p.session_id = s.id and p.is_shell = 0 order by p.timestamp asc limit 1) as first from sessions s where s.hidden = 0 order by s.last_activity_at desc limit 400"
+  );
   const out = [];
   for (const r of rows) {
-    const first = query(devinDb(), "select content from prompt_history where session_id = ? and is_shell = 0 order by timestamp asc limit 1", [r.id])[0];
-    const prompt = first ? cleanPrompt(first.content) : "";
+    const prompt = r.first ? cleanPrompt(r.first) : "";
     const title = r.title || prompt;
     if (!title) continue;
     out.push({ agent: "devin", id: r.id, title: clip(oneLine(title), 90), prompt: clip(oneLine(prompt || title), 240), cwd: r.working_directory || "", branch: "", createdAt: secs(r.created_at), updatedAt: secs(r.last_activity_at), size: 0 });
@@ -637,7 +640,7 @@ function list({ agents = AGENTS, q = "", runs = [], limit = 800 } = {}) {
     counts[a] = items.length;
     for (const it of items) {
       delete it.file;
-      out.push({ ...it, runId: have.get(`${a}:${it.id}`) || "" });
+      out.push({ ...it, runId: have.get(`${a}:${it.id}`) || "", gone: !it.cwd || !stat(it.cwd) });
     }
   }
   const words = String(q || "").toLowerCase().split(/\s+/).filter(Boolean);
@@ -654,4 +657,31 @@ function read(agent, id) {
   throw new Error(`unknown agent: ${agent}`);
 }
 
-module.exports = { list, read, known, AGENTS, cleanPrompt, isNoise, cursorOrder };
+/**
+ * list/read off the server's event loop: a scan reads hundreds of files (and,
+ * on the sqlite3 fallback, runs subprocesses), which would otherwise stall
+ * every other request and every worker's stream while it runs.
+ */
+function inWorker(fn, args) {
+  const { Worker } = require("worker_threads");
+  return new Promise((resolve, reject) => {
+    const w = new Worker(__filename, { workerData: { fn, args }, env: process.env });
+    w.once("message", (m) => (m.error ? reject(new Error(m.error)) : resolve(m.value)));
+    w.once("error", reject);
+    w.once("exit", (code) => code !== 0 && reject(new Error(`history worker exited with ${code}`)));
+  });
+}
+const listAsync = (opts) => inWorker("list", opts);
+const readAsync = (agent, id) => inWorker("read", [agent, id]);
+
+const { isMainThread, parentPort, workerData } = require("worker_threads");
+if (!isMainThread && workerData && workerData.fn) {
+  try {
+    const value = workerData.fn === "list" ? list(workerData.args) : read(...workerData.args);
+    parentPort.postMessage({ value });
+  } catch (e) {
+    parentPort.postMessage({ error: String(e.message || e) });
+  }
+}
+
+module.exports = { list, read, listAsync, readAsync, known, AGENTS, cleanPrompt, isNoise, cursorOrder };
