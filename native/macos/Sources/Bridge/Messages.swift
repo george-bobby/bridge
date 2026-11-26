@@ -200,7 +200,7 @@ struct PromptList: View {
                 .onAppear { if let cur { proxy.scrollTo(cur, anchor: .center) } }
             }
         }
-        .frame(width: 300)
+        .frame(minWidth: 160, maxWidth: 300)
         .frame(maxHeight: 380)
         .fixedSize(horizontal: false, vertical: true)
         .floatingPanel(radius: 12)

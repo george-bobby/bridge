@@ -864,6 +864,7 @@ final class AppModel {
     func send(_ text: String, to id: String) async -> Bool {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return false }
+        if t == "/clear", sessions.first(where: { $0.id == id })?.isOrchestrator == true { return await clearChat(id) }
         let live = sessions.first { $0.id == id }.map(isLive) ?? false
         var ok = false
         await act {
@@ -913,20 +914,26 @@ final class AppModel {
     }
 
     /// Start an orchestrator over: its transcript and agent session go, the
-    /// chat stays. Asks first; there's no undo.
-    func clearChat(_ id: String) async {
+    /// chat stays. Asks first; there's no undo. A Terminal tab resuming the
+    /// old session closes with it.
+    @discardableResult
+    func clearChat(_ id: String) async -> Bool {
         let a = NSAlert()
         a.messageText = "Clear the orchestrator's chat?"
         a.informativeText = "Every message goes and its next turn starts a fresh session. Workers and their tasks aren't touched."
         a.addButton(withTitle: "Clear Chat")
         a.addButton(withTitle: "Cancel")
         a.buttons.first?.hasDestructiveAction = true
-        guard a.runModal() == .alertFirstButtonReturn else { return }
+        guard a.runModal() == .alertFirstButtonReturn else { return false }
+        var ok = false
         await act {
             try await API.post("/api/runs/\(API.q(id))/clear")
+            ok = true
+            if self.terminalTabs.contains(id) { self.closeTerminalTab(id) }
             self.say("Cleared the orchestrator's chat")
         }
         await refreshOpen()
+        return ok
     }
 
     // MARK: creating work
