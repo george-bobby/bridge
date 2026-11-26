@@ -381,6 +381,10 @@ test("cleanup refuses unpushed work, removes with --force, keeps the branch", as
   await waitFor(statusIs(u.taskId, "ready-for-review"), 15000);
   await waitFor(idle(u.taskId), 5000);
   assert.equal(cli("cleanup", u.taskId).code, 0);
+
+  // Cleaning up takes the task's to-dos and decisions out of the Inbox.
+  const inbox = await api("GET", "/api/inbox");
+  assert.deepEqual([...inbox.decisions, ...inbox.todos].filter((x) => x.taskId === t.taskId || x.taskId === u.taskId), []);
 });
 
 test("modes: quiet relays only what needs you; away holds and briefs on return", async () => {

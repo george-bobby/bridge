@@ -606,6 +606,7 @@ async function cleanup(taskId, { force = false } = {}) {
   }
   if (!meta.worktree || meta.adopted) {
     tasks.writeMeta(taskId, { status: "cleaned", cleanedAt: now() });
+    closeInbox(taskId);
     return { removed: false, note: meta.adopted ? `${meta.adopted === "local" ? "the main checkout" : "an existing worktree"} isn't Bridge's to remove: left in place` : "no worktree recorded" };
   }
   const insp = await tasks.inspectWorktree(meta.worktree);
@@ -626,9 +627,18 @@ async function cleanup(taskId, { force = false } = {}) {
     await tasks.removeWorktree({ repo: meta.repo, worktree: meta.worktree, force: force && (insp.dirty || insp.unpushed > 0) });
   }
   tasks.writeMeta(taskId, { status: "cleaned", cleanedAt: now() });
+  closeInbox(taskId);
   tasks.appendEvent({ taskId, name: "cleaned", text: `${meta.worktree} removed; branch ${meta.branch || "?"} kept${killed.length ? `; stopped pids ${killed.join(", ")}` : ""}` });
   bus.broadcast("runs", { runs: store.listRunSummaries() });
   return { removed: insp.exists, killed, branch: meta.branch };
+}
+
+/** A cleaned-up or deleted task has nothing left to ask: its open decisions and to-dos close. */
+function closeInbox(taskId) {
+  const decisions = tasks.closeTaskDecisions(taskId, null, "dismissed");
+  const todos = tasks.closeTaskTodos(taskId);
+  if (decisions || todos) bus.broadcast("inbox", inbox());
+  return { decisions, todos };
 }
 
 /**
@@ -637,14 +647,11 @@ async function cleanup(taskId, { force = false } = {}) {
  * branch stay on disk (`bridge cleanup` is still the way to remove those).
  */
 function discard(taskId) {
-  const decisions = tasks.closeTaskDecisions(taskId, null, "dismissed");
-  const todos = tasks.closeTaskTodos(taskId);
   if (tasks.exists(taskId)) {
     tasks.writeMeta(taskId, { status: "deleted", deletedAt: now() });
     tasks.appendEvent({ taskId, name: "deleted", text: "chat deleted; its open decisions and to-dos were dismissed" });
   }
-  if (decisions || todos) bus.broadcast("inbox", inbox());
-  return { decisions, todos };
+  return closeInbox(taskId);
 }
 
 /* -------------------------------------------------------- status/catchup */
@@ -748,6 +755,11 @@ function recover() {
   ensureOrchestrator();
   for (const m of tasks.list()) {
     if (m.status === "deleted") continue;
+    // Cleaned up before cleanup closed its Inbox items: heal it now.
+    if (m.status === "cleaned") {
+      closeInbox(m.id);
+      continue;
+    }
     // A chat deleted before deleting closed its task: heal it now.
     if (!store.loadRun(m.id)) {
       discard(m.id);
