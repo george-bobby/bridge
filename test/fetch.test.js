@@ -188,6 +188,24 @@ test("the orchestrator's prompt carries the roster of every session, rebuilt eac
   assert.ok(rd.stdout.includes(t.transcript));
 });
 
+test("clearing the orchestrator empties its chat and starts a fresh agent session", async () => {
+  const before = await api("GET", "/api/runs/orchestrator");
+  assert.ok(before.run.messages.length > 0);
+  assert.ok(before.run.sessionId);
+  assert.equal((await api("POST", "/api/runs/orchestrator/clear")).ok, true);
+  const after = (await api("GET", "/api/runs/orchestrator")).run;
+  assert.deepEqual([after.messages.length, after.sessionId, after.kind], [0, null, "orchestrator"]);
+  const late = (await api("GET", "/api/sessions")).sessions.find((s) => s.id !== "orchestrator");
+  assert.equal((await api("POST", `/api/runs/${late.id}/clear`)).ok, false, "only orchestrators clear");
+
+  await api("POST", "/api/runs/orchestrator/followup", { text: "fresh start" });
+  await waitFor(idle("orchestrator"), 15000, "orchestrator idle");
+  const line = stubLog().filter((l) => l.argv && l.env.SB_TASK_ID === "orchestrator").pop();
+  assert.ok(!line.argv.includes("--resume"), "the next turn doesn't resume the old session");
+  assert.equal((await api("POST", "/api/runs/orchestrator/followup", { text: "/clear" })).cleared, true);
+  assert.equal((await api("GET", "/api/runs/orchestrator")).run.messages.length, 0);
+});
+
 test("non-Claude agents get the skill inlined, $ARGUMENTS filled in", () => {
   const ws = require("../lib/workerskill");
   const skill = { name: "fetch", file: "/x/SKILL.md", text: SKILL };
