@@ -856,9 +856,16 @@ final class TriggerController: ObservableObject {
     var suppressed = ""
     var focused = false
     var monitor: Any? = nil
+    var attach: (Attachment) -> Void = { _ in }
 
-    /// ↑ ↓ ↩ ⇥ esc while a menu is open; everything else goes to the text.
+    /// ↑ ↓ ↩ ⇥ esc while a menu is open; ⌘V attaches images and files;
+    /// everything else goes to the text.
     func handle(_ e: NSEvent) -> NSEvent? {
+        if focused, e.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command, e.charactersIgnoringModifiers == "v",
+           let items = Attachment.fromPasteboard() {
+            withAnimation(M.snappy) { items.forEach(attach) }
+            return nil
+        }
         guard focused, active != nil else { return e }
         let mods = e.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting([.numericPad, .function])
         guard mods.isEmpty || mods == .shift else { return e }
@@ -940,6 +947,7 @@ struct PromptEditor: View {
     func bind(_ items: [TriggerItem]) {
         ctl.items = items
         ctl.choose = { item in choose(item) }
+        ctl.attach = attach
         if ctl.highlight >= items.count { DispatchQueue.main.async { ctl.highlight = 0 } }
     }
 
@@ -1214,7 +1222,7 @@ extension AppModel {
     }
 }
 
-/// ⌘N: a Linear-style new-issue modal. Project in the header, the brief in
+/// ⌘N: the New task page, opened like a fresh chat. Project in the header, the brief in
 /// a roomy editor with `@` `#` `/`, who writes the brief as two cards, and
 /// the worker's agent, model and access in the footer.
 struct ComposeSheet: View {
@@ -1243,37 +1251,24 @@ struct ComposeSheet: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 0) {
-                header
-                if direct.v && !isSlack && !git.v.isNull {
-                    WorkspaceBar(git: git.v, workspace: $workspace.v, base: $base.v, branchName: $branchName.v)
-                        .padding(.horizontal, 8).padding(.top, 2).padding(.bottom, 2)
-                        .transition(.opacity.combined(with: .move(edge: .top)))
-                }
-                PromptEditor(text: $text.v, placeholder: "Describe what you want built, or paste a Slack thread link…  @ files · # sessions · / skills",
-                             source: .project(project.v), fontSize: 15, minHeight: 96, maxHeight: 280, menuAbove: false,
-                             focused: $focused) { a in withAnimation(M.snappy) { items.v.append(a) } }
-                    .padding(.horizontal, 14).padding(.top, 4)
-                if !items.v.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 10) {
-                            ForEach(items.v) { a in
-                                AttachmentChip(item: a) { withAnimation(M.snappy) { items.v.removeAll { $0.id == a.id } } }
-                                    .transition(.opacity.combined(with: .scale(scale: 0.85)))
-                            }
-                        }
-                        .padding(.horizontal, 18).padding(.vertical, 8)
-                    }
-                }
-                modes.padding(.horizontal, 18).padding(.top, 10).padding(.bottom, 14)
-                Hairline()
-                footer
+            PageHeader(title: "New task", icon: "square.and.pencil") {
+                IconButton(icon: "xmark", help: "Close (Esc)") { model.composeOpen = false }
             }
-            .frame(width: 700)
-            .floatingPanel()
-            .padding(.top, 96)
+            ScrollView {
+                VStack(spacing: 18) {
+                    VStack(spacing: 8) {
+                        Logo(size: 40)
+                        Text("What should we build?").font(T.ui(22, .semibold)).foregroundStyle(T.text)
+                    }
+                    card
+                }
+                .frame(maxWidth: 760)
+                .padding(.horizontal, 28)
+                .frame(maxWidth: .infinity)
+                .padding(.top, 72).padding(.bottom, 40)
+            }
+            .scrollIndicators(.never)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .animation(M.snappy, value: direct.v)
         .animation(M.snappy, value: isSlack)
         .onAppear {
@@ -1308,12 +1303,41 @@ struct ComposeSheet: View {
         }
     }
 
+    var card: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            if direct.v && !isSlack && !git.v.isNull {
+                WorkspaceBar(git: git.v, workspace: $workspace.v, base: $base.v, branchName: $branchName.v)
+                    .padding(.horizontal, 8).padding(.top, 2).padding(.bottom, 2)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+            PromptEditor(text: $text.v, placeholder: "Describe what you want built, or paste a Slack thread link…  @ files · # sessions · / skills",
+                         source: .project(project.v), fontSize: 15, minHeight: 96, maxHeight: 280, menuAbove: false,
+                         focused: $focused) { a in withAnimation(M.snappy) { items.v.append(a) } }
+                .padding(.horizontal, 14).padding(.top, 4)
+            if !items.v.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        ForEach(items.v) { a in
+                            AttachmentChip(item: a) { withAnimation(M.snappy) { items.v.removeAll { $0.id == a.id } } }
+                                .transition(.opacity.combined(with: .scale(scale: 0.85)))
+                        }
+                    }
+                    .padding(.horizontal, 18).padding(.vertical, 8)
+                }
+            }
+            modes.padding(.horizontal, 18).padding(.top, 10).padding(.bottom, 14)
+            Hairline()
+            footer
+        }
+        .background(T.raised.opacity(0.6), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(T.line, lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
     var header: some View {
         HStack(spacing: 8) {
-            Logo(size: 16)
-            Text("New task").font(T.ui(13, .semibold))
             if !model.projects.isEmpty {
-                Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold)).foregroundStyle(T.text3)
                 Button { projectOpen.v.toggle() } label: {
                     PickerChip(text: model.project(project.v)?.name ?? "Project", open: projectOpen.v) {
                         Image(systemName: "square.stack.3d.up").font(.system(size: 11)).foregroundStyle(T.accent)
@@ -1327,7 +1351,6 @@ struct ComposeSheet: View {
                 }
             }
             Spacer()
-            IconButton(icon: "xmark", help: "Close (Esc)") { model.composeOpen = false }
         }
         .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 4)
     }
