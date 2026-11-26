@@ -167,9 +167,10 @@ async function stream(n) {
   out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "tu-stream", name: "Bash", input: { command: "ls" } }] } });
   await sleep(30);
   out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "tu-stream", content: "a.txt\nb.txt" }] } });
-  ev({ type: "message_start" });
+  // The delta leaves out cache_creation: message_start's value still counts.
+  ev({ type: "message_start", message: { usage: { input_tokens: 5, cache_read_input_tokens: 9500, cache_creation_input_tokens: 200 } } });
   await text(0);
-  ev({ type: "message_delta", usage: { output_tokens: 30, input_tokens: 5, cache_read_input_tokens: 9500, cache_creation_input_tokens: 200 } });
+  ev({ type: "message_delta", usage: { output_tokens: 30, input_tokens: 5, cache_read_input_tokens: 9500 } });
 }
 
 async function tasks() {

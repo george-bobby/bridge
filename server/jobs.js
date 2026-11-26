@@ -1058,7 +1058,13 @@ function wire(child, runId, msgId, kind) {
   // The other fields sum every API call in the turn (what it cost); `context`
   // is the latest call's prompt size (how full the window is), never summed.
   const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, thinking: 0, context: 0 };
-  const promptSize = (u) => (Number(u.input_tokens) || 0) + (Number(u.cache_read_input_tokens) || 0) + (Number(u.cache_creation_input_tokens) || 0);
+  const PROMPT_KEYS = ["input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"];
+  let prompt = {}; // this call's prompt fields: message_start's, overlaid by message_delta's
+  const notePrompt = (u) => {
+    for (const k of PROMPT_KEYS) if (u[k] != null) prompt[k] = Number(u[k]) || 0;
+    const size = PROMPT_KEYS.reduce((n, k) => n + (prompt[k] || 0), 0);
+    if (size) usage.context = size;
+  };
 
   const stepAt = (i) => (live && live.steps && i >= 0 ? live.steps[i] : null);
 
@@ -1225,8 +1231,8 @@ function wire(child, runId, msgId, kind) {
     if (e.type === "message_start") {
       openBlock.clear();
       call = [];
-      const size = promptSize((e.message && e.message.usage) || {});
-      if (size) usage.context = size;
+      prompt = {};
+      notePrompt((e.message && e.message.usage) || {});
       return;
     }
 
@@ -1297,8 +1303,7 @@ function wire(child, runId, msgId, kind) {
       usage.cacheWrite += Number(u.cache_creation_input_tokens) || 0;
       usage.output += out;
       usage.thinking += think;
-      const size = promptSize(u);
-      if (size) usage.context = size;
+      notePrompt(u);
 
       const mine = call.map(stepAt).map((s, n) => ({ s, i: call[n] })).filter((x) => x.s);
       const thinks = mine.filter((x) => x.s.kind === "thinking");
