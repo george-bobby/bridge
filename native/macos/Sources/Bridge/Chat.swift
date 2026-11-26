@@ -359,7 +359,7 @@ struct Transcript: View {
             }
             .onScrollPhaseChange { _, phase in if phase == .interacting { nav.scrolledByHand() } }
             .overlay(alignment: .topTrailing) {
-                MessageStepper(nav: nav, messages: messages)
+                MessageStepper(nav: nav, list: nav.list, messages: messages)
                     .padding(.top, 14).padding(.trailing, 10)
             }
             .onAppear {

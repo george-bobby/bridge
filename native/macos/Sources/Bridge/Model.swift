@@ -912,6 +912,23 @@ final class AppModel {
         }
     }
 
+    /// Start an orchestrator over: its transcript and agent session go, the
+    /// chat stays. Asks first; there's no undo.
+    func clearChat(_ id: String) async {
+        let a = NSAlert()
+        a.messageText = "Clear the orchestrator's chat?"
+        a.informativeText = "Every message goes and its next turn starts a fresh session. Workers and their tasks aren't touched."
+        a.addButton(withTitle: "Clear Chat")
+        a.addButton(withTitle: "Cancel")
+        a.buttons.first?.hasDestructiveAction = true
+        guard a.runModal() == .alertFirstButtonReturn else { return }
+        await act {
+            try await API.post("/api/runs/\(API.q(id))/clear")
+            self.say("Cleared the orchestrator's chat")
+        }
+        await refreshOpen()
+    }
+
     // MARK: creating work
 
     /// The one box work starts from: a Slack thread link opens a chat and runs

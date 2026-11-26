@@ -135,8 +135,13 @@ struct SessionMenu: View {
             if model.isLive(session) {
                 Button { Task { await model.stop(session.id) } } label: { Label("Stop", systemImage: "stop.circle") }
             }
-            Button(role: .destructive) { Task { await model.delete(session.id) } } label: { Label("Delete", systemImage: "trash") }
-                .disabled(model.isLive(session))
+            if session.isOrchestrator {
+                Button(role: .destructive) { Task { await model.clearChat(session.id) } } label: { Label("Clear Chat…", systemImage: "eraser") }
+                    .disabled(model.isLive(session))
+            } else {
+                Button(role: .destructive) { Task { await model.delete(session.id) } } label: { Label("Delete", systemImage: "trash") }
+                    .disabled(model.isLive(session))
+            }
         }
     }
 }
