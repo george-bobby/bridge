@@ -187,10 +187,16 @@ struct TaskStrip: View {
         }
     }
 
+    /// "2 subagents finished", "1 background command finished", or both.
+    func finishedLabel(_ all: [AgentTask]) -> String {
+        let a = all.filter(\.isAgent).count, c = all.count - a
+        return [a > 0 ? (a == 1 ? "1 subagent" : "\(a) subagents") : "", c > 0 ? (c == 1 ? "1 background command" : "\(c) background commands") : ""].filter { !$0.isEmpty }.joined(separator: " · ") + " finished"
+    }
+
     func bar(all: [AgentTask], running: [AgentTask]) -> some View {
         let agents = running.filter(\.isAgent).count, cmds = running.count - agents
         let head = running.isEmpty
-            ? (all.count == 1 ? "1 task finished" : "\(all.count) tasks finished")
+            ? finishedLabel(all)
             : [agents > 0 ? (agents == 1 ? "1 subagent" : "\(agents) subagents") : "", cmds > 0 ? (cmds == 1 ? "1 background command" : "\(cmds) background commands") : ""].filter { !$0.isEmpty }.joined(separator: " · ") + " running"
         let lead = running.first ?? all.last
         return HStack(spacing: 10) {

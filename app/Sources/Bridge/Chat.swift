@@ -118,6 +118,7 @@ struct ChatView: View {
                         .transition(.scale.combined(with: .opacity))
                 }
                 if s.isOrchestrator { BriefButton(orchestrator: s.id) }
+                OpenInButton(session: s)
                 IconButton(icon: s.pinned ? "star.fill" : "star", help: s.pinned ? "Unpin" : "Pin to the sidebar") { Task { await model.setPinned(s.id, !s.pinned) } }
                 Menu {
                     Button { model.splitRight() } label: { Label("Split Right", systemImage: "rectangle.split.2x1") }.keyboardShortcut("\\")
@@ -1033,7 +1034,7 @@ struct Composer: View {
         }
         .buttonStyle(Pressable(scale: 0.88))
         .keyboardShortcut(".", modifiers: .command)
-        .disabled(model.composeOpen || model.paletteOpen || runId != model.openId)
+        .disabled(model.composeOpen || model.importOpen || model.paletteOpen || runId != model.openId)
         .help("Stop the running turn (⌘.)")
     }
 
@@ -1053,7 +1054,7 @@ struct Composer: View {
         .keyboardShortcut(.return, modifiers: .command)
         // Covered by the New Task sheet or ⌘K: ⌘↩ belongs to them.
         // ⌘↩ belongs to the focused pane's composer when chats are side by side.
-        .disabled(sending.v || model.composeOpen || model.paletteOpen || runId != model.openId)
+        .disabled(sending.v || model.composeOpen || model.importOpen || model.paletteOpen || runId != model.openId)
     }
 
     @ViewBuilder var dropOverlay: some View {

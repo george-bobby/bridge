@@ -706,6 +706,7 @@ struct PaneContent: View {
             GeometryReader { g in
                 VStack(spacing: 0) {
                     Transcript(run: model.runData(run), runId: run).frame(width: g.size.width)
+                    PlanPill(runId: run).frame(width: g.size.width)
                     TaskStrip(runId: run).frame(width: g.size.width)
                     Composer(runId: run).frame(width: g.size.width)
                 }

@@ -138,6 +138,8 @@ struct Issue: Identifiable, Hashable {
     var stateType: String { j["stateType"].string }
     var stateColor: String { j["stateColor"].string }
     var statePos: Double { j["statePos"].double }
+    /// The Slack thread the issue came from (an attachment or a link in its description).
+    var slackUrl: String { j["slackUrl"].string }
     var team: String { j["team"].string }
     var project: String { j["project"].string }
     var cycle: Int? { j["cycle"].isNull ? nil : j["cycle"].int }
@@ -427,6 +429,8 @@ final class AppModel {
 
     var paletteOpen = false
     var composeOpen = false
+    /// The Import a chat sheet (Import.swift).
+    var importOpen = false
     /// The MCP editor or tools list, floating over the window (Servers.swift).
     var mcpSheet: MCPSheet? = nil
     var composeText = ""
@@ -479,6 +483,8 @@ final class AppModel {
         // stands, once nothing live says otherwise (a manual move still wins).
         if let issue = linkedIssue(s) { return Column(linear: issue.status) }
         if st == "cleaned" || st == "stopped" { return .done }
+        // Brought in from an agent's own history: nothing has run here yet.
+        if st == "imported" && !isLive(s) { return .backlog }
         // A PR missing from the feed is unknown, not closed: the feed holds only
         // your PRs and reviews asked of you, so stay in review until it's seen.
         // Past the feed's 14-day merged window, an unseen PR is taken as landed.

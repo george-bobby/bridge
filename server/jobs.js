@@ -498,7 +498,16 @@ function launch(run, { prompt: ask, kind, config, label }) {
   const brief = kind === "compact" ? "" : compacted || agents.handoff(run, agent, { meta: tasks.readMeta(run.runId) || {}, report: tasks.readReport(run.runId) });
   if (brief && !compacted) store.appendMessage(run, { role: "event", phase: "handoff", text: `Handed over to **${agents.AGENTS[agent].label}** with a briefing of the session so far` });
   // A slash command only runs when it opens the message: the briefing goes after it.
-  const prompt = !brief ? ask : /^\/[\w:.-]+/.test(ask) ? `${ask}\n\n${brief}` : `${brief}\n\n${ask}`;
+  let prompt = !brief ? ask : /^\/[\w:.-]+/.test(ask) ? `${ask}\n\n${brief}` : `${brief}\n\n${ask}`;
+  // A chat imported from an agent's own history resumes a session Bridge
+  // never set up, and a resumed session keeps the system prompt it started
+  // with: its first turn here carries Bridge's instructions inline.
+  if (run.imported && !run.imported.briefed && kind !== "compact") {
+    try {
+      prompt = `<instructions>\n${systemPrompt(run, config)}\n</instructions>\n\n${prompt}`;
+      run.imported = { ...run.imported, briefed: true };
+    } catch {}
+  }
   const reply = store.appendMessage(run, {
     role: "assistant",
     kind,
@@ -632,7 +641,11 @@ function launch(run, { prompt: ask, kind, config, label }) {
   // it answers with the session's command list, which we don't need — but
   // skipping the handshake is not a documented option, so send it.
   writeLine(child, { type: "control_request", request_id: "init", request: { subtype: "initialize", hooks: {} } });
-  writeLine(child, { type: "user", message: { role: "user", content: prompt } });
+  // A resumed Claude session keeps the system prompt its first turn had (the
+  // file appended above is read, then ignored), so the orchestrator's roster
+  // of sessions, rebuilt every turn, is pointed at in the message instead.
+  const fresher = !fresh && role === "orchestrator" ? `(Bridge: the roster of every session you can see was rebuilt for this turn at ${rosterFile(run.runId)}; read it when the question touches other chats.)\n\n` : "";
+  writeLine(child, { type: "user", message: { role: "user", content: fresher + prompt } });
   return reply;
 }
 
@@ -1233,7 +1246,7 @@ function wire(child, runId, msgId, kind) {
       // input a line later — but their size is what weights the call's tokens.
       if (d.type === "input_json_delta") {
         patch(() => {
-          step.raw = ((step.raw || "") + (d.partial_json || "")).slice(0, 4000);
+          step.raw = ((step.raw || "") + (d.partial_json || "")).slice(0, TODO_TOOLS.has(step.name) ? 40000 : 4000);
         });
         return;
       }
@@ -1478,7 +1491,7 @@ function wire(child, runId, msgId, kind) {
           // when the partial stream never happened.
           const known = block.id ? toolStep.get(block.id) : undefined;
           const detail = describeTool(block);
-          const raw = JSON.stringify(block.input || {}).slice(0, 4000);
+          const raw = rawInput(block.name, block.input);
           if (known !== undefined) {
             patch(() => {
               const step = stepAt(known);
@@ -1789,6 +1802,10 @@ function parseVerdict(result) {
 }
 
 /** A one-line, human-readable version of a tool call for the timeline. */
+/** To-do tools whose whole input the app needs (the task list); every other call keeps 4000 chars. */
+const TODO_TOOLS = new Set(["TodoWrite", "todo_write", "update_plan"]);
+const rawInput = (name, input) => JSON.stringify(input || {}).slice(0, TODO_TOOLS.has(name) ? 40000 : 4000);
+
 function describeTool(block) {
   const i = block.input || {};
   switch (block.name) {

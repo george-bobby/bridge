@@ -13,6 +13,7 @@
  *   bridge followup <id> "<message>"          queued if the worker is mid-turn
  *   bridge relaunch <id> [--note "<text>"]
  *   bridge declare waiting|resumed|phase "<text>"   (task from $BRIDGE_TASK_ID, or --task <id>)
+ *   bridge plan set "<item>" "<item>" … | plan add "<item>" | plan start|done|skip <n> | plan clear
  *   bridge decide <decision-id> "<answer>"    | bridge dismiss <decision-id>
  *   bridge defer <decision-id> YYYY-MM-DD
  *   bridge triage <slack-item-id> actionable|skip "<reason>"   (start one with `bridge slack <permalink>`)
@@ -198,6 +199,15 @@ async function main() {
       if (!pos[0]) die('declare waiting|resumed|phase "<text>"');
       await call("POST", `/api/tasks/${encodeURIComponent(task)}/declare`, { state: pos[0], text: pos.slice(1).join(" ") });
       console.log(`declared ${pos[0]}`);
+      return;
+    }
+    case "plan": {
+      const task = flags.task || process.env.BRIDGE_TASK_ID;
+      if (!task) die("plan needs $BRIDGE_TASK_ID (set in harness sessions) or --task <id>");
+      if (!pos[0]) die('plan set "<item>" "<item>" … | add "<item>" | start|done|skip <n> | clear');
+      const out = await call("POST", `/api/tasks/${encodeURIComponent(task)}/plan`, { op: pos[0], args: pos.slice(1) });
+      const mark = { completed: "x", in_progress: ">", cancelled: "-" };
+      out.plan.forEach((x, i) => console.log(`${i + 1}. [${mark[x.status] || " "}] ${x.text}`));
       return;
     }
     case "decide":

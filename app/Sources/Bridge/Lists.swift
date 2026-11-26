@@ -94,6 +94,7 @@ struct SessionMenu: View {
                 Button { model.open(session.id); model.openTerminalTab(session.id) } label: { Label("Terminal", systemImage: "terminal") }
             }
         }
+        Section { OpenInMenu(session: session) }
         Section {
             Button { Task { await model.setPinned(session.id, !session.pinned) } } label: {
                 Label(session.pinned ? "Unpin from Sidebar" : "Pin to Sidebar", systemImage: session.pinned ? "star.slash" : "star")
