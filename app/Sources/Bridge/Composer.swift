@@ -717,7 +717,7 @@ struct ContextButton: View {
         let worked = msgs.contains { $0["role"].string == "assistant" && ["done", "stopped"].contains($0["state"].string) }
         if last != nil || worked {
             let m = last ?? .null
-            let used = m["usage"]["input"].double + m["usage"]["cacheRead"].double + m["usage"]["cacheWrite"].double
+            let used = Self.prompt(m["usage"], window: window)
             let f = min(1, used / max(window, 1))
             let tone = f > 0.85 ? T.red : f > 0.65 ? T.orange : T.text2
             Button { open.v.toggle() } label: {
@@ -727,7 +727,7 @@ struct ContextButton: View {
                         Circle().trim(from: 0, to: f).stroke(tone, style: StrokeStyle(lineWidth: 2, lineCap: .round)).rotationEffect(.degrees(-90))
                     }
                     .frame(width: 13, height: 13)
-                    Text(verbatim: last == nil ? "Context" : "\(Int(f * 100))%").font(T.ui(11, .medium)).foregroundStyle(f > 0.65 ? tone : T.text3).monospacedDigit()
+                    Text(verbatim: used == 0 ? "Context" : "\(Int(f * 100))%").font(T.ui(11, .medium)).foregroundStyle(f > 0.65 ? tone : T.text3).monospacedDigit()
                 }
                 .padding(.horizontal, 7).frame(height: 26)
                 .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(open.v ? T.selected : hover.v ? T.hover : .clear))
@@ -740,6 +740,15 @@ struct ContextButton: View {
             .popover(isPresented: $open.v, arrowEdge: .top) { panel(used: used, window: window, f: f, tone: tone, compacted: m["compact"]) }
             .onChange(of: data.snapshotOpen) { if data.snapshotOpen == "context" { open.v = true } else if open.v && !data.snapshotOpen.isEmpty { open.v = false } }
         }
+    }
+
+    /// The last API call's prompt size (`usage.context`). The other usage fields
+    /// sum every call in the turn, so they only stand in when that sum still fits
+    /// the window (one-call turns, agents that don't report per call).
+    static func prompt(_ u: JSON, window: Double) -> Double {
+        if u["context"].double > 0 { return u["context"].double }
+        let sum = u["input"].double + u["cacheRead"].double + u["cacheWrite"].double
+        return sum <= window ? sum : 0
     }
 
     func panel(used: Double, window: Double, f: Double, tone: Color, compacted: JSON) -> some View {

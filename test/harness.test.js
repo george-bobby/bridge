@@ -389,6 +389,9 @@ test("a chat fetched mid-stream plus the deltas after its seq equals the saved t
     assert.deepEqual(got.steps, want.steps);
     assert.ok(want.steps[0].text.startsWith("tok0 tok1 ") && want.steps[0].text.includes("tok59 "));
     assert.equal(want.steps.find((s) => s.id === "tu-stream").result, "a.txt\nb.txt");
+    // Context is the last call's prompt; the other fields sum both calls.
+    assert.equal(want.usage.context, 9705);
+    assert.equal(want.usage.cacheRead, 18500);
   } finally {
     controller.abort();
     await reading;

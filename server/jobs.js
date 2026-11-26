@@ -1055,7 +1055,16 @@ function wire(child, runId, msgId, kind) {
   const openBlock = new Map(); // content-block index -> step index
   const toolStep = new Map(); // tool_use_id -> step index
   let call = []; // step indices belonging to the API call in flight
-  const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, thinking: 0 };
+  // The other fields sum every API call in the turn (what it cost); `context`
+  // is the latest call's prompt size (how full the window is), never summed.
+  const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, thinking: 0, context: 0 };
+  const PROMPT_KEYS = ["input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"];
+  let prompt = {}; // this call's prompt fields: message_start's, overlaid by message_delta's
+  const notePrompt = (u) => {
+    for (const k of PROMPT_KEYS) if (u[k] != null) prompt[k] = Number(u[k]) || 0;
+    const size = PROMPT_KEYS.reduce((n, k) => n + (prompt[k] || 0), 0);
+    if (size) usage.context = size;
+  };
 
   const stepAt = (i) => (live && live.steps && i >= 0 ? live.steps[i] : null);
 
@@ -1222,6 +1231,8 @@ function wire(child, runId, msgId, kind) {
     if (e.type === "message_start") {
       openBlock.clear();
       call = [];
+      prompt = {};
+      notePrompt((e.message && e.message.usage) || {});
       return;
     }
 
@@ -1292,6 +1303,7 @@ function wire(child, runId, msgId, kind) {
       usage.cacheWrite += Number(u.cache_creation_input_tokens) || 0;
       usage.output += out;
       usage.thinking += think;
+      notePrompt(u);
 
       const mine = call.map(stepAt).map((s, n) => ({ s, i: call[n] })).filter((x) => x.s);
       const thinks = mine.filter((x) => x.s.kind === "thinking");
@@ -1591,6 +1603,7 @@ function wire(child, runId, msgId, kind) {
         cacheRead: Number(u.cache_read_input_tokens) || usage.cacheRead,
         cacheWrite: Number(u.cache_creation_input_tokens) || usage.cacheWrite,
         thinking: usage.thinking,
+        context: usage.context,
       };
       // Every model the run touched reports its own window; the largest is the
       // one worth measuring "how full is the context" against.
@@ -1613,7 +1626,7 @@ function wire(child, runId, msgId, kind) {
         if (ev.acu) m.acu = Number(ev.acu) || 0;
         m.durationMs = Number(ev.duration_ms) || 0;
         m.turns = Number(ev.num_turns) || 0;
-        m.usage = kind === "compact" && compacted ? { input: compacted.post, output: 0, cacheRead: 0, cacheWrite: 0, thinking: 0 } : final;
+        m.usage = kind === "compact" && compacted ? { input: compacted.post, output: 0, cacheRead: 0, cacheWrite: 0, thinking: 0, context: compacted.post } : final;
         if (contextWindow) m.contextWindow = contextWindow;
         if (failed) m.error = ev.subtype;
         run.cost = (Number(run.cost) || 0) + m.cost;
