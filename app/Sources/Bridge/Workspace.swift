@@ -14,7 +14,7 @@ struct Sidebar: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 2) {
-                    ActionRow(icon: "square.and.pencil", label: "New task", keys: "⌘N") { model.compose(in: model.projectFilter) }
+                    ActionRow(icon: "square.and.pencil", label: "New task", keys: "⌘N", on: model.route == .compose) { model.compose(in: model.projectFilter) }
                     ActionRow(icon: "magnifyingglass", label: "Search", keys: "⌘K") { model.paletteOpen = true }
                     ActionRow(icon: "square.and.arrow.down.on.square", label: "Import chat", keys: "⇧⌘I") { model.importOpen = true }
 
@@ -64,6 +64,7 @@ struct ActionRow: View {
     let icon: String
     let label: String
     let keys: String
+    var on = false
     let action: () -> Void
     @StateObject private var hover = Box(false)
 
@@ -77,7 +78,7 @@ struct ActionRow: View {
             }
             .padding(.horizontal, 10)
             .frame(height: 32)
-            .background(NavHighlight(on: false, hover: hover.v))
+            .background(NavHighlight(on: on, hover: hover.v))
             .contentShape(Rectangle())
         }
         .buttonStyle(Pressable(scale: 0.98))
@@ -160,7 +161,8 @@ struct FooterButton: View {
     }
 }
 
-/// One repo in the sidebar: its orchestrator and its live sessions. Drop a
+/// One repo in the sidebar: its live sessions, and its orchestrator as the
+/// sparkles button at the right end of the header. Drop a
 /// session (from the sidebar or the Board) on the header to move it here.
 struct ProjectSection: View {
     @Environment(AppModel.self) var model
@@ -190,8 +192,9 @@ struct ProjectSection: View {
                 } else if !sessions.isEmpty {
                     Text(verbatim: "\(sessions.count)").font(T.ui(11.5)).foregroundStyle(T.text3)
                 }
+                OrchestratorButton(project: project)
             }
-            .padding(.horizontal, 10)
+            .padding(.leading, 10).padding(.trailing, 3)
             .frame(height: 32)
             .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(targeted.v ? T.accentSoft : hover.v ? T.sideHover : .clear))
             .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).stroke(targeted.v ? T.accent.opacity(0.6) : .clear, lineWidth: 1))
@@ -209,7 +212,6 @@ struct ProjectSection: View {
 
             if !collapsed {
                 VStack(alignment: .leading, spacing: 1) {
-                    OrchestratorNavItem(project: project)
                     ForEach(showAll.v ? sessions : Array(sessions.prefix(8))) { s in
                         SessionNavItem(session: s)
                             .transition(.opacity.combined(with: .move(edge: .leading)))
@@ -231,7 +233,9 @@ struct ProjectSection: View {
     }
 }
 
-struct OrchestratorNavItem: View {
+/// A project's orchestrator, at the right end of its sidebar header: purple
+/// sparkles, a live spinner while it works, a dot for an unread reply.
+struct OrchestratorButton: View {
     @Environment(AppModel.self) var model
     let project: Project
     @StateObject private var hover = Box(false)
@@ -239,23 +243,24 @@ struct OrchestratorNavItem: View {
         let id = model.orchestratorId(project.id)
         let on = model.route == .session(id)
         let s = model.sessions.first { $0.id == id }
-        HStack(spacing: 9) {
-            Image(systemName: "sparkles").font(.system(size: 12, weight: .medium)).foregroundStyle(T.purple).frame(width: 18)
-            Text("Orchestrator").font(T.ui(13, on ? .medium : .regular)).foregroundStyle(on ? T.text : T.text2)
-            Spacer()
+        ZStack {
             if let s, model.isLive(s) { LiveIcon(size: 11) }
-            else if let s, s.unread && !on { Circle().fill(T.accent).frame(width: 6, height: 6) }
+            else { Image(systemName: "sparkles").font(.system(size: 11.5, weight: .medium)).foregroundStyle(T.purple) }
         }
-        .padding(.horizontal, 10).frame(height: 30)
-        .background(NavHighlight(on: on, hover: hover.v))
+        .frame(width: 24, height: 24)
+        .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(on ? T.sideSelected : hover.v ? T.hover : .clear))
+        .overlay(alignment: .topTrailing) {
+            if let s, s.unread && !on && !model.isLive(s) { Circle().fill(T.accent).frame(width: 6, height: 6).offset(x: -2, y: 2) }
+        }
         .contentShape(Rectangle())
         .onTapGesture {
             if s != nil && NSEvent.modifierFlags.contains(.option) { model.openToSide(id) } else { model.openOrchestrator(project.id) }
         }
         .hoverBox(hover)
+        .help("\(project.name) orchestrator (⌥-click to open to the side)")
         .onDrag { NSItemProvider(object: (s == nil ? "" : id) as NSString) }
         .contextMenu {
-            Button { model.openOrchestrator(project.id) } label: { Label("Open", systemImage: "arrow.up.forward.app") }
+            Button { model.openOrchestrator(project.id) } label: { Label("Open Orchestrator", systemImage: "sparkles") }
             if let s {
                 Button { model.openToSide(id) } label: { Label("Open to the Side", systemImage: "rectangle.split.2x1") }
                 Divider()
