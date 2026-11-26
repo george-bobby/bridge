@@ -17,7 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// Dev aid: render every page of the window to PNGs, for checking the UI
     /// without screen-recording permission. `BRIDGE_SNAPSHOT_DIR=/tmp/x Bridge`.
     private func snapshots(to dir: String) {
-        let routes: [(String, Route)] = [("home", .home), ("board", .board), ("sessions", .sessions), ("pulls", .pulls), ("linear", .linear), ("inbox", .inbox), ("memory", .memory), ("slack", .slack), ("usage", .usage), ("settings", .settings), ("settings-agents", .settings), ("settings-integrations", .settings), ("settings-projects", .settings), ("settings-notifications", .settings), ("settings-advanced", .settings)]
+        let routes: [(String, Route)] = [("home", .home), ("board", .board), ("sessions", .sessions), ("pulls", .pulls), ("linear", .linear), ("inbox", .inbox), ("inbox-slack", .inbox), ("memory", .memory), ("slack", .slack), ("usage", .usage), ("settings", .settings), ("settings-agents", .settings), ("settings-integrations", .settings), ("settings-projects", .settings), ("settings-notifications", .settings), ("settings-advanced", .settings)]
         let browser = ProcessInfo.processInfo.environment["BRIDGE_SNAPSHOT_URL"]
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 8_000_000_000)
@@ -37,6 +37,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             for (name, route) in pages {
                 model.paletteOpen = name == "palette"
                 model.sidebarHidden = name == "collapsed"
+                if route == .inbox { model.inboxTab = name == "inbox-slack" ? "slack" : "decisions" }
                 if route == .settings { model.settingsPane = name.hasPrefix("settings-") ? String(name.dropFirst(9)) : "general" }
                 if name == "browser", case .session(let id) = route, let browser { model.open(id); model.openBrowser(id, url: browser) }
                 if name.hasPrefix("split") || name.hasPrefix("messages"), case .session(let id) = route { model.panes = [Pane(run: id)]; model.focusedPane = 0 }
@@ -99,11 +100,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler done: @escaping () -> Void) {
-        let id = response.notification.request.content.userInfo["runId"] as? String ?? ""
+        let info = response.notification.request.content.userInfo
+        let id = info["runId"] as? String ?? "", link = info["slack"] as? String ?? ""
         Task { @MainActor in
             NSApp.activate(ignoringOtherApps: true)
             NSApp.windows.first { $0.canBecomeMain }?.makeKeyAndOrderFront(nil)
-            if !id.isEmpty { self.model.open(id) }
+            if !link.isEmpty { self.model.openThread(link) } else if !id.isEmpty { self.model.open(id) }
         }
         done()
     }

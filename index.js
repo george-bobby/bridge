@@ -6,7 +6,9 @@
  * pipeline. It does NOT talk to Slack and holds no Slack credentials. You paste
  * a Slack thread link; a Claude Code session reads the thread, replies and
  * files Linear tickets through the Slack / Linear MCP connectors it already
- * has. Nothing runs on a timer — every job here is one you started.
+ * has. The one timer that reads Slack (lib/slackwatch.js) files what it finds
+ * in the Inbox and the chats; a job starts only when you (or, in triage mode,
+ * the orchestrator) start one.
  *
  * What it owns:
  *   data/config.json    pipeline gates + job defaults (Settings writes it)
@@ -38,6 +40,7 @@ const sources = require("./lib/sources");
 const projects = require("./lib/projects");
 const envfile = require("./lib/envfile");
 const slack = env.demo ? require("./lib/demo").slack : require("./lib/slack");
+const slackwatch = require("./lib/slackwatch");
 
 const ROOT = __dirname;
 // PORT stays supported for a one-off override; BRIDGE_PORT in .env is
@@ -53,14 +56,22 @@ function sendJson(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
+// Buffers, decoded once at the end: a multi-byte character split across two
+// chunks would otherwise turn into two replacement characters.
 function readBody(req) {
   return new Promise((resolve, reject) => {
-    let data = "";
+    const chunks = [];
+    let size = 0;
     req.on("data", (chunk) => {
-      data += chunk;
-      if (data.length > 2e6) reject(new Error("body too large"));
+      size += chunk.length;
+      if (size > 2e6) {
+        reject(new Error("body too large"));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
     });
-    req.on("end", () => resolve(data));
+    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
     req.on("error", reject);
   });
 }
@@ -74,11 +85,13 @@ function readBody(req) {
  * session with `--dangerously-skip-permissions`, require both a loopback Host
  * *and* — when the browser sends one — a same-origin Origin.
  */
+function loopbackHost(req) {
+  return /^(127\.0\.0\.1|\[::1\]|localhost)(:\d+)?$/i.test(String(req.headers.host || ""));
+}
+
 function sameOrigin(req) {
-  const host = String(req.headers.host || "");
-  const hostOk = /^(127\.0\.0\.1|\[::1\]|localhost)(:\d+)?$/i.test(host);
   const origin = req.headers.origin;
-  if (!hostOk) return false;
+  if (!loopbackHost(req)) return false;
   if (!origin) return true; // curl / a run's emit.sh send no Origin
   return /^https?:\/\/(127\.0\.0\.1|\[::1\]|localhost)(:\d+)?$/i.test(origin);
 }
@@ -98,7 +111,7 @@ const MIME = {
 function serveStatic(res, urlPath) {
   const rel = urlPath === "/" ? "/index.html" : urlPath;
   const file = path.join(PUBLIC, path.normalize(rel).replace(/^(\.\.[/\\])+/, ""));
-  if (!file.startsWith(PUBLIC)) {
+  if (file !== PUBLIC && !file.startsWith(PUBLIC + path.sep)) {
     res.writeHead(403).end("forbidden");
     return;
   }
@@ -116,6 +129,34 @@ function serveStatic(res, urlPath) {
 }
 
 /* -------------------------------------------------------------- job opts */
+
+/**
+ * Open (or create) the chat for a Slack link, optionally starting the
+ * pipeline on it. Shared by a pasted link, `sb slack` and the Inbox's Start.
+ */
+async function chatFromLink(link, { project, opts, start } = {}) {
+  const { run, created } = store.createFromLink(link);
+  if (created && project) store.setProject(run.runId, String(project));
+  // With the Slack connector on, the chat starts knowing who asked and what.
+  if (created && slack.configured()) {
+    const about = await slack.describeThread(store.parseSlackLink(link)).catch(() => null);
+    const fresh0 = about && store.loadRun(run.runId);
+    if (fresh0) {
+      Object.assign(fresh0, { who: about.who, channel: about.channel, text: about.text, userId: about.userId || "" });
+      store.saveRun(fresh0);
+    }
+  }
+  applyOpts(run.runId, opts);
+  let started = false;
+  const fresh = store.loadRun(run.runId);
+  let queued = false;
+  if (start && !jobs.isRunning(run.runId) && !fresh.sessionId && fresh.action !== "running") {
+    const out = harness.startSlack(run.runId);
+    started = out.state === "started";
+    queued = out.state === "queued";
+  }
+  return { runId: run.runId, created, started, queued };
+}
 
 /** Fold a composer's picks into a chat before its job launches. Silent when
  *  there is nothing to apply — every caller passes an optional field. */
@@ -211,10 +252,26 @@ function readProposalText(textFile) {
   return fs.readFileSync(file, "utf8");
 }
 
-const server = http.createServer(async (req, res) => {
+const server = http.createServer((req, res) => {
+  handle(req, res).catch((e) => {
+    // A bad id (a malformed %-escape) or a bug in one route must cost that
+    // request, never the server and every worker it is watching.
+    console.error(`${req.method} ${req.url}:`, e);
+    if (!res.headersSent) sendJson(res, 500, { ok: false, error: String(e.message || e) });
+    else res.end();
+  });
+});
+
+async function handle(req, res) {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   const p = url.pathname;
 
+  // Reads too: a DNS-rebinding page arrives with its own Host, and every
+  // transcript, file list and report is behind a GET.
+  if (!loopbackHost(req)) {
+    sendJson(res, 403, { ok: false, error: "loopback only" });
+    return;
+  }
   if (req.method !== "GET" && !sameOrigin(req)) {
     sendJson(res, 403, { ok: false, error: "cross-origin request refused" });
     return;
@@ -464,6 +521,23 @@ const server = http.createServer(async (req, res) => {
       if (req.method === "GET" && p === "/api/slack/mentions") return sendJson(res, 200, { ok: true, mentions: await slack.mentions() });
       if (req.method === "GET" && p === "/api/slack/thread") return sendJson(res, 200, { ok: true, ...(await slack.thread(link(url.searchParams.get("url")))) });
       if (req.method === "POST" && p === "/api/slack/reply") return sendJson(res, 200, { ok: true, ...(await slack.reply({ ...link(body.url), text: body.text })) });
+      if (req.method === "GET" && p === "/api/slack/channels") return sendJson(res, 200, { ok: true, channels: await slack.channels() });
+      if (req.method === "GET" && p === "/api/slack/watch") return sendJson(res, 200, { ok: true, status: slackwatch.status(), items: slackwatch.all() });
+      if (req.method === "POST" && p === "/api/slack/watch/poll") return sendJson(res, 200, { ok: true, ...(await slackwatch.poll({ force: true })), status: slackwatch.status() });
+      const item = p.match(/^\/api\/slack\/watch\/([\w-]+)$/);
+      if (req.method === "POST" && item) {
+        const id = item[1];
+        if (body.action === "dismiss") return sendJson(res, 200, { ok: true, item: slackwatch.dismiss(id) });
+        if (body.action === "triage") return sendJson(res, 200, { ok: true, item: slackwatch.triage(id, String(body.verdict || ""), String(body.reason || "")) });
+        if (body.action === "start") {
+          const out = await chatFromLink(slackwatch.permalinkOf(id), { project: body.project, start: true });
+          slackwatch.markStarted(id, out.runId);
+          bus.broadcast("runs", { runs: store.listRunSummaries() });
+          bus.broadcast("inbox", harness.inbox());
+          return sendJson(res, 200, { ok: true, ...out });
+        }
+        return sendJson(res, 400, { ok: false, error: "action is start, dismiss or triage" });
+      }
       return sendJson(res, 404, { ok: false, error: `no slack route for ${req.method} ${p}` });
     } catch (e) {
       return sendJson(res, 400, { ok: false, error: String(e.message || e) });
@@ -639,28 +713,9 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "POST" && p === "/api/runs") {
     try {
       const body = JSON.parse((await readBody(req)) || "{}");
-      const { run, created } = store.createFromLink(body.url);
-      if (created && body.project) store.setProject(run.runId, String(body.project));
-      // With the Slack connector on, the chat starts knowing who asked and what.
-      if (created && slack.configured()) {
-        const about = await slack.describeThread(store.parseSlackLink(body.url)).catch(() => null);
-        const fresh0 = about && store.loadRun(run.runId);
-        if (fresh0) {
-          Object.assign(fresh0, { who: about.who, channel: about.channel, text: about.text, userId: about.userId || "" });
-          store.saveRun(fresh0);
-        }
-      }
-      applyOpts(run.runId, body.opts);
-      let started = false;
-      const fresh = store.loadRun(run.runId);
-      let queued = false;
-      if (body.start && !jobs.isRunning(run.runId) && !fresh.sessionId && fresh.action !== "running") {
-        const out = harness.startSlack(run.runId);
-        started = out.state === "started";
-        queued = out.state === "queued";
-      }
+      const out = await chatFromLink(body.url, body);
       bus.broadcast("runs", { runs: store.listRunSummaries() });
-      sendJson(res, 200, { ok: true, runId: run.runId, created, started, queued });
+      sendJson(res, 200, { ok: true, ...out });
     } catch (e) {
       sendJson(res, 400, { ok: false, error: String(e.message || e) });
     }
@@ -722,7 +777,7 @@ const server = http.createServer(async (req, res) => {
           if (body.worktree && path.isAbsolute(String(body.worktree))) patch.worktree = String(body.worktree);
           if (body.branch) patch.branch = String(body.branch).slice(0, 120);
           if (body.prUrl) patch.prUrl = String(body.prUrl);
-          if (Object.keys(patch).length && tasks.safeTaskId(id)) tasks.writeMeta(id, { kind: "slack", repo: env.targetRepo, ...patch });
+          if (Object.keys(patch).length && tasks.safeTaskId(id)) tasks.writeMeta(id, { kind: "slack", repo: jobs.resolveWorkdir(store.readConfig(), run), ...patch });
         }
 
         // A `memory` event is a *proposal*, never a memory: it lands in
@@ -1046,7 +1101,7 @@ const server = http.createServer(async (req, res) => {
 
   res.writeHead(404, { "Content-Type": "text/plain" });
   res.end("not found");
-});
+}
 
 /* ---------------------------------------------------- watching the files */
 
@@ -1076,6 +1131,7 @@ store.clearPendingAsks();
 // nothing (the server is the watcher) and turns whatever died with the last
 // process into an outcome you can resume from.
 harness.start();
+slackwatch.start();
 setInterval(pollFiles, 1500).unref();
 pollFiles();
 

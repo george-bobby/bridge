@@ -19,12 +19,12 @@ struct Sidebar: View {
 
                     SideLabel("Overview")
                     NavItem(icon: "house", label: "Home", route: .home)
-                    NavItem(icon: "tray", label: "Inbox", route: .inbox, badge: model.decisions.count + model.todos.count, hot: !model.decisions.isEmpty)
+                    NavItem(icon: "tray", label: "Inbox", route: .inbox, badge: model.decisions.count + model.todos.count + model.slackOpenCount, hot: !model.decisions.isEmpty || model.slackOpenCount > 0)
                     NavItem(icon: "rectangle.stack", label: "Sessions", route: model.sessionsRoute, also: [.board, .sessions],
                             count: model.boardSessions.filter { model.inFilter($0) && model.column(of: $0) != .done }.count)
 
                     SideLabel("Sources")
-                    NavItem(icon: "number", label: "Slack", route: .slack, count: model.mentions.filter { model.session(forPermalink: $0.permalink) == nil }.count)
+                    NavItem(icon: "number", label: "Slack", route: .slack, badge: model.slackUnread, count: model.mentions.filter { model.session(forPermalink: $0.permalink) == nil }.count, hot: model.slackUnread > 0)
                     NavItem(icon: "arrow.triangle.pull", label: "GitHub", route: .pulls, count: model.openPulls.count, hot: model.openPulls.contains(where: \.needsAttention))
                     NavItem(icon: "circle.lefthalf.filled", label: "Linear", route: .linear, count: model.issues.filter(\.active).count)
 
