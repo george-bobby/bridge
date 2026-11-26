@@ -13,7 +13,7 @@
     "github",
     "dashboard"
   ],
-  "main": "index.js",
+  "main": "server/index.js",
   "type": "commonjs",
   "engines": {
     "node": ">=18"
@@ -21,11 +21,11 @@
   "scripts": {
     "start": "./scripts/install.sh start",
     "stop": "./scripts/install.sh stop",
-    "dev": "./scripts/install.sh stop >/dev/null; node lib/render.js && node --watch-path=index.js --watch-path=lib index.js",
-    "foreground": "node lib/render.js && node index.js",
-    "render": "node lib/render.js",
+    "dev": "./scripts/install.sh stop >/dev/null; node server/render.js && node --watch-path=server server",
+    "foreground": "node server/render.js && node server",
+    "render": "node server/render.js",
     "test": "node --test --test-concurrency=1 test/*.test.js",
-    "app": "./scripts/build-app.sh install",
+    "app": "./scripts/build.sh install",
     "demo": "node scripts/demo.js",
     "lint": "node scripts/lint.js"
   }

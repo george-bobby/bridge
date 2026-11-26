@@ -3,7 +3,7 @@ const assert = require("node:assert");
 const { spawnSync } = require("child_process");
 const path = require("path");
 
-const { check, DEFAULT_POLICY } = require("../lib/policy");
+const { check, DEFAULT_POLICY } = require("../server/policy");
 
 const P = { policy: { ...DEFAULT_POLICY } };
 const bash = (command) => check("Bash", { command }, P);
@@ -51,6 +51,15 @@ test("destructive git asks; ordinary git passes", () => {
   }
 });
 
+test("destructive git inside substitutions, shells, eval and wrappers still asks", () => {
+  for (const ask of ['echo "$(git push --force origin main)"', 'echo "`git reset --hard`"', 'x="$(git branch -D feat)"', 'bash -c "git push --force"', "sh -lc 'git clean -fdx'", 'eval "git stash drop"', "env FOO=1 git push --force", "xargs -n 1 git branch -D", "nice -n 5 git reset --hard"]) {
+    assert.equal(verdict(ask), "ask", ask);
+  }
+  assert.equal(check("Bash", { command: "env FOO=1" }, P).decision, "deny", "assignments only still dump the environment");
+  assert.equal(check("Bash", { command: 'bash -c "cat .env"' }, P).decision, "deny");
+  for (const ok of ['git commit -m "fix (scope): $(date)"', 'echo "a; b"', "env FOO=1 node test.js"]) assert.equal(verdict(ok), "pass", ok);
+});
+
 test("gh: PR workflow passes, merges and issue writes ask, review replies follow policy", () => {
   for (const ok of ["gh pr create --fill", "gh pr edit 12 --body x", "gh pr view 12", "gh api repos/o/r/pulls/12", "gh pr comment 12 -b hi", "gh api -X POST repos/o/r/pulls/12/comments/9/replies -f body=x"]) {
     assert.equal(verdict(ok), "pass", ok);
@@ -79,7 +88,7 @@ test("mcp: reads pass, outward writes ask, local servers pass", () => {
 });
 
 test("the hook script speaks the PreToolUse protocol and fails open", () => {
-  const hook = path.join(__dirname, "..", "harness", "hooks", "guard.js");
+  const hook = path.join(__dirname, "..", "hooks", "guard.js");
   const run = (stdin) => spawnSync(process.execPath, [hook], { input: stdin, encoding: "utf8" });
 
   const denied = run(JSON.stringify({ tool_name: "Bash", tool_input: { command: "pkill -f node" } }));

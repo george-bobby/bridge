@@ -12,8 +12,8 @@ const { isBuiltin } = require("module");
 const { spawnSync } = require("child_process");
 
 const ROOT = path.join(__dirname, "..");
-const DIRS = ["lib", "harness", "scripts", "test", "templates"];
-const FILES = ["index.js", "bin/sb"];
+const DIRS = ["server", "hooks", "scripts", "test", "skills"];
+const FILES = ["bin/bridge"];
 
 function walk(dir) {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {

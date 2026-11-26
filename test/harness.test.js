@@ -1,6 +1,6 @@
 /**
  * End-to-end harness tests against a real dashboard process, a real scratch
- * repo with a bare origin, and the stub agent (test/stub-claude.js). Nothing
+ * repo with a bare origin, and the stub agent (test/stub.js). Nothing
  * here touches the real data/, the real repos or costs usage.
  *
  *   node --test test/
@@ -14,8 +14,8 @@ const path = require("path");
 const { spawn, execFileSync, spawnSync } = require("child_process");
 
 const ROOT = path.join(__dirname, "..");
-const STUB = path.join(__dirname, "stub-claude.js");
-const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "sb-harness-")));
+const STUB = path.join(__dirname, "stub.js");
+const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "bridge-harness-")));
 const DATA = path.join(tmp, "data");
 const REPO = path.join(tmp, "repo");
 const ORIGIN = path.join(tmp, "origin.git");
@@ -41,7 +41,7 @@ function makeRepo() {
 
 const ENV = {
   ...process.env,
-  SB_DATA_DIR: DATA,
+  BRIDGE_DATA_DIR: DATA,
   CLAUDE_BIN: STUB,
   BRIDGE_PORT: String(PORT),
   BRIDGE_ENV_FILE: path.join(tmp, "none.env"),
@@ -49,19 +49,19 @@ const ENV = {
   WORKTREE_ROOT: path.join(tmp, "wt"),
   SLACK_USER_NAME: "Alex",
   BRANCH_PREFIX: "test",
-  SB_TICK_MS: "300",
-  SB_STALL_SEC: "2",
+  BRIDGE_TICK_MS: "300",
+  BRIDGE_STALL_SEC: "2",
   STUB_LOG: path.join(tmp, "stub.log"),
   // No user skills: these tests cover the built-in worker prompt (test/fetch.test.js covers WORKER_SKILL).
   CLAUDE_CONFIG_DIR: path.join(tmp, "claude-home"),
-  SB_URL: URL_,
-  SB_TASK_ID: "",
+  BRIDGE_URL: URL_,
+  BRIDGE_TASK_ID: "",
 };
 
 let server = null;
 function startServer() {
-  server = spawn(process.execPath, [path.join(ROOT, "index.js")], { env: ENV, stdio: ["ignore", "pipe", "pipe"] });
-  server.stderr.on("data", (d) => process.env.SB_TEST_VERBOSE && process.stderr.write(d));
+  server = spawn(process.execPath, [path.join(ROOT, "server")], { env: ENV, stdio: ["ignore", "pipe", "pipe"] });
+  server.stderr.on("data", (d) => process.env.BRIDGE_TEST_VERBOSE && process.stderr.write(d));
   return waitFor(async () => (await fetch(`${URL_}/api/state`).then((r) => r.ok).catch(() => false)), 10000, "server up");
 }
 function stopServer() {
@@ -80,8 +80,8 @@ async function api(method, p, body) {
   return { status: r.status, ...j };
 }
 
-function sb(...args) {
-  const r = spawnSync(process.execPath, [path.join(ROOT, "bin", "sb"), ...args], { env: ENV, encoding: "utf8" });
+function cli(...args) {
+  const r = spawnSync(process.execPath, [path.join(ROOT, "bin", "bridge"), ...args], { env: ENV, encoding: "utf8" });
   return { code: r.status, out: r.stdout, err: r.stderr };
 }
 
@@ -120,7 +120,7 @@ test.before(async () => {
 });
 test.after(async () => {
   await stopServer();
-  if (!process.env.SB_TEST_KEEP) fs.rmSync(tmp, { recursive: true, force: true });
+  if (!process.env.BRIDGE_TEST_KEEP) fs.rmSync(tmp, { recursive: true, force: true });
 });
 
 test("spawn → worker in its own worktree → report → relayed, main checkout untouched", async () => {
@@ -135,14 +135,14 @@ test("spawn → worker in its own worktree → report → relayed, main checkout
 
   // The worker ran with the guard hook, its contract and its identity.
   const log = fs.readFileSync(ENV.STUB_LOG, "utf8").trim().split("\n").map(JSON.parse);
-  const mine = log.find((l) => l.env.SB_TASK_ID === t.taskId);
+  const mine = log.find((l) => l.env.BRIDGE_TASK_ID === t.taskId);
   assert.ok(mine.argv.includes("--settings"));
   assert.match(mine.argv[mine.argv.indexOf("--settings") + 1], /guard\.js/);
   const sys = fs.readFileSync(mine.argv[mine.argv.indexOf("--append-system-prompt-file") + 1], "utf8");
   assert.match(sys, /report contract/);
   assert.match(sys, new RegExp(t.worktree.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-  assert.equal(mine.env.SB_ROLE, "task");
-  assert.equal(mine.env.SB_GUARD, "1");
+  assert.equal(mine.env.BRIDGE_ROLE, "task");
+  assert.equal(mine.env.BRIDGE_GUARD, "1");
 
   const inbox = await api("GET", "/api/inbox");
   assert.ok(inbox.todos.some((x) => x.key === `review:${t.taskId}`), "review to-do");
@@ -163,7 +163,7 @@ test("needs-input → decision → answer goes back to the worker → ready", as
   assert.equal(d.kind, "question");
   assert.match(d.text, /CSV or JSON/);
   await waitFor(idle(t.taskId), 5000, "idle");
-  const r = sb("decide", d.id, "CSV, as you recommended");
+  const r = cli("decide", d.id, "CSV, as you recommended");
   assert.equal(r.code, 0, r.err);
   await waitFor(statusIs(t.taskId, "ready-for-review"), 15000, "answered → ready");
   const run = (await api("GET", `/api/runs/${t.taskId}`)).run;
@@ -177,21 +177,31 @@ test("defer hides a decision until its day; duplicate to-dos are refused", async
   const ds = (await api("GET", "/api/inbox")).decisions.filter((x) => x.taskId === t.taskId);
   assert.equal(ds.length, 2);
   const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
-  assert.equal(sb("defer", ds[1].id, tomorrow).code, 0);
+  assert.equal(cli("defer", ds[1].id, tomorrow).code, 0);
   const open = (await api("GET", "/api/inbox")).decisions.filter((x) => x.taskId === t.taskId);
   assert.deepEqual(open.map((x) => x.id), [ds[0].id]);
 
-  assert.equal(sb("todo", "add", "merge-42", "Merge PR 42").code, 0);
-  const dup = sb("todo", "add", "merge-42", "Merge PR 42 again");
+  assert.equal(cli("todo", "add", "merge-42", "Merge PR 42").code, 0);
+  const dup = cli("todo", "add", "merge-42", "Merge PR 42 again");
   assert.equal(dup.code, 3);
   assert.match(dup.err, /already on the list/);
-  assert.equal(sb("todo", "done", "merge-42").code, 0);
+  assert.equal(cli("todo", "done", "merge-42").code, 0);
 
-  const c = sb("status", "--since", "1h");
+  const c = cli("status", "--since", "1h");
   assert.equal(c.code, 0, c.err);
   assert.match(c.out, /Waiting on you/);
   assert.match(c.out, /First\?/);
   assert.doesNotMatch(c.out, /Second\?/);
+});
+
+test("Brief me hands the orchestrator the catch-up in one turn", async () => {
+  assert.equal((await api("POST", "/api/brief", { since: "soon" })).status, 400);
+  await waitFor(idle("orchestrator"), 15000, "orchestrator idle");
+  const out = await api("POST", "/api/brief", { since: "1h" });
+  assert.equal(out.runId, "orchestrator");
+  const msg = await waitFor(async () => (await api("GET", "/api/runs/orchestrator")).run.messages.find((m) => m.role === "relay" && m.text.startsWith("[harness] BRIEF")), 10000, "brief turn");
+  for (const h of ["## Waiting on you", "## Slack, not started", "## To-dos", "## Workers", "## What happened (last 1h)"]) assert.ok(msg.text.includes(h), h);
+  assert.match(msg.text, /First\?/, "the open question is in it");
 });
 
 test("no report: one nudge, then idle-without-report; a nudge that works yields a report", async () => {
@@ -246,7 +256,7 @@ test("Slack replies filed into a chat reach its agent on the next turn, once", a
   const run = JSON.parse(fs.readFileSync(file, "utf8"));
   run.messages.push({ id: "slack-1.000001", ts: 1, role: "slack", who: "Cat", text: "it also breaks on XLSX", undelivered: true });
   fs.writeFileSync(file, JSON.stringify(run));
-  assert.equal(sb("followup", t.taskId, "take a look").code, 0);
+  assert.equal(cli("followup", t.taskId, "take a look").code, 0);
   await waitFor(() => fs.readFileSync(ENV.STUB_LOG, "utf8").includes("it also breaks on XLSX"), 10000, "slack news in the prompt");
   const prompt = fs.readFileSync(ENV.STUB_LOG, "utf8").split("\n").filter((l) => l.includes("it also breaks on XLSX")).map((l) => JSON.parse(l).prompt);
   assert.match(JSON.stringify(prompt), /\[slack\] New in the Slack thread/);
@@ -259,6 +269,13 @@ test("only a loopback Host gets an answer, GETs included", async () => {
   const status = (host) => new Promise((resolve, reject) => http.get({ host: "127.0.0.1", port: PORT, path: "/api/runs", headers: { Host: host } }, (r) => resolve(r.statusCode)).on("error", reject));
   assert.equal(await status(`evil.example:${PORT}`), 403);
   assert.equal(await status(`127.0.0.1:${PORT}`), 200);
+  // Another localhost port (a dev server in a browser tab) is another origin, reads included.
+  const from = (origin, method = "GET", extra = {}) => fetch(`${URL_}/api/runs`, { method, headers: { Origin: origin, ...extra }, body: method === "POST" ? "{}" : undefined }).then((r) => r.status);
+  assert.equal(await from("http://localhost:3000"), 403);
+  assert.equal(await from("http://localhost:3000", "POST"), 403);
+  assert.equal(await from("null"), 403);
+  assert.equal(await from(`http://127.0.0.1:${PORT}`), 200);
+  assert.equal((await fetch(`${URL_}/api/runs`, { headers: { "Sec-Fetch-Site": "cross-site" } })).status, 403);
   const bad = await fetch(`${URL_}/api/runs/%E0%A4%A`);
   assert.ok(bad.status >= 400 && bad.status < 600, "a malformed id is an error, not a crash");
   assert.equal((await fetch(`${URL_}/api/state`)).status, 200, "still up");
@@ -267,7 +284,7 @@ test("only a loopback Host gets an answer, GETs included", async () => {
 test("a follow-up sent mid-turn is queued and delivered after", async () => {
   const t = await spawnTask("busy", "stub:stall=1\nstub:report=ready-for-review");
   await waitFor(async () => (await api("GET", "/api/state")).jobs.running.includes(t.taskId), 5000);
-  const r = sb("followup", t.taskId, "also handle the empty case");
+  const r = cli("followup", t.taskId, "also handle the empty case");
   assert.equal(r.code, 0, r.err);
   assert.match(r.out, /queued/);
   await waitFor(async () => {
@@ -284,12 +301,12 @@ test("cleanup refuses unpushed work, removes with --force, keeps the branch", as
   git(["add", "."], t.worktree);
   git(["commit", "-q", "-m", "local only"], t.worktree);
 
-  const refused = sb("cleanup", t.taskId);
+  const refused = cli("cleanup", t.taskId);
   assert.equal(refused.code, 3);
   assert.match(refused.err, /unpushed/);
   assert.ok(fs.existsSync(t.worktree));
 
-  const forced = sb("cleanup", t.taskId, "--force");
+  const forced = cli("cleanup", t.taskId, "--force");
   assert.equal(forced.code, 0, forced.err);
   assert.ok(!fs.existsSync(t.worktree));
   assert.equal(git(["rev-parse", "--verify", "--quiet", `refs/heads/${t.branch}`]).length > 0, true, "branch kept");
@@ -298,7 +315,7 @@ test("cleanup refuses unpushed work, removes with --force, keeps the branch", as
   const u = await spawnTask("pusher", "stub:report=ready-for-review");
   await waitFor(statusIs(u.taskId, "ready-for-review"), 15000);
   await waitFor(idle(u.taskId), 5000);
-  assert.equal(sb("cleanup", u.taskId).code, 0);
+  assert.equal(cli("cleanup", u.taskId).code, 0);
 });
 
 test("modes: quiet relays only what needs you; away holds and briefs on return", async () => {
@@ -339,7 +356,7 @@ test("restart: a worker lost mid-turn is reported and resumable; reports written
   await waitFor(statusIs(quiet.taskId, "blocked"), 5000, "caught up");
   const d = (await api("GET", "/api/inbox")).decisions.find((x) => x.taskId === lost.taskId && x.kind === "resume");
   assert.ok(d, "resume decision");
-  assert.equal(sb("relaunch", lost.taskId).code, 0);
+  assert.equal(cli("relaunch", lost.taskId).code, 0);
   await waitFor(statusIs(lost.taskId, "ready-for-review"), 15000, "resumed → report");
 });
 
@@ -360,8 +377,8 @@ test("deleting a chat clears its to-dos and decisions; chats deleted before that
   assert.equal((await api("DELETE", `/api/runs/${done.taskId}`)).ok, true);
   assert.deepEqual(await mine(done.taskId), []);
   assert.equal(meta(done.taskId).status, "deleted");
-  assert.ok(fs.existsSync(done.worktree), "worktree left for sb cleanup");
-  assert.ok(!(await api("GET", "/api/tasks")).tasks.some((t) => t.id === done.taskId), "gone from sb status");
+  assert.ok(fs.existsSync(done.worktree), "worktree left for bridge cleanup");
+  assert.ok(!(await api("GET", "/api/tasks")).tasks.some((t) => t.id === done.taskId), "gone from bridge status");
 
   // The old server only removed the chat file; the next start closes the rest.
   await stopServer();
