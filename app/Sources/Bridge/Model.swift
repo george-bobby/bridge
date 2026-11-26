@@ -407,6 +407,14 @@ final class AppModel {
     var inspectorShown = !UserDefaults.standard.bool(forKey: "inspector.hidden") {
         didSet { UserDefaults.standard.set(!inspectorShown, forKey: "inspector.hidden") }
     }
+    /// Width of the details column, dragged from its leading edge (`DetailsResizer`).
+    static let detailsRange: ClosedRange<CGFloat> = 260...560
+    var detailsWidth: CGFloat = {
+        let w = UserDefaults.standard.double(forKey: "details.width")
+        return w > 0 ? min(max(CGFloat(w), detailsRange.lowerBound), detailsRange.upperBound) : 312
+    }() {
+        didSet { UserDefaults.standard.set(Double(detailsWidth), forKey: "details.width") }
+    }
     /// GET /api/runs/:id/pr, by PR URL: review state, checks, comments.
     var prActivity: [String: JSON] = [:]
 
