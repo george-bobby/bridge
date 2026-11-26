@@ -488,8 +488,11 @@ struct CommandPalette: View {
         Task {
             try? await Task.sleep(nanoseconds: 160_000_000)
             guard q == query.v.trimmingCharacters(in: .whitespaces) else { return }
-            hits.v = (try? await API.get("/api/search?q=\(API.q(q))"))?["hits"].array ?? []
-            if q == query.v.trimmingCharacters(in: .whitespaces) { searching.v = false }
+            let out = (try? await API.get("/api/search?q=\(API.q(q))"))?["hits"].array ?? []
+            // A slower answer to an older query never replaces a newer one.
+            guard q == query.v.trimmingCharacters(in: .whitespaces) else { return }
+            hits.v = out
+            searching.v = false
         }
     }
 

@@ -13,6 +13,8 @@
  *   stub:limit                end with a usage-limit error
  *   stub:exit                 die without a result
  *   stub:ask                  ask a permission question and wait for the answer
+ *   stub:stream=<n>           stream a reply as partial messages: n text deltas,
+ *                             a tool call and its result, a second call's text
  *   stub:tasks                run a subagent (its own tool call) and a background
  *                             command, with the task_* events Claude sends
  *
@@ -137,9 +139,35 @@ async function turn(prompt) {
     say(`answer: ${answer.behavior}`);
   }
   if (d.tasks) await tasks();
+  if (d.stream) await stream(Number(d.stream) || 20);
   if (d.report) writeReport(d.report, d);
   say("Stub turn done.");
   return done("stub done");
+}
+
+async function stream(n) {
+  const ev = (event) => out({ type: "stream_event", event });
+  const text = async (index) => {
+    ev({ type: "content_block_start", index, content_block: { type: "text", text: "" } });
+    for (let i = 0; i < n; i++) {
+      ev({ type: "content_block_delta", index, delta: { type: "text_delta", text: `tok${i} ` } });
+      await sleep(10);
+    }
+    ev({ type: "content_block_stop", index });
+  };
+  ev({ type: "message_start" });
+  await text(0);
+  ev({ type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "tu-stream", name: "Bash" } });
+  ev({ type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: '{"command":' } });
+  ev({ type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: '"ls"}' } });
+  ev({ type: "content_block_stop", index: 1 });
+  ev({ type: "message_delta", usage: { output_tokens: 40 } });
+  out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "tu-stream", name: "Bash", input: { command: "ls" } }] } });
+  await sleep(30);
+  out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "tu-stream", content: "a.txt\nb.txt" }] } });
+  ev({ type: "message_start" });
+  await text(0);
+  ev({ type: "message_delta", usage: { output_tokens: 30 } });
 }
 
 async function tasks() {

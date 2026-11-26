@@ -516,6 +516,13 @@ struct SessionNavItem: View {
             if NSEvent.modifierFlags.contains(.option) { model.openToSide(session.id) } else { model.open(session.id) }
         }
         .hoverBox(hover)
+        // A pointer that rests on a chat loads it, so the click opens it drawn.
+        // The short wait skips rows the pointer only passes over.
+        .task(id: hover.v) {
+            guard hover.v else { return }
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            if !Task.isCancelled { model.prefetch(session.id) }
+        }
         .onDrag { NSItemProvider(object: session.id as NSString) }
         .help("⌥-click or drag onto the chat to open side by side")
         .contextMenu { SessionMenu(session: session) }

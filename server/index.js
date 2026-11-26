@@ -51,6 +51,11 @@ const PUBLIC = path.join(ROOT, "legacy", "web");
 
 /* ------------------------------------------------------------- http utils */
 
+/** Serialised transcripts by run id, keyed by the file's stamp: switching
+ *  back to a chat, or a pane re-reading one that hasn't changed, skips the
+ *  parse and stringify of a file that can be megabytes. A few dozen at most. */
+const runBodies = new Map();
+
 function sendJson(res, status, body) {
   res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
   res.end(JSON.stringify(body));
@@ -849,15 +854,28 @@ async function handle(req, res) {
     }
 
     if (req.method === "GET" && !verb) {
-      const run = store.loadRun(id);
-      if (!run) {
-        sendJson(res, 404, { ok: false, error: "no such run" });
-        return;
+      // Current to the last streamed delta: `seq` tells the app which of the
+      // deltas it holds are already in here (see jobs.flushLive).
+      const seq = jobs.flushLive(id);
+      const stamp = store.runStamp(id);
+      const hit = runBodies.get(id);
+      let body = hit && hit.stamp === stamp ? hit.body : "";
+      if (!body) {
+        const run = store.loadRun(id);
+        if (!run) {
+          sendJson(res, 404, { ok: false, error: "no such run" });
+          return;
+        }
+        body = JSON.stringify(run);
+        runBodies.delete(id);
+        runBodies.set(id, { stamp, body });
+        while (runBodies.size > 24) runBodies.delete(runBodies.keys().next().value);
       }
       // No `running` alongside it: the page tracks live jobs through the
       // `jobs` event on the SSE stream, which is pushed the moment one starts
       // or ends rather than only when a chat happens to be fetched.
-      sendJson(res, 200, { run });
+      res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+      res.end(`{"run":${body},"seq":${seq}}`);
       return;
     }
 
