@@ -39,7 +39,26 @@ function cached(key, load, { refresh = false } = {}) {
 
 const PR_FIELDS = `number title url isDraft state createdAt updatedAt mergedAt closedAt reviewDecision mergeable
   additions deletions headRefName totalCommentsCount repository { nameWithOwner } author { login avatarUrl }
-  commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }`;
+  commits(last: 1) { nodes { commit { statusCheckRollup { state contexts(first: 1) {
+    checkRunCountsByState { state count } statusContextCountsByState { state count } } } } } }`;
+
+// Check runs and commit statuses by outcome, for "✓ 6 · ⊙ 1" next to a PR.
+const CHECK_BUCKET = {
+  SUCCESS: "pass", NEUTRAL: "pass", COMPLETED: "pass",
+  FAILURE: "fail", ERROR: "fail", TIMED_OUT: "fail", STARTUP_FAILURE: "fail", CANCELLED: "fail", ACTION_REQUIRED: "fail",
+  PENDING: "pending", EXPECTED: "pending", QUEUED: "pending", IN_PROGRESS: "pending", WAITING: "pending",
+  SKIPPED: "skipped", STALE: "skipped",
+};
+function checkCounts(rollup) {
+  const out = { pass: 0, fail: 0, pending: 0, skipped: 0 };
+  const ctx = rollup && rollup.contexts;
+  if (!ctx) return out;
+  for (const r of [].concat(ctx.checkRunCountsByState || [], ctx.statusContextCountsByState || [])) {
+    const b = CHECK_BUCKET[r.state];
+    if (b) out[b] += r.count || 0;
+  }
+  return out;
+}
 
 const PR_QUERY = `query($mine: String!, $review: String!, $merged: String!) {
   viewer { login }
@@ -64,7 +83,8 @@ const ISSUE_KEY = /\b([A-Z][A-Z0-9]{1,9}-\d+)\b/;
 
 function shapePr(n) {
   const head = n.commits && n.commits.nodes && n.commits.nodes[0];
-  const checks = (head && head.commit.statusCheckRollup && head.commit.statusCheckRollup.state) || "";
+  const rollup = head && head.commit.statusCheckRollup;
+  const checks = (rollup && rollup.state) || "";
   const key = (String(n.title).match(ISSUE_KEY) || String(n.headRefName || "").toUpperCase().match(ISSUE_KEY) || [])[1] || "";
   return {
     number: n.number,
@@ -77,6 +97,7 @@ function shapePr(n) {
     state: n.state, // OPEN | MERGED | CLOSED
     review: n.reviewDecision || "", // APPROVED | CHANGES_REQUESTED | REVIEW_REQUIRED | ""
     checks, // SUCCESS | FAILURE | ERROR | PENDING | EXPECTED | ""
+    checkCounts: checkCounts(rollup), // { pass, fail, pending, skipped }
     mergeable: n.mergeable || "",
     branch: n.headRefName || "",
     additions: n.additions || 0,
