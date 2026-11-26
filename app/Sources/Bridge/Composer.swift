@@ -712,8 +712,8 @@ struct ContextButton: View {
 
     var body: some View {
         let msgs = run["messages"].array
+        let last = msgs.last { $0["role"].string == "assistant" && $0["usage"]["input"].int + $0["usage"]["cacheRead"].int > 0 }
         let window = msgs.last { $0["contextWindow"].double > 0 }?["contextWindow"].double ?? 200_000
-        let last = msgs.last { $0["role"].string == "assistant" && Self.prompt($0["usage"], window: window) > 0 }
         let worked = msgs.contains { $0["role"].string == "assistant" && ["done", "stopped"].contains($0["state"].string) }
         if last != nil || worked {
             let m = last ?? .null
@@ -727,7 +727,7 @@ struct ContextButton: View {
                         Circle().trim(from: 0, to: f).stroke(tone, style: StrokeStyle(lineWidth: 2, lineCap: .round)).rotationEffect(.degrees(-90))
                     }
                     .frame(width: 13, height: 13)
-                    Text(verbatim: last == nil ? "Context" : "\(Int(f * 100))%").font(T.ui(11, .medium)).foregroundStyle(f > 0.65 ? tone : T.text3).monospacedDigit()
+                    Text(verbatim: used == 0 ? "Context" : "\(Int(f * 100))%").font(T.ui(11, .medium)).foregroundStyle(f > 0.65 ? tone : T.text3).monospacedDigit()
                 }
                 .padding(.horizontal, 7).frame(height: 26)
                 .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(open.v ? T.selected : hover.v ? T.hover : .clear))
