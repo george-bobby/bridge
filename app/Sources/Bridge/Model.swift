@@ -382,6 +382,8 @@ final class AppModel {
     @ObservationIgnored private(set) var issuesByKey: [String: Issue] = [:]
     var ports: JSON = .null
     var loading: Set<String> = []
+    /// Sources a refresh button asked for; background polls never spin a button.
+    var refreshing: Set<String> = []
     var errors: [String: String] = [:]
 
     var openRun: JSON = .null
@@ -903,7 +905,8 @@ final class AppModel {
     func load(_ name: String, refresh: Bool = false) async {
         if loading.contains(name) { return }
         loading.insert(name)
-        defer { loading.remove(name) }
+        if refresh { refreshing.insert(name) }
+        defer { loading.remove(name); refreshing.remove(name) }
         do {
             let out = try await API.get("/api/sources/\(name)\(refresh ? "?refresh=1" : "")")
             switch name {

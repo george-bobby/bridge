@@ -372,8 +372,7 @@ struct PRActivitySection: View {
                 Spacer()
                 Button { Task { await reload(true) } } label: {
                     Image(systemName: "arrow.clockwise").font(.system(size: 10, weight: .semibold)).foregroundStyle(T.text3)
-                        .rotationEffect(.degrees(loading.v ? 360 : 0))
-                        .animation(loading.v ? .linear(duration: 0.9).repeatForever(autoreverses: false) : .default, value: loading.v)
+                        .symbolEffect(.rotate, options: .repeat(.continuous), isActive: loading.v)
                         .frame(width: 20, height: 20).contentShape(Rectangle())
                 }
                 .buttonStyle(Pressable(scale: 0.88)).help("Refresh from GitHub")
