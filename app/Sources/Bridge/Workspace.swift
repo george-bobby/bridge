@@ -167,6 +167,7 @@ struct FooterButton: View {
 struct ProjectSection: View {
     @Environment(AppModel.self) var model
     let project: Project
+    static let dragPrefix = "bridge-project:"
     @AppStorage("sidebar.collapsed") private var collapsedRaw = ""
     @StateObject private var targeted = Box(false)
     @StateObject private var hover = Box(false)
@@ -192,6 +193,7 @@ struct ProjectSection: View {
                 } else if !sessions.isEmpty {
                     Text(verbatim: "\(sessions.count)").font(T.ui(11.5)).foregroundStyle(T.text3)
                 }
+                ArchivedButton(project: project)
                 OrchestratorButton(project: project)
             }
             .padding(.leading, 10).padding(.trailing, 3)
@@ -203,9 +205,18 @@ struct ProjectSection: View {
             .contentShape(Rectangle())
             .hoverBox(hover)
             .onTapGesture { withAnimation(M.snappy) { toggle() } }
+            // Drag a project header onto another to reorder the sidebar.
+            .onDrag { NSItemProvider(object: (ProjectSection.dragPrefix + project.id) as NSString) }
             .contextMenu { ProjectMenu(project: project) }
             .dropDestination(for: String.self) { ids, _ in
-                guard let id = ids.first, model.sessions.contains(where: { $0.id == id }) else { return false }
+                guard let id = ids.first else { return false }
+                if id.hasPrefix(ProjectSection.dragPrefix) {
+                    let moved = String(id.dropFirst(ProjectSection.dragPrefix.count))
+                    guard moved != project.id, let to = model.projects.firstIndex(where: { $0.id == project.id }) else { return false }
+                    Task { await model.moveProject(moved, to: to) }
+                    return true
+                }
+                guard model.sessions.contains(where: { $0.id == id }) else { return false }
                 Task { await model.setProject(id, project.id) }
                 return true
             } isTargeted: { targeted.v = $0 }
@@ -271,6 +282,33 @@ struct OrchestratorButton: View {
     }
 }
 
+/// A project's archived chats, beside its orchestrator in the header: opens
+/// Sessions › Archived scoped to the project. Hidden until something is archived there.
+struct ArchivedButton: View {
+    @Environment(AppModel.self) var model
+    let project: Project
+    @StateObject private var hover = Box(false)
+    var body: some View {
+        let count = model.archivedSessions.filter { $0.project == project.id }.count
+        let on = model.route == .sessions && model.showArchived && model.projectFilter == project.id
+        if count > 0 {
+            Image(systemName: "archivebox").font(.system(size: 11, weight: .medium)).foregroundStyle(T.text3)
+                .frame(width: 24, height: 24)
+                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(on ? T.sideSelected : hover.v ? T.hover : .clear))
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    withAnimation(M.snappy) {
+                        model.projectFilter = project.id
+                        model.showArchived = true
+                        model.route = .sessions
+                    }
+                }
+                .hoverBox(hover)
+                .help("\(count) archived in \(project.name)")
+        }
+    }
+}
+
 struct ProjectMenu: View {
     @Environment(AppModel.self) var model
     let project: Project
@@ -290,6 +328,13 @@ struct ProjectMenu: View {
         Section {
             Button { NSWorkspace.shared.open(URL(fileURLWithPath: project.path)) } label: { Label("Reveal in Finder", systemImage: "folder") }
             Button { copyToPasteboard(project.path) } label: { Label("Copy Path", systemImage: "doc.on.doc") }
+        }
+        Section {
+            let i = model.projects.firstIndex(where: { $0.id == project.id }) ?? 0
+            Button { Task { await model.moveProject(project.id, to: i - 1) } } label: { Label("Move Up", systemImage: "arrow.up") }
+                .disabled(i == 0)
+            Button { Task { await model.moveProject(project.id, to: i + 1) } } label: { Label("Move Down", systemImage: "arrow.down") }
+                .disabled(i >= model.projects.count - 1)
         }
         Section {
             if project.id != model.defaultProject?.id {

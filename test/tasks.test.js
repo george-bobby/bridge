@@ -29,3 +29,12 @@ Half done.
   assert.deepEqual(parseReport("## Open questions\nNone\n").questions, []);
   assert.deepEqual(parseReport("## Action requests\n1. Post 'hi' in #eng\n").actions, ["Post 'hi' in #eng"]);
 });
+
+test("a task's title skips a pasted file path in front of the ask", () => {
+  const tasks = require("../server/tasks");
+  assert.strictEqual(tasks.titleFrom("/Users/me/Downloads/CleanShot 2026-11-27 at 12.54.57 AM.png\n\nLet me reorder projects"), "Let me reorder projects");
+  assert.strictEqual(tasks.titleFrom("# Fix login\nbody"), "Fix login");
+  assert.strictEqual(tasks.titleFrom("Use /tmp/x.png here"), "Use /tmp/x.png here");
+  assert.strictEqual(tasks.shownTitle("/Users/me/a.png", "/Users/me/a.png\nReal ask"), "Real ask");
+  assert.strictEqual(tasks.shownTitle("Already fine", "whatever"), "Already fine");
+});
