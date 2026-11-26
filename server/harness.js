@@ -336,34 +336,25 @@ function checkStalls() {
 
 /* -------------------------------------------------------------- capacity */
 
+// No cap on parallel workers: every task starts right away.
 function workingCount() {
   let total = 0;
-  const perRepo = new Map();
   for (const id of jobs.runningIds()) {
     if (projects.isOrchestrator(id)) continue;
     const meta = tasks.readMeta(id) || {};
     if (meta.declared && meta.declared.state === "waiting") continue; // waiting doesn't count
     total++;
-    const repo = meta.repo || "";
-    perRepo.set(repo, (perRepo.get(repo) || 0) + 1);
   }
-  return { total, perRepo };
+  return { total };
 }
 
-function hasRoom(repo) {
-  const c = cfg();
-  const { total, perRepo } = workingCount();
-  return total < c.maxWorkers && (perRepo.get(repo || "") || 0) < c.maxPerRepo;
-}
-
-/** Start queued tasks, oldest first, while there's room. */
+/** Start tasks left queued (by an older capped build), oldest first. */
 function dispatch() {
   const queued = tasks
     .list()
     .filter((m) => m.status === "queued")
     .sort((a, b) => (a.queuedAt || a.createdAt) - (b.queuedAt || b.createdAt));
   for (const m of queued) {
-    if (!hasRoom(m.repo)) continue;
     if (jobs.isRunning(m.id)) continue;
     try {
       if (m.kind === "slack") jobs.startPipeline(m.id, { config: store.readConfig() });
@@ -380,8 +371,8 @@ function dispatch() {
 /* ----------------------------------------------------------------- spawn */
 
 /**
- * A worker from a brief: validate, worktree, chat, task folder, then start
- * (or queue when over the cap). Returns the task id either way.
+ * A worker from a brief: validate, worktree, chat, task folder, then start.
+ * Returns the task id.
  */
 async function spawnTask({ repo, title, brief, branch, base = "", workspace = "", opts = {}, start = true, by = "" }) {
   const text = String(brief || "").trim();
@@ -422,14 +413,8 @@ async function spawnTask({ repo, title, brief, branch, base = "", workspace = ""
 
   let state = "created";
   if (start) {
-    if (hasRoom(repoPath)) {
-      jobs.startTask(id, { config: store.readConfig() });
-      state = "started";
-    } else {
-      tasks.writeMeta(id, { status: "queued", queuedAt: now() });
-      tasks.appendEvent({ taskId: id, name: "queued", text: "over the worker cap; starts when a slot opens" });
-      state = "queued";
-    }
+    jobs.startTask(id, { config: store.readConfig() });
+    state = "started";
   }
   bus.broadcast("runs", { runs: store.listRunSummaries() });
   bus.broadcast("inbox", inbox());
@@ -493,18 +478,13 @@ function importChat({ agent, id, history = require("./history") }) {
   return { taskId, existing: false };
 }
 
-/** Pipeline start for a Slack chat, through the same cap. */
+/** Pipeline start for a Slack chat. */
 function startSlack(runId) {
   const run = store.loadRun(runId);
   if (!run) throw new Error("unknown run");
-  // The chat's project (Hand to Claude in a project) decides the repo, for the cap too.
+  // The chat's project (Hand to Claude in a project) decides the repo.
   const repo = jobs.resolveWorkdir(store.readConfig(), run);
   tasks.writeMeta(runId, { kind: "slack", repo, title: run.text || run.permalink || runId });
-  if (!hasRoom(repo)) {
-    tasks.writeMeta(runId, { status: "queued", queuedAt: now() });
-    tasks.appendEvent({ taskId: runId, name: "queued", text: "over the worker cap; starts when a slot opens" });
-    return { state: "queued" };
-  }
   jobs.startPipeline(runId, { config: store.readConfig() });
   return { state: "started" };
 }
@@ -889,6 +869,5 @@ module.exports = {
   note,
   dispatch,
   outcome,
-  hasRoom,
   workingCount,
 };

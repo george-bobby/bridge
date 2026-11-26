@@ -131,15 +131,13 @@ function jobOpts(config, run) {
  *              quiet:  only what needs you (questions, blocks, stalls, ...)
  *              away:   nothing is relayed; it's held and briefed on return
  * relay        whether outcomes start a turn in the orchestrator chat at all
- * maxWorkers   working workers at once, in total and per repo; past the cap a
- * maxPerRepo   new task is queued. Workers declared waiting don't count.
  * stallMinutes silence before a working worker is flagged as stalled
  * workerSkill  skill every new worker opens with; "" = WORKER_SKILL (.env), "none" = off
  * policy       per-category overrides of server/policy.js (ask | allow)
  */
 // slackWatch: "off" | "watch" (file mentions in the Inbox) | "triage" (and let
 // the orchestrator decide which ones to start); server/watch.js.
-const DEFAULT_HARNESS = { mode: "normal", relay: true, maxWorkers: 3, maxPerRepo: 2, stallMinutes: 15, workerSkill: "", policy: {}, slackWatch: "watch", slackPollSec: 120, slackChannels: [] };
+const DEFAULT_HARNESS = { mode: "normal", relay: true, stallMinutes: 15, workerSkill: "", policy: {}, slackWatch: "watch", slackPollSec: 120, slackChannels: [] };
 const POLICY_KEYS = ["chat", "tickets", "docs", "prComments", "prMerge", "otherWrites", "destructiveGit"];
 
 function sanitizeHarness(patch, base) {
@@ -148,8 +146,6 @@ function sanitizeHarness(patch, base) {
   if (["normal", "quiet", "away"].includes(patch.mode)) out.mode = patch.mode;
   if (patch.relay != null) out.relay = Boolean(patch.relay);
   const int = (v, lo, hi) => Math.min(hi, Math.max(lo, Math.round(Number(v))));
-  if (Number.isFinite(Number(patch.maxWorkers)) && patch.maxWorkers !== "") out.maxWorkers = int(patch.maxWorkers, 1, 20);
-  if (Number.isFinite(Number(patch.maxPerRepo)) && patch.maxPerRepo !== "") out.maxPerRepo = int(patch.maxPerRepo, 1, 20);
   if (Number.isFinite(Number(patch.stallMinutes)) && patch.stallMinutes !== "") out.stallMinutes = int(patch.stallMinutes, 1, 240);
   // "" follows WORKER_SKILL in .env; "none" turns the worker skill off.
   if (patch.workerSkill != null) {
