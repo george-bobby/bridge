@@ -40,6 +40,14 @@ the questions workers are waiting on.
 - **Four agents, one session.** Run any session on Claude Code, Codex, Cursor or
   Devin, with each one's own models (listed live from its CLI). Switch agents
   mid-session and the next one is handed a briefing of the work so far.
+- **MCP servers for every agent.** Settings › MCP servers lists what Claude,
+  Codex, Cursor and Devin each load, with live status and their tools. Add a
+  server to several agents at once, edit, remove, switch one off, or sign in;
+  the composer's MCP chip does the same for the chat's agent in its worktree.
+- **Subagents and background commands, visible.** The strip over the composer
+  shows what a Claude session has running beside it; each subagent opens in its
+  own tab with its prompt, every step and its result, and each background
+  command with its output, live. Stop either from there.
 - **Usage at a glance.** Plan limits for Claude, Codex and Cursor (session,
   weekly, monthly, with reset times and a "runs out at" projection) in the
   bottom-right corner, plus what Bridge ran on each agent this week and month.
@@ -314,6 +322,10 @@ bin/bridge todo add <key> "Merge #42" | todo done <key>
 bin/bridge relaunch <id> | cleanup <id> [--force]
 bin/bridge declare waiting "CI, ~10 min"  # inside a worker: not stalled, just waiting
 ```
+
+**New task** starting a worker picks where it runs, like Paseo: a new worktree
+(optionally with your branch name) from any local or remote branch, the main
+checkout, or an existing worktree. Bridge only ever removes worktrees it made.
 
 `cleanup` removes the worktree and keeps the branch. It refuses if there are
 uncommitted changes or commits that aren't pushed, unless `--force`.

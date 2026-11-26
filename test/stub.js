@@ -13,9 +13,13 @@
  *   stub:limit                end with a usage-limit error
  *   stub:exit                 die without a result
  *   stub:ask                  ask a permission question and wait for the answer
+ *   stub:tasks                run a subagent (its own tool call) and a background
+ *                             command, with the task_* events Claude sends
  *
  * `/compact` compacts (a compact_boundary event); the initialize handshake
- * answers with a small command and model list.
+ * answers with a small command and model list; `mcp_status` lists one
+ * connected stdio server and one claude.ai connector; `mcp_toggle` and
+ * `stop_task` succeed.
  *
  * Follow-up turns: an "[harness] <name> answered" message writes a
  * ready-for-review report; anything else repeats the brief's directives.
@@ -26,6 +30,11 @@
 const fs = require("fs");
 
 if (process.env.STUB_LOG) fs.appendFileSync(process.env.STUB_LOG, JSON.stringify({ argv: process.argv.slice(2), env: { BRIDGE_ROLE: process.env.BRIDGE_ROLE, BRIDGE_TASK_ID: process.env.BRIDGE_TASK_ID, BRIDGE_GUARD: process.env.BRIDGE_GUARD } }) + "\n");
+
+if (process.argv.includes("--version")) {
+  process.stdout.write("0.0.0 (stub)\n");
+  process.exit(0);
+}
 
 const out = (o) => process.stdout.write(JSON.stringify(o) + "\n");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -127,10 +136,36 @@ async function turn(prompt) {
     const answer = await new Promise((r) => (waitingAnswer = r));
     say(`answer: ${answer.behavior}`);
   }
+  if (d.tasks) await tasks();
   if (d.report) writeReport(d.report, d);
   say("Stub turn done.");
   return done("stub done");
 }
+
+async function tasks() {
+  const asst = (content, parent) => out({ type: "assistant", parent_tool_use_id: parent || null, message: { role: "assistant", content } });
+  const res = (id, content, parent) => out({ type: "user", parent_tool_use_id: parent || null, message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content }] } });
+  asst([{ type: "tool_use", id: "tu-agent", name: "Agent", input: { description: "Survey the repo", subagent_type: "Explore", prompt: "List the files." } }]);
+  out({ type: "system", subtype: "task_started", task_id: "a1", tool_use_id: "tu-agent", description: "Survey the repo", subagent_type: "Explore", is_backgrounded: false, task_type: "local_agent", prompt: "List the files." });
+  asst([{ type: "tool_use", id: "tu-sub", name: "Bash", input: { command: "ls" } }], "tu-agent");
+  res("tu-sub", "a.txt\nb.txt", "tu-agent");
+  asst([{ type: "text", text: "Two files." }], "tu-agent");
+  out({ type: "system", subtype: "task_progress", task_id: "a1", tool_use_id: "tu-agent", description: "Running ls", usage: { total_tokens: 1200, tool_uses: 1, duration_ms: 40 }, last_tool_name: "Bash" });
+  out({ type: "system", subtype: "task_notification", task_id: "a1", tool_use_id: "tu-agent", status: "completed", summary: "Two files: a.txt, b.txt", usage: { total_tokens: 1500, tool_uses: 1, duration_ms: 60 } });
+  res("tu-agent", "Two files: a.txt, b.txt");
+  const file = require("path").join(require("os").tmpdir(), `stub-bg-${process.pid}.output`);
+  fs.writeFileSync(file, "building...\ndone\n");
+  asst([{ type: "tool_use", id: "tu-bg", name: "Bash", input: { command: "npm run build", run_in_background: true } }]);
+  out({ type: "system", subtype: "task_started", task_id: "bg1", tool_use_id: "tu-bg", description: "Build", is_backgrounded: true, task_type: "local_bash" });
+  res("tu-bg", `Command running in background with ID: bg1. Output is being written to: ${file}`);
+  out({ type: "system", subtype: "task_updated", task_id: "bg1", patch: { status: "completed", end_time: Date.now() } });
+  out({ type: "system", subtype: "task_notification", task_id: "bg1", tool_use_id: "tu-bg", status: "completed", output_file: file, summary: "Background command \"Build\" completed (exit code 0)" });
+}
+
+const MCP_STATUS = [
+  { name: "stub-tools", status: "connected", config: { type: "stdio", command: "stub-mcp", args: [] }, scope: "user", tools: [{ name: "echo", annotations: { readOnly: true } }] },
+  { name: "claude.ai Docs", status: "connected", config: { type: "claudeai-proxy", url: "https://docs.example/mcp", id: "x" }, scope: "claudeai", tools: [{ name: "search", annotations: {} }] },
+];
 
 let buf = "";
 let busy = Promise.resolve();
@@ -149,6 +184,11 @@ process.stdin.on("data", (c) => {
     }
     if (m.type === "control_request" && m.request && m.request.subtype === "initialize") {
       out({ type: "control_response", response: { subtype: "success", request_id: m.request_id, response: { commands: [{ name: "stub-skill", description: "A skill the stub reports (user)", argumentHint: "" }, { name: "compact", description: "Clear conversation history but keep a summary in context", argumentHint: "" }], models: [{ value: "default", displayName: "Default" }, { value: "opus", resolvedModel: "claude-opus-stub", displayName: "Opus", description: "Stub opus", supportedEffortLevels: ["low", "high"] }] } } });
+    } else if (m.type === "control_request" && m.request && m.request.subtype === "mcp_status") {
+      out({ type: "control_response", response: { subtype: "success", request_id: m.request_id, response: { mcpServers: MCP_STATUS } } });
+    } else if (m.type === "control_request" && m.request && (m.request.subtype === "mcp_toggle" || m.request.subtype === "stop_task")) {
+      if (process.env.STUB_LOG) fs.appendFileSync(process.env.STUB_LOG, JSON.stringify({ control: m.request }) + "\n");
+      out({ type: "control_response", response: { subtype: "success", request_id: m.request_id, response: {} } });
     } else if (m.type === "control_response" && waitingAnswer) {
       const r = waitingAnswer;
       waitingAnswer = null;

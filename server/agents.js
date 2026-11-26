@@ -39,7 +39,9 @@ function command(agent, { workdir, sessionId, permissionMode, model, effort, pro
     return { bin, args: [...base, "-"], stdin: true };
   }
   if (agent === "cursor") {
-    const args = ["-p", "--output-format", "stream-json", "--trust", "--workspace", workdir];
+    // --approve-mcps: headless, an unapproved server is silently skipped, so
+    // the servers enabled in Settings › MCP servers would never load.
+    const args = ["-p", "--output-format", "stream-json", "--trust", "--approve-mcps", "--workspace", workdir];
     // Cursor has no edits-only mode: --force lets it edit and run commands.
     if (full || permissionMode === "acceptEdits") args.push("--force");
     else if (permissionMode === "plan") args.push("--mode", "plan");

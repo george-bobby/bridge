@@ -313,7 +313,7 @@ async function handle(req, res) {
 
       if (req.method === "GET" && p === "/api/tasks") return ok({ tasks: harness.status(), working: harness.workingCount().total, harness: store.readConfig().harness });
       if (req.method === "POST" && p === "/api/tasks") {
-        return ok(await harness.spawnTask({ repo: body.repo, title: body.title, brief: body.brief, branch: body.branch, opts: body.opts, start: body.start !== false }));
+        return ok(await harness.spawnTask({ repo: body.repo, title: body.title, brief: body.brief, branch: body.branch, base: body.base, workspace: body.workspace, opts: body.opts, start: body.start !== false }));
       }
       if (req.method === "GET" && p === "/api/inbox") return ok(harness.inbox());
       if (req.method === "GET" && p === "/api/catchup") return ok(harness.catchup(url.searchParams.get("since") || "8h"));
@@ -490,6 +490,48 @@ async function handle(req, res) {
       return sendJson(res, 200, { ok: true, ...(await require("./usage").all({ refresh: url.searchParams.get("refresh") === "1" })) });
     } catch (e) {
       return sendJson(res, 500, { ok: false, error: String(e.message || e) });
+    }
+  }
+
+  // --- a repo's branches and worktrees (New task's workspace pickers) -------
+  if (req.method === "GET" && p === "/api/git") {
+    if (!sameOrigin(req)) return sendJson(res, 403, { ok: false, error: "cross-origin request refused" });
+    try {
+      const proj = projects.get(String(url.searchParams.get("project") || ""));
+      const repo = proj && proj.path ? proj.path : jobs.resolveWorkdir(store.readConfig());
+      return sendJson(res, 200, { ok: true, ...(env.demo ? require("./demo").git() : await tasks.branches(repo)) });
+    } catch (e) {
+      return sendJson(res, 400, { ok: false, error: String(e.message || e) });
+    }
+  }
+
+  // --- MCP servers of each agent (Settings, the composer's MCP menu) --------
+  if (p === "/api/mcp" || p.startsWith("/api/mcp/")) {
+    if (!sameOrigin(req)) return sendJson(res, 403, { ok: false, error: "cross-origin request refused" });
+    try {
+      const mcp = env.demo ? require("./demo").mcp : require("./mcp");
+      const body = req.method === "POST" ? JSON.parse((await readBody(req)) || "{}") : {};
+      // Which folder's view: a session's (its worktree), a project's, or the default repo.
+      const runId = url.searchParams.get("run") || body.run || "";
+      const proj = projects.get(String(url.searchParams.get("project") || body.project || ""));
+      const run = runId ? store.loadRun(runId) : null;
+      const dir = run ? jobs.sessionWorkdir(run, store.readConfig()) : proj && proj.path ? proj.path : jobs.resolveWorkdir(store.readConfig());
+      const refresh = url.searchParams.get("refresh") === "1";
+      const ok = (extra) => sendJson(res, 200, { ok: true, dir, ...extra });
+      if (req.method === "GET" && p === "/api/mcp") return ok(await mcp.all({ dir, refresh }));
+      const m = p.match(/^\/api\/mcp\/(claude|codex|cursor|devin)(?:\/([^/]+)(?:\/(tools|enabled|login))?)?$/);
+      if (!m) return sendJson(res, 404, { ok: false, error: "not found" });
+      const [, agent, rawName, verb] = m;
+      const name = rawName ? decodeURIComponent(rawName) : "";
+      if (req.method === "GET" && !name) return ok(await mcp.list(agent, { dir, refresh }));
+      if (req.method === "POST" && !name) return ok(await mcp.save(agent, { name: body.name, original: body.original || "", form: body.form || {} }, { dir }));
+      if (req.method === "GET" && verb === "tools") return ok(await mcp.tools(agent, name, { dir, refresh }));
+      if (req.method === "POST" && verb === "enabled") return ok(await mcp.setEnabled(agent, name, body.enabled !== false, { dir }));
+      if (req.method === "POST" && verb === "login") return ok(mcp.login(agent, name, { dir }));
+      if (req.method === "DELETE" && name && !verb) return ok(await mcp.remove(agent, name, { dir }));
+      return sendJson(res, 405, { ok: false, error: "method not allowed" });
+    } catch (e) {
+      return sendJson(res, 400, { ok: false, error: String(e.message || e) });
     }
   }
 
@@ -726,6 +768,39 @@ async function handle(req, res) {
       sendJson(res, 400, { ok: false, error: String(e.message || e) });
     }
     return;
+  }
+
+  // --- a chat's subagents and background tasks ------------------------------
+  // The output file is only ever the one Claude named for that task.
+  const taskMatch = p.match(/^\/api\/runs\/([^/]+)\/tasks\/([A-Za-z0-9_-]{1,80})\/(output|stop)$/);
+  if (taskMatch) {
+    if (!sameOrigin(req)) return sendJson(res, 403, { ok: false, error: "cross-origin request refused" });
+    const id = store.safeId(decodeURIComponent(taskMatch[1]));
+    const run = id ? store.loadRun(id) : null;
+    const task = run && (run.messages || []).flatMap((m) => m.tasks || []).find((t) => t.id === taskMatch[2] || t.toolUseId === taskMatch[2]);
+    if (!task) return sendJson(res, 404, { ok: false, error: "no such task" });
+    if (req.method === "POST" && taskMatch[3] === "stop") {
+      if (task.status !== "running") return sendJson(res, 409, { ok: false, error: "that task isn't running" });
+      const sent = jobs.stopTask(id, task.id);
+      return sendJson(res, sent ? 200 : 409, sent ? { ok: true } : { ok: false, error: "the session has ended" });
+    }
+    if (req.method === "GET" && taskMatch[3] === "output") {
+      const file = task.outputFile || "";
+      let text = "";
+      let size = 0;
+      try {
+        const st = fs.statSync(file);
+        size = st.size;
+        const cap = 256 * 1024;
+        const fd = fs.openSync(file, "r");
+        const buf = Buffer.alloc(Math.min(cap, size));
+        fs.readSync(fd, buf, 0, buf.length, Math.max(0, size - cap));
+        fs.closeSync(fd);
+        text = buf.toString("utf8");
+      } catch {}
+      return sendJson(res, 200, { ok: true, task: task.id, text, size, truncated: size > 256 * 1024, exists: !!file && fs.existsSync(file) });
+    }
+    return sendJson(res, 405, { ok: false, error: "method not allowed" });
   }
 
   // --- one chat ------------------------------------------------------------

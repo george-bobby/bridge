@@ -343,7 +343,7 @@ function dispatch() {
  * A worker from a brief: validate, worktree, chat, task folder, then start
  * (or queue when over the cap). Returns the task id either way.
  */
-async function spawnTask({ repo, title, brief, branch, opts = {}, start = true }) {
+async function spawnTask({ repo, title, brief, branch, base = "", workspace = "", opts = {}, start = true }) {
   const text = String(brief || "").trim();
   if (!text) throw new Error("a task needs a brief");
   if (text.length > 60000) throw new Error("brief too long");
@@ -356,11 +356,22 @@ async function spawnTask({ repo, title, brief, branch, opts = {}, start = true }
   // A short time-based suffix keeps two tasks with the same title apart.
   const br = branch || `${env.branchPrefix}/${tasks.slugify(t) || "task"}-${Date.now().toString(36).slice(-4)}`;
 
-  const wt = await tasks.createWorktree({ repo: repoPath, branch: br });
+  // Where it works: a fresh worktree (the default), the main checkout
+  // ("local"), or an existing worktree of this repo (its path). Bridge never
+  // removes a checkout it didn't create.
+  let wt;
+  const ws = String(workspace || "").trim();
+  if (!ws || ws === "worktree") wt = await tasks.createWorktree({ repo: repoPath, branch: br, from: base });
+  else {
+    const info = await tasks.branches(repoPath);
+    const dir = ws === "local" ? info.worktrees.find((w) => w.main) : info.worktrees.find((w) => path.resolve(w.path) === path.resolve(ws));
+    if (!dir) throw new Error(ws === "local" ? "can't find the main checkout" : `not a worktree of ${repoPath}: ${ws}`);
+    wt = { worktree: dir.path, branch: dir.branch || dir.head, base: info.default, from: "", copied: 0, adopted: ws === "local" ? "local" : "worktree" };
+  }
 
   const p = tasks.paths(id);
   tasks.writeBrief(id, `# ${t}\n\n${text}\n`);
-  tasks.writeMeta(id, { kind: "task", title: t, repo: repoPath, worktree: wt.worktree, branch: wt.branch, base: wt.base, from: wt.from, status: "new" });
+  tasks.writeMeta(id, { kind: "task", title: t, repo: repoPath, worktree: wt.worktree, branch: wt.branch, base: wt.base, from: wt.from, status: "new", ...(wt.adopted ? { adopted: wt.adopted } : {}) });
 
   const run = store.blankRun(id, { who: t, text: text.slice(0, 400), action: "pending", phase: "queued" });
   run.kind = "task";
@@ -477,9 +488,9 @@ async function cleanup(taskId, { force = false } = {}) {
   if (jobs.isRunning(taskId)) throw new Error("stop the worker before cleaning up its worktree");
   const meta = tasks.readMeta(taskId);
   if (!meta) throw new Error(`no such task: ${taskId}`);
-  if (!meta.worktree) {
+  if (!meta.worktree || meta.adopted) {
     tasks.writeMeta(taskId, { status: "cleaned", cleanedAt: now() });
-    return { removed: false, note: "no worktree recorded" };
+    return { removed: false, note: meta.adopted ? `${meta.adopted === "local" ? "the main checkout" : "an existing worktree"} isn't Bridge's to remove: left in place` : "no worktree recorded" };
   }
   const insp = await tasks.inspectWorktree(meta.worktree);
   if (insp.exists && (insp.dirty || insp.unpushed) && !force) {

@@ -47,6 +47,7 @@ struct ChatView: View {
             let tab = model.chatTab
             let known = tab == "chat" || tab == "changes" || (tab == "term" && model.terminalTabs.contains(id))
                 || (model.browserTabs[id] ?? []).contains(where: { "web-\($0.id)" == tab })
+                || (model.taskTabs[id] ?? []).contains(where: { "task-\($0)" == tab })
             if !known { model.chatTab = "chat" }
             await model.loadCommands(for: id)
         }
@@ -188,6 +189,11 @@ struct SessionTabs: View {
                     .onDrag { NSItemProvider(object: PanePayload.tab(runId, "web-\(t.id)") as NSString) }
                     .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .leading)))
             }
+            ForEach(model.taskTabs[runId] ?? [], id: \.self) { tid in
+                let t = model.agentTask(runId, tid)
+                tab("task-\(tid)", icon: t?.icon ?? "square.stack.3d.down.right", label: t?.title ?? "Task", close: { model.closeTaskTab(runId, tid) })
+                    .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .leading)))
+            }
             newTabMenu
             Spacer()
         }
@@ -196,6 +202,7 @@ struct SessionTabs: View {
         .frame(height: pane == nil ? 42 : 34)
         .overlay(alignment: .bottom) { Rectangle().fill(T.line).frame(height: 1) }
         .animation(M.snappy, value: webTabs.map(\.id))
+        .animation(M.snappy, value: model.taskTabs[runId] ?? [])
         .animation(M.snappy, value: model.terminalTabs.contains(runId))
     }
 
@@ -476,7 +483,8 @@ struct AssistantMessage: View {
                 MessageHead(name: agent.label, detail: [m["label"].string, m["model"].string].filter { !$0.isEmpty }.joined(separator: " · "), ts: m["ts"].double)
                 let steps = m["steps"].array
                 if steps.isEmpty && !m["text"].string.isEmpty { MarkdownText(text: m["text"].string) }
-                ForEach(Array(steps.enumerated()), id: \.offset) { _, s in StepView(step: s, runId: runId) }
+                let tasks = m["tasks"].array
+                ForEach(Array(steps.enumerated()), id: \.offset) { _, s in StepView(step: s, runId: runId, tasks: tasks) }
                 footer(state)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -516,6 +524,15 @@ struct AssistantMessage: View {
 struct StepView: View {
     let step: JSON
     let runId: String
+    /// The message's subagents and background commands, for their cards.
+    var tasks: [JSON] = []
+
+    /// The task this tool call started, if it started one.
+    var task: AgentTask? {
+        let id = step["id"].string
+        guard !id.isEmpty, step["kind"].string == "tool" else { return nil }
+        return tasks.first { $0["toolUseId"].string == id }.map(AgentTask.init)
+    }
 
     var body: some View {
         switch step["kind"].string {
@@ -525,7 +542,7 @@ struct StepView: View {
             ThinkingView(step: step)
         case "tool":
             VStack(alignment: .leading, spacing: 8) {
-                ToolView(step: step)
+                if let t = task { TaskCard(task: t, runId: runId) } else { ToolView(step: step) }
                 if !step["ask"].isNull { AskCard(ask: step["ask"], runId: runId) }
             }
         default:
@@ -591,7 +608,7 @@ struct ToolView: View {
                     } else if failed {
                         Image(systemName: "xmark").font(.system(size: 9, weight: .bold)).foregroundStyle(T.red)
                     } else if !result.isEmpty {
-                        if step["resultLines"].int > 0 { Text(verbatim: "\(step["resultLines"].int) lines").font(T.ui(11)).foregroundStyle(T.text3) }
+                        if step["resultLines"].int > 0 { Text(verbatim: step["resultLines"].int == 1 ? "1 line" : "\(step["resultLines"].int) lines").font(T.ui(11)).foregroundStyle(T.text3) }
                         Image(systemName: "chevron.right").font(.system(size: 8, weight: .bold)).foregroundStyle(T.text3)
                             .rotationEffect(.degrees(open.v ? 90 : 0))
                     }
@@ -940,6 +957,7 @@ struct Composer: View {
             AgentModelPicker(agent: agent, modelId: value(agent == .claude ? "model" : "agentModel").string, effort: value("effort").string,
                              pick: { a, m in pickModel(a, m, was: agent) }, setEffort: { e in Task { await model.setOpts(runId, ["effort": e]) } })
             AccessPicker(agent: agent, mode: value("permissionMode").string) { m in Task { await model.setOpts(runId, ["permissionMode": m]) } }
+            MCPButton(runId: runId, agent: agent)
         }
     }
 

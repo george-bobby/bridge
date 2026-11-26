@@ -208,10 +208,43 @@ const claude = (ago, steps, o = {}) => ({
   turns: o.turns || 0,
   usage: { input: 0, output: o.out || 0, cacheRead: 0, cacheWrite: 0, thinking: 0 },
   workdir: o.workdir || REPO,
+  ...(o.tasks ? { tasks: o.tasks } : {}),
 });
 const think = (text, tokens) => ({ kind: "thinking", text, tokens, streaming: false });
 const say = (text) => ({ kind: "text", text, streaming: false });
 const tool = (name, detail, result = "", ok = true) => ({ kind: "tool", name, detail, result, ok, resultLines: result ? result.split("\n").length : 0 });
+/** Where the demo's background command writes; seed() fills it in. */
+let demoDir = require("os").tmpdir();
+const BG_OUT = () => path.join(demoDir, "demo-bg.output");
+const csvTasks = () => [
+  {
+    id: "a3f9c2e1", toolUseId: "tu-demo-callers", type: "agent", subagentType: "Explore", description: "Find every caller of paginateRows", status: "completed",
+    prompt: "Find every caller of paginateRows() in src/ and say which exports each one feeds. Read-only: don't edit anything.",
+    startedAt: (now() - 2280) * 1000, endedAt: (now() - 2190) * 1000, tokens: 18400, toolUses: 4, lastTool: "Read",
+    summary: "Three callers, all exports: `csv.ts:31` (CSV download), `xlsx.ts:27` (XLSX download) and `api/orders.ts:88` (the API's `?format=csv`). Each slices rows with the page bounds it returns, so one fix in `paginateRows()` covers all three.",
+    steps: [
+      tool("Grep", "paginateRows src/", "src/export/paginate.ts:14\nsrc/export/csv.ts:31\nsrc/export/xlsx.ts:27\nsrc/api/orders.ts:88"),
+      tool("Read", "src/export/csv.ts", "for (const [from, to] of paginateRows(rows.length, PAGE)) {\n  out.push(...rows.slice(from, to).map(toCsvLine));\n}"),
+      tool("Read", "src/export/xlsx.ts", "paginateRows(total, 50).forEach(([a, b]) => sheet.addRows(rows.slice(a, b)));"),
+      tool("Read", "src/api/orders.ts", "if (q.format === 'csv') return streamCsv(paginateRows(count, 100), rows);"),
+      say("Three callers, all exports. One fix in `paginateRows()` covers CSV, XLSX and the API."),
+    ],
+  },
+  {
+    id: "b71d04aa", toolUseId: "tu-demo-repro", type: "agent", subagentType: "general-purpose", description: "Write a failing test for the last page", status: "running", background: true,
+    prompt: "Add a test to src/export/paginate.test.ts that exports 41 rows with a page size of 20 and expects 3 pages. Run it and confirm it fails on main.",
+    startedAt: (now() - 400) * 1000, tokens: 9600, toolUses: 3, lastTool: "Bash", activity: "Running the export tests",
+    steps: [
+      tool("Read", "src/export/paginate.test.ts", "describe('paginateRows', () => {\n  it('splits evenly', () => { … })\n})"),
+      tool("Edit", "src/export/paginate.test.ts"),
+      { kind: "tool", name: "Bash", detail: "npx vitest run src/export/paginate.test.ts", id: "tu-demo-sub-run" },
+    ],
+  },
+  {
+    id: "bk9x2m4q", toolUseId: "tu-demo-bg", type: "bash", background: true, description: "Export suite in watch mode", command: "npm test -- export --watch", status: "running",
+    startedAt: (now() - 360) * 1000, outputFile: BG_OUT(),
+  },
+];
 
 function run(runId, o) {
   return {
@@ -280,9 +313,12 @@ function sessions() {
             tool("Grep", "paginateRows src/", "src/export/paginate.ts:14\nsrc/export/csv.ts:31\nsrc/export/xlsx.ts:27\nsrc/api/orders.ts:88"),
             tool("Read", "src/export/paginate.ts", "export function paginateRows(total: number, size: number) {\n  const pages = Math.floor(total / size);\n  return Array.from({ length: pages }, (_, i) => [i * size, (i + 1) * size]);\n}"),
             say("Found it. `paginateRows()` uses `Math.floor(total / size)`, so a final partial page is never emitted. With no filter the total happens to be a multiple of 50, which is why it only shows up filtered.\n\nThe same helper feeds CSV, XLSX and the API's `?format=csv`."),
+            { ...tool("Agent", "Find every caller of paginateRows", "Three callers, all exports: csv.ts, xlsx.ts and api/orders.ts."), id: "tu-demo-callers" },
+            { ...tool("Agent", "Write a failing test for the last page", "Async agent launched successfully."), id: "tu-demo-repro" },
+            { ...tool("Bash", "npm test -- export --watch", "Command running in background with ID: bk9x2m4q."), id: "tu-demo-bg", raw: JSON.stringify({ command: "npm test -- export --watch", run_in_background: true }) },
             { ...tool("AskUserQuestion", "Scope of the fix"), ask: csvAsk },
           ],
-          { kind: "pipeline", label: "pipeline", state: "running", model: "opus" },
+          { kind: "pipeline", label: "pipeline", state: "running", model: "opus", tasks: csvTasks() },
         ),
       ],
     }),
@@ -439,6 +475,7 @@ function seed(dataDir) {
   fs.mkdirSync(tdir, { recursive: true });
   fs.writeFileSync(marker, "Demo data from server/demo.js. Rebuilt on every `npm run demo`.\n");
   writeSessions(dataDir);
+  fs.writeFileSync(path.join(dataDir, "demo-bg.output"), [" RUN  v3.2.4 /Users/you/Development/storefront", "", " ✓ src/export/csv.test.ts (6 tests) 41ms", " ✓ src/export/xlsx.test.ts (4 tests) 58ms", " ✗ src/export/paginate.test.ts > paginateRows > emits the final partial page", "   → expected [ [0, 20], [20, 40] ] to deeply equal [ [0, 20], [20, 40], [40, 41] ]", "", " Test Files  1 failed | 2 passed (3)", "      Tests  1 failed | 10 passed (11)", "", " Watching for file changes..."].join("\n") + "\n");
   for (const t of tasks) {
     fs.mkdirSync(path.join(tdir, t.id), { recursive: true });
     fs.writeFileSync(path.join(tdir, t.id, "meta.json"), JSON.stringify({ kind: "task", repo: REPO, base: "main", createdAt: now() - DAY, ...t }, null, 1));
@@ -479,6 +516,7 @@ function seed(dataDir) {
  *  every pending question (their sessions died with the last server). */
 function writeSessions(dataDir) {
   seq = 0;
+  demoDir = dataDir;
   for (const r of sessions()) fs.writeFileSync(path.join(dataDir, "runs", `${r.runId}.json`), JSON.stringify(r, null, 1));
 }
 
@@ -566,4 +604,119 @@ const agents = () => [
   { id: "devin", label: "Devin", installed: true, version: "devin 3000.14", models: [{ id: "swe-2-medium", label: "SWE-2 Medium", group: "SWE-2", hint: "High cost · 262k context" }, { id: "claude-opus-5-5-medium", label: "Claude Opus 5.5 Medium", group: "Claude Opus 5.5", hint: "High cost · 1M context" }] },
 ];
 
-module.exports = { seed, writeSessions, pulls, linear, ports, slack, usage, agents, prActivity };
+/* ---------------------------------------------------------------- MCP */
+
+const mcpTool = (name, description, o = {}) => ({ name, title: "", description, readOnly: !!o.ro, destructive: !!o.danger, params: (o.params || []).map(([n, type, required, d]) => ({ name: n, type, required, description: d || "" })) });
+const MCP_TOOLS = {
+  github: [
+    mcpTool("search_issues", "Search issues and pull requests across GitHub", { ro: true, params: [["q", "string", true, "GitHub search syntax"], ["per_page", "number", false]] }),
+    mcpTool("get_pull_request", "Details of one pull request", { ro: true, params: [["owner", "string", true], ["repo", "string", true], ["number", "number", true]] }),
+    mcpTool("create_pull_request", "Open a pull request", { params: [["title", "string", true], ["head", "string", true], ["base", "string", true], ["body", "string", false]] }),
+    mcpTool("merge_pull_request", "Merge a pull request", { danger: true, params: [["number", "number", true], ["method", "string", false, "merge, squash or rebase"]] }),
+  ],
+  linear: [
+    mcpTool("list_issues", "Issues matching a filter", { ro: true, params: [["team", "string", false], ["assignee", "string", false]] }),
+    mcpTool("get_issue", "One issue with its comments", { ro: true, params: [["id", "string", true]] }),
+    mcpTool("create_issue", "Create an issue", { params: [["title", "string", true], ["team", "string", true], ["description", "string", false]] }),
+    mcpTool("update_issue", "Change an issue's state, assignee or labels", { params: [["id", "string", true], ["state", "string", false]] }),
+  ],
+  postgres: [mcpTool("query", "Run a read-only SQL query", { ro: true, params: [["sql", "string", true]] }), mcpTool("list_tables", "Tables in the public schema", { ro: true })],
+  playwright: [
+    mcpTool("browser_navigate", "Open a URL", { params: [["url", "string", true]] }),
+    mcpTool("browser_snapshot", "Accessibility snapshot of the page", { ro: true }),
+    mcpTool("browser_click", "Click an element", { params: [["ref", "string", true]] }),
+    mcpTool("browser_take_screenshot", "Screenshot the page", { ro: true }),
+  ],
+  sentry: [mcpTool("search_issues", "Sentry issues by query", { ro: true, params: [["query", "string", true]] }), mcpTool("get_event", "One event with its stack trace", { ro: true, params: [["id", "string", true]] })],
+  docs: [mcpTool("search", "Search the docs", { ro: true, params: [["query", "string", true]] })],
+};
+const mcpServer = (agent, name, o) => ({
+  name, agent, type: o.url ? "http" : "stdio", command: o.command || "", args: o.args || [], envKeys: o.envKeys || [], cwd: "", url: o.url || "", headerKeys: o.headerKeys || [], bearerEnv: "",
+  scope: o.scope || "user", source: o.source, enabled: o.enabled !== false, editable: o.editable !== false, removable: o.editable !== false, toggleable: o.toggleable !== false,
+  sharedWith: o.sharedWith || [], note: o.note || "", status: o.enabled === false ? "disabled" : o.status || "connected", error: o.error || "", serverInfo: null,
+  toolCount: MCP_TOOLS[o.tools] ? MCP_TOOLS[o.tools].length : null, tools: MCP_TOOLS[o.tools] ? MCP_TOOLS[o.tools].map((t) => ({ name: t.name, readOnly: t.readOnly, destructive: t.destructive })) : null, disabledTools: [], checkedAt: Date.now(),
+});
+const mcpState = {
+  claude: [
+    mcpServer("claude", "github", { command: "npx", args: ["-y", "@modelcontextprotocol/server-github"], envKeys: ["GITHUB_TOKEN"], source: "~/.claude.json", tools: "github" }),
+    mcpServer("claude", "postgres", { command: "uvx", args: ["mcp-postgres", "--read-only"], envKeys: ["DATABASE_URL"], source: "~/.claude.json", tools: "postgres" }),
+    mcpServer("claude", "playwright", { command: "npx", args: ["@playwright/mcp@latest"], source: "~/.claude.json · this project", scope: "local", tools: "playwright" }),
+    mcpServer("claude", "sentry", { url: "https://mcp.sentry.dev/mcp", source: "~/.claude.json", status: "needs-auth", error: "mcp.sentry.dev wants a sign-in (401)" }),
+    mcpServer("claude", "claude.ai Linear", { url: "https://mcp.linear.app/mcp", scope: "claudeai", source: "claude.ai connector", editable: false, note: "Managed on claude.ai. On/off applies to this project", tools: "linear" }),
+    mcpServer("claude", "claude.ai Docs", { url: "https://docs.acme.dev/mcp", scope: "claudeai", source: "claude.ai connector", editable: false, enabled: false, note: "Managed on claude.ai. On/off applies to this project" }),
+  ],
+  codex: [
+    mcpServer("codex", "github", { command: "npx", args: ["-y", "@modelcontextprotocol/server-github"], envKeys: ["GITHUB_TOKEN"], source: "~/.codex/config.toml", tools: "github" }),
+    mcpServer("codex", "docs", { url: "https://docs.acme.dev/mcp", source: "~/.codex/config.toml", tools: "docs" }),
+    mcpServer("codex", "postgres", { command: "uvx", args: ["mcp-postgres", "--read-only"], envKeys: ["DATABASE_URL"], source: "~/.codex/config.toml", enabled: false }),
+  ],
+  cursor: [
+    mcpServer("cursor", "linear", { url: "https://mcp.linear.app/mcp", source: "~/.cursor/mcp.json", status: "signed-in", tools: "linear", sharedWith: ["devin"] }),
+    mcpServer("cursor", "playwright", { command: "npx", args: ["@playwright/mcp@latest"], source: "~/.cursor/mcp.json", tools: "playwright", sharedWith: ["devin"] }),
+    mcpServer("cursor", "sentry", { url: "https://mcp.sentry.dev/mcp", source: "~/.cursor/mcp.json", status: "failed", error: "couldn't reach mcp.sentry.dev (ENOTFOUND)", sharedWith: ["devin"] }),
+  ],
+  devin: [
+    mcpServer("devin", "linear", { url: "https://mcp.linear.app/mcp", scope: "shared", source: "~/.cursor/mcp.json", status: "oauth", error: "Signs in through Devin; Bridge can't see its login", tools: "linear", sharedWith: ["cursor"], note: "Devin loads this from Cursor's ~/.cursor/mcp.json: changes apply to Cursor too" }),
+    mcpServer("devin", "playwright", { command: "npx", args: ["@playwright/mcp@latest"], scope: "shared", source: "~/.cursor/mcp.json", tools: "playwright", sharedWith: ["cursor"], note: "Devin loads this from Cursor's ~/.cursor/mcp.json: changes apply to Cursor too" }),
+    mcpServer("devin", "github", { url: "https://api.githubcopilot.com/mcp/", scope: "plugin", source: "Plugin github", editable: false, tools: "github", note: "From a Devin plugin. Disabling adds an override to ~/.config/devin/mcp_config.json" }),
+  ],
+};
+const MCP_FILES = { claude: ["~/.claude.json"], codex: ["~/.codex/config.toml"], cursor: ["~/.cursor/mcp.json"], devin: ["~/.config/devin/mcp_config.json", "~/.cursor/mcp.json"] };
+const MCP_LABEL = { claude: "Claude", codex: "Codex", cursor: "Cursor", devin: "Devin" };
+const mcpFind = (agent, name) => {
+  const s = (mcpState[agent] || []).find((x) => x.name === name);
+  if (!s) throw new Error(`no MCP server called ${name}`);
+  return s;
+};
+const mcp = {
+  list: async (agent) => ({ agent, label: MCP_LABEL[agent], installed: true, servers: mcpState[agent], checking: false, files: MCP_FILES[agent], dir: REPO }),
+  all: async () => ({ agents: Object.keys(mcpState).map((a) => ({ agent: a, label: MCP_LABEL[a], installed: true, servers: mcpState[a], checking: false, files: MCP_FILES[a], dir: REPO })) }),
+  tools: async (agent, name) => {
+    const s = mcpFind(agent, name);
+    const key = Object.keys(MCP_TOOLS).find((k) => s.tools && MCP_TOOLS[k].length === s.toolCount && MCP_TOOLS[k][0].name === s.tools[0].name);
+    return key ? { name, tools: MCP_TOOLS[key], source: "server" } : { name, tools: [], source: "none", status: s.status, error: s.error || "Couldn't list this server's tools" };
+  },
+  save: async (agent, { name, original, form }) => {
+    const list = mcpState[agent];
+    if (!original && list.some((x) => x.name === name)) throw new Error(`${MCP_LABEL[agent]} already has a server called ${name}`);
+    const prev = original ? mcpFind(agent, original) : null;
+    const next = mcpServer(agent, name, { command: form.command, args: form.args, url: form.type === "stdio" ? "" : form.url, envKeys: (form.env || []).map((e) => e.key).filter(Boolean), headerKeys: (form.headers || []).map((e) => e.key).filter(Boolean), source: MCP_FILES[agent][0], status: "unknown" });
+    if (prev) list.splice(list.indexOf(prev), 1, { ...next, enabled: prev.enabled, status: prev.enabled ? "unknown" : "disabled" });
+    else list.push(next);
+    return { name };
+  },
+  remove: async (agent, name) => {
+    const list = mcpState[agent];
+    list.splice(list.indexOf(mcpFind(agent, name)), 1);
+    return { removed: name };
+  },
+  setEnabled: async (agent, name, on) => {
+    const s = mcpFind(agent, name);
+    s.enabled = on;
+    s.status = on ? (s.toolCount ? "connected" : "unknown") : "disabled";
+    return { name, enabled: on };
+  },
+  login: () => ({ started: true }),
+};
+
+/** New task's workspace pickers: the storefront repo's branches and worktrees. */
+const git = () => ({
+  repo: REPO,
+  default: "main",
+  current: "main",
+  branches: [
+    { name: "main", remote: false, date: now() - 3600, subject: "Merge #479: faster product grid", worktree: REPO, default: true },
+    { name: "alex/web-124-apple-pay", remote: false, date: now() - 5400, subject: "Apple Pay behind the wallets flag", worktree: `${WT}/alex-web-124-apple-pay`, default: false },
+    { name: "alex/web-131-rate-limit", remote: false, date: now() - 9000, subject: "Rate-limit search per API key", worktree: `${WT}/alex-web-131-rate-limit`, default: false },
+    { name: "release/2026.11", remote: false, date: now() - 2 * DAY, subject: "Cut 2026.11", worktree: "", default: false },
+    { name: "origin/maya/vat-cart", remote: true, date: now() - 3 * DAY, subject: "Show VAT-inclusive prices in the cart", worktree: "", default: false },
+    { name: "origin/kai/sitemap-cdn", remote: true, date: now() - 4 * DAY, subject: "Sitemap: use CDN URLs", worktree: "", default: false },
+  ],
+  worktrees: [
+    { path: REPO, branch: "main", head: "a41c9e2", main: true, name: "storefront" },
+    { path: `${WT}/alex-web-124-apple-pay`, branch: "alex/web-124-apple-pay", head: "7d02b1f", main: false, name: "alex-web-124-apple-pay" },
+    { path: `${WT}/alex-web-131-rate-limit`, branch: "alex/web-131-rate-limit", head: "c93e0aa", main: false, name: "alex-web-131-rate-limit" },
+  ],
+});
+
+module.exports = { seed, writeSessions, pulls, linear, ports, slack, usage, agents, prActivity, mcp, git };
