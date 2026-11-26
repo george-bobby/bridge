@@ -799,6 +799,12 @@ const server = http.createServer(async (req, res) => {
         // The composer sends what it is showing along with the message, so the
         // job can never run under options you changed but that hadn't landed.
         applyOpts(id, body.opts);
+        // `/clear` in an orchestrator wipes its chat instead of reaching the agent.
+        if (text === "/clear" && projects.isOrchestrator(id)) {
+          jobs.clear(id);
+          bus.broadcast("runs", { runs: store.listRunSummaries() });
+          return sendJson(res, 200, { ok: true, cleared: true });
+        }
         // `/compact` typed in the composer compacts for real, whatever the agent.
         const c = /^\/compact(?:\s+([\s\S]*))?$/.exec(text);
         if (c && !jobs.isRunning(id)) {
@@ -861,6 +867,18 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 200, { ok: true, ...(await require("./lib/files").list(dir)) });
       } catch (e) {
         return sendJson(res, 400, { ok: false, error: String(e.message || e) });
+      }
+    }
+
+    // Start the orchestrator over: an empty chat and a fresh agent session.
+    if (req.method === "POST" && verb === "clear") {
+      if (!projects.isOrchestrator(id)) return sendJson(res, 409, { ok: false, error: "only an orchestrator chat can be cleared" });
+      try {
+        jobs.clear(id);
+        bus.broadcast("runs", { runs: store.listRunSummaries() });
+        return sendJson(res, 200, { ok: true });
+      } catch (e) {
+        return sendJson(res, 409, { ok: false, error: String(e.message || e) });
       }
     }
 

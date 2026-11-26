@@ -20,6 +20,8 @@ import SwiftUI
     /// The flashed message lives apart, so a flash doesn't redraw the stepper
     /// and a scroll doesn't redraw every row's highlight.
     let flash = Box<Int?>(nil)
+    /// The list of every prompt, open while the stepper is hovered.
+    let list = HoverIntent()
     var proxy: ScrollViewProxy?
     private var flashGen = 0
     /// The last message stepped to, until the reader scrolls by hand: a
@@ -33,6 +35,9 @@ import SwiftUI
 
     func update(_ messages: [JSON]) {
         count = messages.count
+        // A cleared chat: nothing stepped to survives it.
+        if let t = pinned, t >= count { pinned = nil }
+        if let t = top, t >= count { top = nil }
         let p = messages.indices.filter { Self.isPrompt(messages[$0]) }
         if p != prompts { prompts = p }
     }
@@ -62,7 +67,13 @@ import SwiftUI
     func canStep(_ delta: Int) -> Bool { target(delta) != nil }
 
     func step(_ delta: Int, all: Bool = false) {
-        guard let proxy, let t = target(delta, all: all) else { NSSound.beep(); return }
+        guard proxy != nil, let t = target(delta, all: all) else { NSSound.beep(); return }
+        go(t)
+    }
+
+    /// Scroll message `t` to the top and flash it (nil: the end of the chat).
+    func go(_ t: Int?) {
+        guard let proxy else { return }
         withAnimation(M.page) {
             // A little air above the target, so its highlight isn't clipped.
             if let i = t { proxy.scrollTo(i, anchor: UnitPoint(x: 0.5, y: 0.035)) } else { proxy.scrollTo("end", anchor: .bottom) }
@@ -78,10 +89,10 @@ import SwiftUI
         }
     }
 
-    func excerpt(_ messages: [JSON], _ i: Int) -> String {
+    func excerpt(_ messages: [JSON], _ i: Int, limit: Int = 60) -> String {
         guard messages.indices.contains(i) else { return "" }
         let text = Session.plain(messages[i]["text"].string).replacingOccurrences(of: "\n", with: " ")
-        return text.count > 60 ? String(text.prefix(59)) + "…" : text
+        return text.count > limit ? String(text.prefix(limit - 1)) + "…" : text
     }
 }
 
@@ -95,37 +106,128 @@ final class NavHolder: ObservableObject {
 
 struct MessageStepper: View {
     @ObservedObject var nav: MessageNav
+    /// Observed apart from the nav, so opening the list redraws only this.
+    @ObservedObject var list: HoverIntent
     let messages: [JSON]
     @StateObject private var hover = Box(false)
 
     var body: some View {
         if nav.prompts.count >= 2 {
-            let cur = nav.current
-            let prev = nav.target(-1).flatMap { $0 }
-            let next = nav.target(1)
-            VStack(spacing: 0) {
-                StepButton(icon: "chevron.up", help: "Previous prompt (⌥↑, ⌥⇧↑ for any message)" + (prev.map { ": " + nav.excerpt(messages, $0) } ?? ""), enabled: prev != nil) { nav.step(-1) }
-                Text(verbatim: cur.map { "\($0 + 1)" } ?? "–")
-                    .font(T.ui(11, .semibold)).foregroundStyle(T.text)
-                    .monospacedDigit().contentTransition(.numericText())
-                    .padding(.top, 1)
-                Text(verbatim: "\(nav.prompts.count)")
-                    .font(T.ui(9.5)).foregroundStyle(T.text3).monospacedDigit()
-                    .overlay(alignment: .top) { Rectangle().fill(T.line).frame(width: 12, height: 1).offset(y: -1) }
-                    .padding(.top, 2).padding(.bottom, 1)
-                StepButton(icon: "chevron.down", help: next == .some(nil) ? "Jump to the latest" : "Next prompt (⌥↓, ⌥⇧↓ for any message)" + (next.flatMap { $0 }.map { ": " + nav.excerpt(messages, $0) } ?? ""), enabled: next != nil) { nav.step(1) }
+            HStack(alignment: .top, spacing: 0) {
+                if list.open {
+                    PromptList(nav: nav, messages: messages)
+                        .padding(.trailing, 8)
+                        .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .topTrailing)))
+                }
+                stepper
             }
-            .padding(3)
-            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(T.raised.opacity(0.92)))
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(T.line, lineWidth: 1))
-            .shadow(color: .black.opacity(0.35), radius: 10, y: 4)
-            .opacity(hover.v ? 1 : 0.82)
-            .hoverBox(hover)
-            .animation(M.snappy, value: cur)
-            .help("Prompt \((cur ?? 0) + 1) of \(nav.prompts.count)")
+            .onHover { list.hover($0) }
             .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .topTrailing)))
         }
+    }
+
+    var stepper: some View {
+        let cur = nav.current
+        let prev = nav.target(-1).flatMap { $0 }
+        let next = nav.target(1)
+        return VStack(spacing: 0) {
+            StepButton(icon: "chevron.up", help: "Previous prompt (⌥↑, ⌥⇧↑ for any message)" + (prev.map { ": " + nav.excerpt(messages, $0) } ?? ""), enabled: prev != nil) { nav.step(-1) }
+            Text(verbatim: cur.map { "\($0 + 1)" } ?? "–")
+                .font(T.ui(11, .semibold)).foregroundStyle(T.text)
+                .monospacedDigit().contentTransition(.numericText())
+                .padding(.top, 1)
+            Text(verbatim: "\(nav.prompts.count)")
+                .font(T.ui(9.5)).foregroundStyle(T.text3).monospacedDigit()
+                .overlay(alignment: .top) { Rectangle().fill(T.line).frame(width: 12, height: 1).offset(y: -1) }
+                .padding(.top, 2).padding(.bottom, 1)
+            StepButton(icon: "chevron.down", help: next == .some(nil) ? "Jump to the latest" : "Next prompt (⌥↓, ⌥⇧↓ for any message)" + (next.flatMap { $0 }.map { ": " + nav.excerpt(messages, $0) } ?? ""), enabled: next != nil) { nav.step(1) }
+        }
+        .padding(3)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(T.raised.opacity(0.92)))
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(T.line, lineWidth: 1))
+        .shadow(color: .black.opacity(0.35), radius: 10, y: 4)
+        .opacity(hover.v || list.open ? 1 : 0.82)
+        .hoverBox(hover)
+        .animation(M.snappy, value: cur)
+    }
+}
+
+/// Opens a beat after the pointer arrives and closes a beat after it
+/// leaves, so crossing into the list (or brushing past) doesn't flicker.
+@MainActor final class HoverIntent: ObservableObject {
+    @Published private(set) var open = false
+    private var gen = 0
+
+    func show() { gen += 1; open = true }
+
+    func hover(_ inside: Bool) {
+        gen += 1
+        let g = gen
+        DispatchQueue.main.asyncAfter(deadline: .now() + (inside ? 0.25 : 0.3)) { [weak self] in
+            guard let self, self.gen == g, self.open != inside else { return }
+            withAnimation(inside ? M.pop : M.exit) { self.open = inside }
+        }
+    }
+}
+
+/// Every prompt in the chat, beside the stepper while it's hovered: click
+/// one to jump there. The one you're reading is marked.
+struct PromptList: View {
+    @ObservedObject var nav: MessageNav
+    let messages: [JSON]
+
+    var body: some View {
+        let cur = nav.current
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("Prompts").font(T.ui(11.5, .semibold)).foregroundStyle(T.text2)
+                Spacer()
+                Text(verbatim: "\(nav.prompts.count)").font(T.ui(11)).foregroundStyle(T.text3).monospacedDigit()
+            }
+            .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 6)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 1) {
+                        ForEach(Array(nav.prompts.enumerated()), id: \.element) { k, i in
+                            PromptRow(number: k + 1, text: nav.excerpt(messages, i, limit: 140), ts: messages.indices.contains(i) ? messages[i]["ts"].double : 0, on: k == cur) { nav.go(i) }
+                                .id(k)
+                        }
+                    }
+                    .padding(.horizontal, 5).padding(.bottom, 5)
+                }
+                .scrollIndicators(.never)
+                .onAppear { if let cur { proxy.scrollTo(cur, anchor: .center) } }
+            }
+        }
+        .frame(minWidth: 160, maxWidth: 300)
+        .frame(maxHeight: 380)
+        .fixedSize(horizontal: false, vertical: true)
+        .floatingPanel(radius: 12)
+    }
+}
+
+struct PromptRow: View {
+    let number: Int
+    let text: String
+    let ts: Double
+    let on: Bool
+    let action: () -> Void
+    @StateObject private var hover = Box(false)
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(verbatim: "\(number)").font(T.ui(11, .semibold)).monospacedDigit()
+                .foregroundStyle(on ? T.accent : T.text3).frame(width: 20, alignment: .trailing)
+            Text(text.isEmpty ? "(attachment)" : text).font(T.ui(12.5)).foregroundStyle(on ? T.text : T.text2)
+                .lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
+            if ts > 0 { Text(Fmt.clock(ts)).font(T.ui(10.5)).foregroundStyle(T.text3).monospacedDigit() }
+        }
+        .padding(.horizontal, 8).padding(.vertical, 6)
+        .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(on ? T.accentSoft : hover.v ? T.hover : .clear))
+        .contentShape(Rectangle())
+        .onTapGesture(perform: action)
+        .hoverBox(hover)
     }
 }
 

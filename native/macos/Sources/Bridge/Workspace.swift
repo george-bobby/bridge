@@ -253,6 +253,15 @@ struct OrchestratorNavItem: View {
         }
         .hoverBox(hover)
         .onDrag { NSItemProvider(object: (s == nil ? "" : id) as NSString) }
+        .contextMenu {
+            Button { model.openOrchestrator(project.id) } label: { Label("Open", systemImage: "arrow.up.forward.app") }
+            if let s {
+                Button { model.openToSide(id) } label: { Label("Open to the Side", systemImage: "rectangle.split.2x1") }
+                Divider()
+                Button(role: .destructive) { Task { await model.clearChat(id) } } label: { Label("Clear Chat…", systemImage: "eraser") }
+                    .disabled(model.isLive(s))
+            }
+        }
     }
 }
 
