@@ -124,7 +124,7 @@ test.after(async () => {
 });
 
 test("spawn → worker in its own worktree → report → relayed, main checkout untouched", async () => {
-  const t = await spawnTask("add a function", "Add a function and a test.\nstub:report=ready-for-review");
+  const t = await spawnTask("add a function", "Add a function and a test.\nstub:report=ready-for-review", { by: "orchestrator" });
   assert.equal(t.state, "started");
   await waitFor(statusIs(t.taskId, "ready-for-review"), 15000, "report");
 
@@ -204,14 +204,44 @@ test("Brief me hands the orchestrator the catch-up in one turn", async () => {
   assert.match(msg.text, /First\?/, "the open question is in it");
 });
 
-test("no report: one nudge, then idle-without-report; a nudge that works yields a report", async () => {
-  const a = await spawnTask("silent", "stub:noreport");
+test("no report: an answer ends quietly; changed code gets one nudge, then idle-without-report", async () => {
+  const q = await spawnTask("a question", "stub:noreport");
+  await waitFor(statusIs(q.taskId, "idle"), 15000, "idle after an answer");
+  await waitFor(idle(q.taskId), 5000);
+  const qrun = (await api("GET", `/api/runs/${q.taskId}`)).run;
+  assert.ok(!qrun.messages.some((m) => m.role === "harness"), "no nudge for a turn that changed nothing");
+  assert.ok(!qrun.messages.some((m) => m.role === "user" && /\*\*Brief\*\*/.test(m.text)), "the brief shows as the plain request");
+
+  const a = await spawnTask("silent", "stub:noreport\nstub:edit");
   await waitFor(statusIs(a.taskId, "idle-without-report"), 15000, "idle-without-report");
   const run = (await api("GET", `/api/runs/${a.taskId}`)).run;
-  assert.equal(run.messages.filter((m) => m.role === "harness" && /without writing/.test(m.text)).length, 1, "nudged exactly once");
+  assert.equal(run.messages.filter((m) => m.role === "harness" && /haven't written/.test(m.text)).length, 1, "nudged exactly once");
 
-  const b = await spawnTask("forgetful", "stub:noreport\nstub:report-on-nudge");
+  const b = await spawnTask("forgetful", "stub:noreport\nstub:edit\nstub:report-on-nudge");
   await waitFor(statusIs(b.taskId, "ready-for-review"), 15000, "report after nudge");
+});
+
+test("a follow-up on a chat with a report isn't nudged to rewrite it", async () => {
+  const t = await spawnTask("explain", "stub:report=ready-for-review");
+  await waitFor(statusIs(t.taskId, "ready-for-review"), 15000);
+  await waitFor(idle(t.taskId), 5000);
+  const r = await api("POST", `/api/runs/${t.taskId}/followup`, { text: "what does it mean? stub:noreport" });
+  assert.equal(r.ok, true, r.error);
+  await waitFor(async () => (await api("GET", `/api/runs/${t.taskId}`)).run.messages.filter((m) => m.role === "assistant" && m.state === "done").length >= 2, 15000, "follow-up done");
+  await waitFor(idle(t.taskId), 5000);
+  await new Promise((res) => setTimeout(res, 500));
+  const run = (await api("GET", `/api/runs/${t.taskId}`)).run;
+  assert.ok(!run.messages.some((m) => m.role === "harness"), "no nudge");
+  assert.equal(meta(t.taskId).status, "ready-for-review");
+});
+
+test("a chat you started yourself isn't relayed to the orchestrator", async () => {
+  await waitFor(idle("orchestrator"), 15000, "orchestrator idle");
+  const t = await spawnTask("mine", "stub:report=needs-input\nstub:question=Which?");
+  await waitFor(statusIs(t.taskId, "needs-input"), 15000);
+  await new Promise((res) => setTimeout(res, 800));
+  const o = (await api("GET", "/api/runs/orchestrator")).run;
+  assert.ok(!o.messages.some((m) => m.role === "relay" && m.text.includes(t.taskId)), "not relayed");
 });
 
 test("stall, usage limit and a dead worker each become an outcome", async () => {
@@ -481,13 +511,13 @@ test("modes: quiet relays only what needs you; away holds and briefs on return",
 
   assert.equal((await api("POST", "/api/mode", { mode: "quiet" })).ok, true);
   const before = await relays();
-  const q = await spawnTask("quiet ok", "stub:report=ready-for-review");
+  const q = await spawnTask("quiet ok", "stub:report=ready-for-review", { by: "orchestrator" });
   await waitFor(statusIs(q.taskId, "ready-for-review"), 15000);
   await new Promise((r) => setTimeout(r, 800));
   assert.equal(await relays(), before, "a plain ready report is not relayed in quiet mode");
 
   assert.equal((await api("POST", "/api/mode", { mode: "away" })).ok, true);
-  const w = await spawnTask("away q", "stub:report=needs-input\nstub:question=Which one?");
+  const w = await spawnTask("away q", "stub:report=needs-input\nstub:question=Which one?", { by: "orchestrator" });
   await waitFor(statusIs(w.taskId, "needs-input"), 15000);
   await new Promise((r) => setTimeout(r, 800));
   assert.equal(await relays(), before, "held while away");
@@ -502,7 +532,7 @@ test("modes: quiet relays only what needs you; away holds and briefs on return",
 test("restart: a worker lost mid-turn is reported and resumable; reports written while down are caught up", async () => {
   const lost = await spawnTask("long", "stub:stall=60");
   await waitFor(async () => (await api("GET", "/api/state")).jobs.running.includes(lost.taskId), 5000);
-  const quiet = await spawnTask("offline report", "stub:noreport");
+  const quiet = await spawnTask("offline report", "stub:noreport\nstub:edit");
   await waitFor(statusIs(quiet.taskId, "idle-without-report"), 15000);
 
   await stopServer();

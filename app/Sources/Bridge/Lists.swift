@@ -595,7 +595,7 @@ struct SessionsView: View {
                             HStack(spacing: 10) {
                                 Image(systemName: "sparkles").foregroundStyle(T.purple).frame(width: 14)
                                 Text("Orchestrator").font(T.ui(13, .medium))
-                                Text("Writes briefs, spawns and watches workers").font(T.ui(12.5)).foregroundStyle(T.text3)
+                                Text("Hand it work; it starts sessions and keeps track of them").font(T.ui(12.5)).foregroundStyle(T.text3)
                                 Spacer()
                                 if model.isLive(o) { LiveIcon(size: 12) }
                             }
@@ -865,7 +865,7 @@ struct IssueSessionButton: View {
                 .foregroundStyle(T.accent).padding(.horizontal, 6).frame(height: 20)
                 .background(RoundedRectangle(cornerRadius: 5).fill(T.accentSoft))
             }
-            .buttonStyle(.plain).disabled(busy.v).help("Start a Claude worker on \(issue.key) in its own worktree")
+            .buttonStyle(.plain).disabled(busy.v).help("Start a Claude session on \(issue.key) in its own worktree")
         }
     }
 }

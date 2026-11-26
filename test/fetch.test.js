@@ -106,7 +106,7 @@ test("a worker from a Linear brief starts with /fetch <issue url>, Bridge's rule
   const t = await spawnTask("ABC-12 Fix the export", `Linear issue ABC-12: Fix the export\n${LINEAR}\n\nRead the issue.\nstub:report=ready-for-review`);
   const prompt = await promptOf(t.taskId);
   assert.ok(prompt.startsWith(`/fetch ${LINEAR}\n\n`), prompt.slice(0, 200));
-  assert.match(prompt, /## Bridge \(applies on top of the skill\)/);
+  assert.match(prompt, /\n## Bridge\n/);
   assert.ok(prompt.includes(path.join(DATA, "tasks", t.taskId, "report.md")), "report path in the rules");
   assert.ok(prompt.includes(t.worktree), "worktree in the rules");
   await waitFor(idle(t.taskId), 15000, "worker idle");

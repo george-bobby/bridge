@@ -354,7 +354,7 @@ function sessions() {
       phase: "review",
       seen: true,
       messages: [
-        user("**Brief**\n\nAdd Apple Pay to the checkout payment step (WEB-124), behind the `wallets` flag. Use the existing Stripe Payment Request integration.", 3 * 3600),
+        user("Add Apple Pay to the checkout payment step (WEB-124), behind the `wallets` flag. Use the existing Stripe Payment Request integration.", 3 * 3600),
         claude(
           3 * 3600 - 60,
           [
@@ -369,7 +369,7 @@ function sessions() {
           ],
           { cost: 4.12, ms: 612000, turns: 38, out: 18400, workdir: `${WT}/alex-web-124-apple-pay` },
         ),
-        event("**report** · ready-for-review · PR #482 opened", 1500, "outcome"),
+        event("Report: PR #482 opened", 1500, "outcome"),
         user('Does the button show up on Chrome for desktop too, or only Safari?', 1400),
         claude(1360, [say('Only where `canMakePayment()` says Apple Pay is available: Safari on macOS and iOS. Chrome gets Google Pay through the same Payment Request Button when the flag is on, which is what we want.')], { cost: 0.3, ms: 40000, turns: 3, workdir: `${WT}/alex-web-124-apple-pay` }),
         user("Let's keep Google Pay out of this PR. Can you scope it to Apple Pay only?", 1280),
@@ -400,7 +400,7 @@ function sessions() {
       linearUrl: `${LINEAR}/WEB-131`,
       action: "acted",
       messages: [
-        user("**Brief**\n\nRate-limit `/api/search` (WEB-131). Scrapers are hammering it.", 6 * 3600),
+        user("Rate-limit `/api/search` (WEB-131). Scrapers are hammering it.", 6 * 3600),
         claude(6 * 3600 - 60, [tool("Read", "src/api/search.ts"), tool("Edit", "src/api/middleware/rateLimit.ts"), say("Token bucket in Redis, 60 req/min. One open question in the report: limit per API key or per IP?")], { cost: 2.38, ms: 410000, turns: 22 }),
       ],
     }),

@@ -94,7 +94,7 @@ struct OrchestratorPanel: View {
                     PropRow(label: "Project") { Text(p.name).font(T.ui(12.5)) }
                     if !p.path.isEmpty { PropRow(label: "Repo") { CopyValue(text: p.path, shown: (p.path as NSString).lastPathComponent, what: "Path", reveal: true) } }
                 }
-                PropRow(label: "Workers") {
+                PropRow(label: "Sessions") {
                     Text(verbatim: live.isEmpty ? "\(workers.count)" : "\(live.count) running · \(workers.count)").font(T.ui(12.5)).monospacedDigit()
                 }
             }
@@ -108,7 +108,7 @@ struct OrchestratorPanel: View {
             }
         }
         if !workers.isEmpty {
-            PropSection(title: "Recent workers") {
+            PropSection(title: "Recent sessions") {
                 VStack(alignment: .leading, spacing: 1) {
                     ForEach(Array(workers.prefix(8))) { w in WorkerRow(session: w) }
                 }
