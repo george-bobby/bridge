@@ -462,6 +462,18 @@ function listRunSummaries() {
   return out.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
 }
 
+/** Which agent sessions each chat holds (server/history.js: what's already imported). */
+function listRunSessions() {
+  ensureRunsDir();
+  const out = [];
+  for (const f of fs.readdirSync(RUNS_DIR)) {
+    if (!f.endsWith(".json") || f.includes(".tmp-")) continue;
+    const run = readJson(path.join(RUNS_DIR, f), null);
+    if (run && run.runId) out.push({ runId: run.runId, sessionId: run.sessionId || "", agentSessions: run.agentSessions || {}, imported: run.imported || null });
+  }
+  return out;
+}
+
 function summariseRun(run) {
   // Read straight off disk by listRunSummaries(), so it has not been through
   // loadRun()'s normalisation — a run file written before `messages` existed,
@@ -472,7 +484,7 @@ function summariseRun(run) {
   let meta = {};
   try {
     meta = JSON.parse(fs.readFileSync(path.join(DATA_DIR, "tasks", run.runId, "meta.json"), "utf8"));
-    task = { status: meta.status || "", phase: meta.phase || "", branch: meta.branch || "", declared: meta.declared || null, prUrl: meta.prUrl || "", title: meta.title || "", worktree: meta.worktree || "" };
+    task = { status: meta.status || "", phase: meta.phase || "", branch: meta.branch || "", declared: meta.declared || null, prUrl: meta.prUrl || "", title: meta.title || "", worktree: meta.worktree || "", plan: Array.isArray(meta.plan) ? meta.plan : [] };
   } catch {}
   return {
     runId: run.runId,
@@ -668,6 +680,7 @@ module.exports = {
   BOARD_COLUMNS,
   clearPendingAsks,
   listRunSummaries,
+  listRunSessions,
   searchRuns,
   appendMessage,
   parseSlackLink,

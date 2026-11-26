@@ -67,6 +67,7 @@ struct PropertiesPanel: View {
             PropSection(title: "Links") { LinkRows(session: s) }
             if !s.prUrl.isEmpty { PRActivitySection(runId: id, url: s.prUrl) }
         }
+        PlanSection(runId: id)
         let parsed = model.taskData(id)["parsed"]
         if !parsed.isNull && (!parsed["tldr"].string.isEmpty || !parsed["questions"].array.isEmpty || !parsed["actions"].array.isEmpty) {
             PropSection(title: "Report") { ReportView(parsed: parsed) }
@@ -714,7 +715,7 @@ struct NextStep: View {
     var body: some View {
         let s = session
         let run = !s.isTask && !s.worked && !s.isOrchestrator
-        let worker = s.isTask && !model.isLive(s) && s.taskStatus != "cleaned"
+        let worker = s.isTask && !model.isLive(s) && s.taskStatus != "cleaned" && s.taskStatus != "imported"
         if run || worker {
             PropSection(title: "Next step") {
                 VStack(alignment: .leading, spacing: 6) {

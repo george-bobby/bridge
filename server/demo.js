@@ -130,6 +130,7 @@ const issue = (key, title, state, o = {}) => ({
   cycle: o.cycle === undefined ? 14 : o.cycle,
   labels: o.labels || [],
   description: o.description || "",
+  slackUrl: o.slackUrl || "",
   updatedAt: iso(o.ago || 3600),
   createdAt: iso((o.ago || 3600) + 7 * DAY),
   parent: o.parent || null,
@@ -158,7 +159,7 @@ function linear() {
         ],
       }),
       issue("WEB-124", "Apple Pay in the payment step", "review", { priority: 2, project: "Checkout v2", parent: checkout, ago: 1500 }),
-      issue("WEB-131", "Rate-limit the search API", "progress", { priority: 1, labels: [{ name: "backend", color: "#4ea7fc" }], ago: 5400, description: "Search is being scraped. Add a limit that doesn't punish B2B customers behind shared NAT." }),
+      issue("WEB-131", "Rate-limit the search API", "progress", { priority: 1, labels: [{ name: "backend", color: "#4ea7fc" }], ago: 5400, slackUrl: "https://acme.slack.com/archives/C02/p1732530002000200", description: "Search is being scraped. Add a limit that doesn't punish B2B customers behind shared NAT." }),
       issue("WEB-133", "Flaky checkout e2e suite", "todo", { priority: 2, labels: [{ name: "bug", color: "#eb5757" }], ago: 9000 }),
       issue("WEB-127", "Move product images to the new CDN", "todo", { priority: 3, labels: [{ name: "infra", color: "#bb87fc" }], ago: 2 * DAY, description: "Serve product images from the new CDN with responsive sizes. Keep the old URLs redirecting for a month." }),
       issue("WEB-140", "Accessibility audit fixes", "backlog", {
@@ -719,4 +720,40 @@ const git = () => ({
   ],
 });
 
-module.exports = { seed, writeSessions, pulls, linear, ports, slack, usage, agents, prActivity, mcp, git };
+/** Chats from the agents' own histories (Import chat), all fictional. */
+const historyChats = () => [
+  { agent: "claude", id: "5b1f0c3e-7a2d-4f61-9e0b-2c8d4a6e1f90", title: "Debounce the search box on the catalog page", prompt: "The catalog search fires a request on every keystroke. Debounce it to 250ms and cancel stale requests.", cwd: REPO, branch: "main", createdAt: now() - 3 * 86400, updatedAt: now() - 2 * 3600 },
+  { agent: "codex", id: "01a2b3c4-d5e6-4f70-8a9b-0c1d2e3f4a5b", title: "Why does the nightly export job time out?", prompt: "Why does the nightly export job time out? Look at the cron logs and the export worker.", cwd: REPO, branch: "", createdAt: now() - 5 * 86400, updatedAt: now() - 26 * 3600 },
+  { agent: "cursor", id: "c0ffee12-3456-4789-abcd-ef0123456789", title: "Dark mode for the order emails", prompt: "Add a dark-mode variant to the order confirmation email templates.", cwd: `${WT}/web-140-dark-emails`, branch: "", createdAt: now() - 7 * 86400, updatedAt: now() - 3 * 86400 },
+  { agent: "devin", id: "quiet-harbor", title: "Upgrade the payments SDK to v5", prompt: "Upgrade the payments SDK to v5 and fix the breaking changes.", cwd: REPO, branch: "", createdAt: now() - 9 * 86400, updatedAt: now() - 4 * 86400 },
+  { agent: "claude", id: "8e2d6a10-4b3c-4d9e-a1f2-7c6b5a4d3e21", title: "Flaky checkout e2e test on CI", prompt: "The checkout e2e test fails one run in five on CI. Find out why.", cwd: "/Users/you/Development/mobile", branch: "main", createdAt: now() - 12 * 86400, updatedAt: now() - 6 * 86400 },
+];
+
+const history = {
+  AGENTS: ["claude", "codex", "cursor", "devin"],
+  known: (runs) => require("./history").known(runs),
+  list({ agents, q = "", runs = [] } = {}) {
+    const have = history.known(runs);
+    const words = String(q).toLowerCase().split(/\s+/).filter(Boolean);
+    const all = historyChats().filter((c) => !agents || agents.includes(c.agent));
+    const chats = all.filter((c) => words.every((w) => `${c.title} ${c.prompt} ${c.cwd}`.toLowerCase().includes(w))).map((c) => ({ ...c, size: 0, runId: have.get(`${c.agent}:${c.id}`) || "" }));
+    const counts = {};
+    for (const c of all) counts[c.agent] = (counts[c.agent] || 0) + 1;
+    return { chats, counts, sqlite: true };
+  },
+  read(agent, id) {
+    const c = historyChats().find((x) => x.agent === agent && x.id === id);
+    if (!c) throw new Error("no such chat");
+    const at = c.updatedAt;
+    const step = (name, detail, result) => ({ kind: "tool", name, detail, id: `${id}-${name}`, raw: JSON.stringify({ command: detail }), result, ok: true, resultLines: result.split("\n").length });
+    return {
+      cwd: c.cwd,
+      messages: [
+        { role: "user", text: c.prompt, ts: at - 600, imported: true },
+        { role: "assistant", kind: "imported", label: "imported", agent, model: "", state: "done", workdir: c.cwd, ts: at - 540, imported: true, text: "Found it.", steps: [step("Bash", "rg -n 'search' src/catalog", "src/catalog/Search.tsx:14:  onChange={(e) => fetchResults(e.target.value)}"), { kind: "text", text: "Found it: every keystroke calls `fetchResults`. I'll wrap it in a 250ms debounce and abort the previous request." }] },
+      ],
+    };
+  },
+};
+
+module.exports = { seed, writeSessions, pulls, linear, ports, slack, usage, agents, prActivity, mcp, git, history };

@@ -29,6 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             let chat = ProcessInfo.processInfo.environment["BRIDGE_SNAPSHOT_CHAT"]
             if let s = model.sessions.first(where: { $0.id == chat }) ?? model.boardSessions.first(where: { $0.worked }) ?? model.orchestrator { pages.append(("chat", .session(s.id))) }
             pages.append(("palette", .board))
+            pages.append(("import", .home))
             if let last = pages.first(where: { $0.0 == "chat" }) {
                 pages.append(("collapsed", last.1))
                 if browser != nil { pages.append(("browser", last.1)) }
@@ -40,6 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             }
             for (name, route) in pages {
                 model.paletteOpen = name == "palette"
+                model.importOpen = name == "import"
                 model.sidebarHidden = name == "collapsed"
                 if route == .inbox { model.inboxTab = name == "inbox-slack" ? "slack" : "decisions" }
                 if route == .settings { model.settingsPane = name.hasPrefix("settings-") ? String(name.dropFirst(9)) : "general" }
@@ -186,6 +188,8 @@ struct BridgeCommands: Commands {
                 if case .session(let id) = model.route { model.openBrowser(id, url: "") }
             } label: { Label("New Browser Tab", systemImage: "globe") }
             .keyboardShortcut("t")
+            Button { model.importOpen = true } label: { Label("Import Chat…", systemImage: "square.and.arrow.down.on.square") }
+                .keyboardShortcut("i", modifiers: [.command, .shift])
         }
         CommandGroup(after: .pasteboard) {
             Divider()
@@ -266,19 +270,21 @@ struct RootView: View {
             .ignoresSafeArea()
         }
         .overlay {
-            if model.paletteOpen || model.composeOpen || model.mcpSheet != nil {
+            if model.paletteOpen || model.composeOpen || model.importOpen || model.mcpSheet != nil {
                 Color.black.opacity(0.32).ignoresSafeArea()
-                    .onTapGesture { model.paletteOpen = false; model.composeOpen = false; model.mcpSheet = nil }
+                    .onTapGesture { model.paletteOpen = false; model.composeOpen = false; model.importOpen = false; model.mcpSheet = nil }
                     .transition(.opacity)
             }
         }
         .overlay { if model.paletteOpen { CommandPalette().transition(.panel) } }
         .overlay { if model.composeOpen { ComposeSheet().transition(.panel) } }
+        .overlay { if model.importOpen { ImportSheet().transition(.panel) } }
         .overlay { if let s = model.mcpSheet { MCPSheetHost(sheet: s).transition(.panel) } }
         .overlay(alignment: .bottom) { ToastView() }
         .overlay { if !model.connected && !model.everConnected { ConnectingView().transition(.opacity) } }
         .animation(M.pop, value: model.paletteOpen)
         .animation(M.pop, value: model.composeOpen)
+        .animation(M.pop, value: model.importOpen)
         .animation(M.pop, value: model.mcpSheet)
         .animation(M.page, value: model.everConnected)
     }

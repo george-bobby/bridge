@@ -16,6 +16,7 @@ struct Sidebar: View {
                 VStack(alignment: .leading, spacing: 2) {
                     ActionRow(icon: "square.and.pencil", label: "New task", keys: "⌘N") { model.compose(in: model.projectFilter) }
                     ActionRow(icon: "magnifyingglass", label: "Search", keys: "⌘K") { model.paletteOpen = true }
+                    ActionRow(icon: "square.and.arrow.down.on.square", label: "Import chat", keys: "⇧⌘I") { model.importOpen = true }
 
                     SideLabel("Overview")
                     NavItem(icon: "house", label: "Home", route: .home)

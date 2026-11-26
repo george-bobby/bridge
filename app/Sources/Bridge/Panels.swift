@@ -498,6 +498,7 @@ struct CommandPalette: View {
         func sym(_ s: String, _ c: Color = T.text2) -> AnyView { AnyView(Image(systemName: s).font(.system(size: 12, weight: .medium)).foregroundStyle(c)) }
         var all: [PaletteItem] = [
             PaletteItem(id: "new", icon: sym("square.and.pencil"), title: "New task", hint: "⌘N", group: "Suggestions") { model.composeOpen = true },
+            PaletteItem(id: "import", icon: sym("square.and.arrow.down.on.square"), title: "Import a chat from Claude Code, Codex, Cursor or Devin…", hint: "⇧⌘I", group: "Suggestions") { model.importOpen = true },
             PaletteItem(id: "project", icon: sym("folder.badge.plus"), title: "Add a project…", hint: "⇧⌘P") { model.addProject() },
             PaletteItem(id: "refresh", icon: sym("arrow.clockwise"), title: "Refresh GitHub and Linear", hint: "⌘R") { Task { await model.loadSources(refresh: true) } },
         ]
