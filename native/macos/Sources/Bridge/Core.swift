@@ -169,6 +169,12 @@ final class Box<T>: ObservableObject {
 // MARK: - Formatting
 
 enum Fmt {
+    /// "Checked just now" / "Checked 5m ago".
+    static func checked(_ seconds: Double) -> String {
+        let a = ago(seconds)
+        return a.isEmpty ? "" : a == "now" ? "Checked just now" : a.contains(" ") ? "Checked \(a)" : "Checked \(a) ago"
+    }
+
     static func ago(_ seconds: Double) -> String {
         guard seconds > 0 else { return "" }
         let d = Date().timeIntervalSince1970 - seconds

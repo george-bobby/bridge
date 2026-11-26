@@ -729,6 +729,7 @@ struct IntegrationSettings: View {
             } trailing: {
                 StatusChip(on: model.slack["configured"].bool, onText: model.slack["team"].nonEmpty.map { "Connected · \($0)" } ?? "Connected")
             }
+            SlackWatchSettings(q: q)
             SSection(title: "GitHub", detail: "Pull requests go through the gh CLI's own login") {
                 ForEach(env.rows(Prefs.githubKeys, q), id: \.self) { EnvField(env: env, e: $0) }
             } trailing: {
@@ -741,6 +742,59 @@ struct IntegrationSettings: View {
             }
         }
     }
+}
+
+/// lib/slackwatch.js: what Bridge reads from Slack on its own, and how often.
+struct SlackWatchSettings: View {
+    @Environment(AppModel.self) var model
+    let q: String
+    @StateObject private var channels = Box(JSON.null)
+
+    var h: JSON { model.config["harness"] }
+    var watched: [String] { h["slackChannels"].array.map(\.string) }
+
+    var body: some View {
+        SSection(title: "Slack watch", detail: "Mentions, watched channels and replies in threads that have a chat, read on a timer with your token. No agent runs unless you start one, or triage is on") {
+            if Prefs.hit(q, "slack watch mentions mode off triage orchestrator") {
+                SRow(title: "Watch", detail: "Off; Watch files them in the Inbox; Triage also lets the orchestrator start the real work and skip the rest") {
+                    SlidingTabs(tabs: [
+                        .init(id: "off", label: "Off", icon: "pause"),
+                        .init(id: "watch", label: "Watch", icon: "eye"),
+                        .init(id: "triage", label: "Triage", icon: "sparkles"),
+                    ], selection: Binding(get: { h["slackWatch"].nonEmpty ?? "watch" }, set: { v in save(["slackWatch": v]) }))
+                }
+            }
+            if Prefs.hit(q, "slack poll interval check every minutes") {
+                SRow(title: "Check every", detail: Fmt.checked(model.slackWatch["lastPollAt"].double)) {
+                    SStepper(value: max(1, (h["slackPollSec"].int == 0 ? 120 : h["slackPollSec"].int) / 60), range: 1...60, unit: "min") { save(["slackPollSec": $0 * 60]) }
+                }
+            }
+            if Prefs.hit(q, "slack watched channels channel posts") {
+                SRow(title: "Watched channels", detail: watched.isEmpty ? "New top-level posts in these land in the Inbox too" : watched.map(name).joined(separator: ", ")) {
+                    channelMenu
+                }
+            }
+        }
+        .task { if model.slack["configured"].bool, channels.v.isNull { channels.v = (try? await API.get("/api/slack/channels")) ?? .null } }
+    }
+
+    var channelMenu: some View {
+        Menu {
+            let list = channels.v["channels"].array
+            if list.isEmpty { Text(model.slack["configured"].bool ? "Loading channels…" : "Connect Slack first") }
+            ForEach(list, id: \.self) { c in
+                let id = c["id"].string, on = watched.contains(id)
+                Button { save(["slackChannels": on ? watched.filter { $0 != id } : watched + [id]]) } label: {
+                    if on { Label(c["name"].string, systemImage: "checkmark") } else { Text(c["name"].string) }
+                }
+            }
+        } label: { Label(watched.isEmpty ? "Choose" : "\(watched.count) watched", systemImage: "number") }
+        .menuStyle(.button).buttonStyle(LButton()).fixedSize()
+    }
+
+    func name(_ id: String) -> String { channels.v["channels"].array.first { $0["id"].string == id }?["name"].string ?? id }
+
+    func save(_ patch: [String: Any]) { Task { await model.saveConfig(["harness": patch]) } }
 }
 
 // MARK: - Projects
@@ -822,6 +876,9 @@ struct NotificationSettings: View {
                 }
                 if Prefs.hit(q, "notify worker outcome finished blocked stalled review") {
                     SRow(title: "When a worker reports", detail: "Ready for review, blocked, stalled, gone or out of usage") { SToggle(on: $m.notifyOutcomes) }
+                }
+                if Prefs.hit(q, "notify slack mention message") {
+                    SRow(title: "When something new reaches you on Slack", detail: "New mentions and watched-channel posts, and replies in threads you have a chat on") { SToggle(on: $m.notifyMentions) }
                 }
                 if Prefs.hit(q, "dock badge count") {
                     SRow(title: "Dock badge", detail: "Count what's waiting on you on the Dock icon") { SToggle(on: $m.showBadge) }

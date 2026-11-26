@@ -5,12 +5,12 @@ import SwiftUI
 
 struct InboxView: View {
     @Environment(AppModel.self) var model
-    @StateObject private var tab = Box("decisions")
     @StateObject private var tasks = Box(JSON.null)
     @StateObject private var activity = Box(JSON.null)
     @StateObject private var since = Box("24h")
 
     var body: some View {
+        @Bindable var m = model
         VStack(spacing: 0) {
             PageHeader(title: "Inbox", icon: "tray") {
                 SlidingTabs(tabs: [
@@ -30,26 +30,33 @@ struct InboxView: View {
             HStack(spacing: 8) {
                 SlidingTabs(tabs: [
                     .init(id: "decisions", label: "Needs you", count: model.decisions.count, hot: true),
+                    .init(id: "slack", label: "Slack", count: model.slackOpenCount, hot: model.slackOpenCount > 0),
                     .init(id: "todos", label: "To-dos", count: model.todos.count),
                     .init(id: "tasks", label: "Workers", count: tasks.v["tasks"].array.filter { $0["status"].string != "cleaned" }.count),
                     .init(id: "activity", label: "Activity"),
-                ], selection: $tab.v)
+                ], selection: $m.inboxTab)
                 Spacer()
-                if tab.v == "activity" {
+                if model.inboxTab == "slack" { SlackWatchBar().transition(.opacity.combined(with: .move(edge: .trailing))) }
+                if model.inboxTab == "activity" {
                     SlidingTabs(tabs: ["3h", "8h", "24h", "3d"].map { .init(id: $0, label: $0) }, selection: $since.v)
                         .onChange(of: since.v) { load() }
                         .transition(.opacity.combined(with: .move(edge: .trailing)))
                 }
             }
-            .animation(M.snappy, value: tab.v)
+            .animation(M.snappy, value: model.inboxTab)
             .padding(.horizontal, 20).frame(height: 50)
             Hairline()
             ScrollView {
                 LazyVStack(spacing: 0) {
-                    switch tab.v {
+                    switch model.inboxTab {
                     case "decisions":
                         if model.decisions.isEmpty { EmptyState(icon: "checkmark.circle", title: "You're all caught up", detail: "Questions and requests from workers land here.") }
                         ForEach(model.decisions, id: \.self) { DecisionRow(d: $0).transition(.opacity.combined(with: .move(edge: .trailing))) }
+                    case "slack":
+                        if model.slackItems.isEmpty {
+                            EmptyState(icon: "number", title: "Nothing new on Slack", detail: model.slack["configured"].bool ? "Mentions and posts in the channels you watch land here until you start or dismiss them." : "Connect Slack in Settings › Integrations to have mentions land here.")
+                        }
+                        ForEach(model.slackItems, id: \.self) { SlackItemRow(item: $0).transition(.opacity.combined(with: .move(edge: .trailing))) }
                     case "todos":
                         if model.todos.isEmpty { EmptyState(icon: "checklist", title: "No to-dos", detail: "Things only you can do, like merging a PR, show up here.") }
                         ForEach(model.todos, id: \.self) { TodoRow(t: $0).transition(.opacity.combined(with: .move(edge: .trailing))) }
@@ -76,7 +83,7 @@ struct InboxView: View {
             }
         }
         .onAppear(perform: load)
-        .onChange(of: tab.v) { if tab.v == "tasks" || tab.v == "activity" { load() } }
+        .onChange(of: model.inboxTab) { if model.inboxTab == "tasks" || model.inboxTab == "activity" { load() } }
     }
 
     func load() {
@@ -127,6 +134,86 @@ struct DecisionRow: View {
     func submit(_ action: String, _ value: String? = nil) {
         let a = value ?? answer.v
         Task { await model.decide(d["id"].string, action: action, answer: a) }
+    }
+}
+
+/// The watcher's state, and a way to poll now, above the Slack tab.
+struct SlackWatchBar: View {
+    @Environment(AppModel.self) var model
+    @StateObject private var checking = Box(false)
+
+    var body: some View {
+        let w = model.slackWatch
+        HStack(spacing: 8) {
+            if let e = w["lastError"].nonEmpty {
+                Label(e, systemImage: "exclamationmark.triangle.fill").font(T.ui(11.5)).foregroundStyle(T.orange).lineLimit(1)
+            } else if w["mode"].string == "off" {
+                Text("Watching is off").font(T.ui(11.5)).foregroundStyle(T.text3)
+            } else if w["lastPollAt"].double > 0 {
+                Text(Fmt.checked(w["lastPollAt"].double)).font(T.ui(11.5)).foregroundStyle(T.text3)
+            }
+            IconButton(icon: "arrow.clockwise", help: "Check Slack now", spinning: checking.v) {
+                checking.v = true
+                Task { await model.slackCheckNow(); checking.v = false }
+            }
+            IconButton(icon: "gearshape", help: "Slack watch settings") { model.settingsPane = "integrations"; model.navigate(.settings) }
+        }
+    }
+}
+
+struct SlackItemRow: View {
+    @Environment(AppModel.self) var model
+    let item: JSON
+
+    var body: some View {
+        let skip = item["verdict"].string == "skip"
+        VStack(alignment: .leading, spacing: 10) {
+            head
+            MarkdownText(text: Session.plain(item["text"].string), size: 12.5, color: T.text2)
+                .lineLimit(6)
+            if let r = item["reason"].nonEmpty {
+                Label("Orchestrator: \(r)", systemImage: "sparkles").font(T.ui(11.5)).foregroundStyle(T.text3)
+            }
+            actions
+        }
+        .padding(18)
+        .opacity(skip ? 0.6 : 1)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(T.raised.opacity(0.45)))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(T.line, lineWidth: 1))
+        .padding(.horizontal, 20).padding(.top, 14)
+    }
+
+    var head: some View {
+        HStack(spacing: 8) {
+            Avatar(name: item["who"].string, url: item["avatar"].string, size: 20)
+            Text(item["who"].string).font(T.ui(13, .semibold))
+            Text(item["channel"].nonEmpty ?? "Slack").font(T.ui(12)).foregroundStyle(T.text3)
+            Chip(text: item["kind"].string == "channel" ? "Channel post" : "Mention", icon: item["kind"].string == "channel" ? "number" : "at")
+            if item["count"].int > 1 { Chip(text: "\(item["count"].int) messages") }
+            if let v = item["verdict"].nonEmpty { Chip(text: v == "skip" ? "Triage: skip" : "Triage: actionable", icon: v == "skip" ? "minus.circle" : "checkmark.circle") }
+            Spacer()
+            Text(Fmt.ago(item["ts"].double)).font(T.ui(11.5)).foregroundStyle(T.text3)
+        }
+    }
+
+    var actions: some View {
+        HStack(spacing: 8) {
+            Button("Dismiss") { Task { await model.slackItem(item["id"].string, "dismiss") } }.buttonStyle(LButton())
+            Spacer()
+            if let link = item["permalink"].nonEmpty {
+                Button { model.openThread(link) } label: { Label("Read thread", systemImage: "text.bubble") }.buttonStyle(LButton())
+                Button { openURL(link) } label: { Image(systemName: "arrow.up.right") }.buttonStyle(LButton()).help("Open in Slack")
+                Menu {
+                    ForEach(model.projects) { p in
+                        Button(p.name) { Task { await model.slackItem(item["id"].string, "start", ["project": p.id]) } }
+                    }
+                } label: { Label("Hand to Claude", systemImage: "sparkles") } primaryAction: {
+                    Task { await model.slackItem(item["id"].string, "start", model.projectFilter.map { ["project": $0] } ?? [:]) }
+                }
+                .menuStyle(.button).buttonStyle(LButton(primary: true)).fixedSize()
+                .help("Run the Slack pipeline on this thread (pick a project from the arrow)")
+            }
+        }
     }
 }
 

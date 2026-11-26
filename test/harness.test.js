@@ -187,8 +187,8 @@ test("defer hides a decision until its day; duplicate to-dos are refused", async
   assert.match(dup.err, /already on the list/);
   assert.equal(sb("todo", "done", "merge-42").code, 0);
 
-  const c = sb("catchup", "--since", "1h");
-  assert.equal(c.code, 0);
+  const c = sb("status", "--since", "1h");
+  assert.equal(c.code, 0, c.err);
   assert.match(c.out, /Waiting on you/);
   assert.match(c.out, /First\?/);
   assert.doesNotMatch(c.out, /Second\?/);
@@ -238,6 +238,32 @@ test("capacity: past the cap a task queues, then starts when a slot frees", asyn
   await waitFor(statusIs(c.taskId, "ready-for-review"), 20000, "queued task ran");
 });
 
+test("Slack replies filed into a chat reach its agent on the next turn, once", async () => {
+  const t = await spawnTask("thread news", "stub:report=ready-for-review");
+  await waitFor(statusIs(t.taskId, "ready-for-review"), 15000);
+  await waitFor(idle(t.taskId), 5000, "idle");
+  const file = path.join(DATA, "runs", `${t.taskId}.json`);
+  const run = JSON.parse(fs.readFileSync(file, "utf8"));
+  run.messages.push({ id: "slack-1.000001", ts: 1, role: "slack", who: "Cat", text: "it also breaks on XLSX", undelivered: true });
+  fs.writeFileSync(file, JSON.stringify(run));
+  assert.equal(sb("followup", t.taskId, "take a look").code, 0);
+  await waitFor(() => fs.readFileSync(ENV.STUB_LOG, "utf8").includes("it also breaks on XLSX"), 10000, "slack news in the prompt");
+  const prompt = fs.readFileSync(ENV.STUB_LOG, "utf8").split("\n").filter((l) => l.includes("it also breaks on XLSX")).map((l) => JSON.parse(l).prompt);
+  assert.match(JSON.stringify(prompt), /\[slack\] New in the Slack thread/);
+  const after = (await api("GET", `/api/runs/${t.taskId}`)).run;
+  assert.ok(!after.messages.find((m) => m.id === "slack-1.000001").undelivered, "delivered once");
+});
+
+test("only a loopback Host gets an answer, GETs included", async () => {
+  const http = require("http");
+  const status = (host) => new Promise((resolve, reject) => http.get({ host: "127.0.0.1", port: PORT, path: "/api/runs", headers: { Host: host } }, (r) => resolve(r.statusCode)).on("error", reject));
+  assert.equal(await status(`evil.example:${PORT}`), 403);
+  assert.equal(await status(`127.0.0.1:${PORT}`), 200);
+  const bad = await fetch(`${URL_}/api/runs/%E0%A4%A`);
+  assert.ok(bad.status >= 400 && bad.status < 600, "a malformed id is an error, not a crash");
+  assert.equal((await fetch(`${URL_}/api/state`)).status, 200, "still up");
+});
+
 test("a follow-up sent mid-turn is queued and delivered after", async () => {
   const t = await spawnTask("busy", "stub:stall=1\nstub:report=ready-for-review");
   await waitFor(async () => (await api("GET", "/api/state")).jobs.running.includes(t.taskId), 5000);
@@ -279,20 +305,20 @@ test("modes: quiet relays only what needs you; away holds and briefs on return",
   const relays = async () => (await api("GET", "/api/runs/orchestrator")).run.messages.filter((m) => m.role === "relay").length;
   await waitFor(idle("orchestrator"), 10000, "orchestrator idle");
 
-  assert.equal(sb("mode", "quiet").code, 0);
+  assert.equal((await api("POST", "/api/mode", { mode: "quiet" })).ok, true);
   const before = await relays();
   const q = await spawnTask("quiet ok", "stub:report=ready-for-review");
   await waitFor(statusIs(q.taskId, "ready-for-review"), 15000);
   await new Promise((r) => setTimeout(r, 800));
   assert.equal(await relays(), before, "a plain ready report is not relayed in quiet mode");
 
-  assert.equal(sb("mode", "away").code, 0);
+  assert.equal((await api("POST", "/api/mode", { mode: "away" })).ok, true);
   const w = await spawnTask("away q", "stub:report=needs-input\nstub:question=Which one?");
   await waitFor(statusIs(w.taskId, "needs-input"), 15000);
   await new Promise((r) => setTimeout(r, 800));
   assert.equal(await relays(), before, "held while away");
 
-  assert.equal(sb("mode", "normal").code, 0);
+  assert.equal((await api("POST", "/api/mode", { mode: "normal" })).ok, true);
   await waitFor(async () => {
     const o = (await api("GET", "/api/runs/orchestrator")).run;
     return o.messages.some((m) => m.role === "relay" && /Alex is back/.test(m.text) && m.text.includes(w.taskId));

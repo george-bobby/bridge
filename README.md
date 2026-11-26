@@ -140,14 +140,33 @@ reports, stops without a report (after one automatic nudge), stalls, dies, or
 hits a usage limit. Each outcome is logged, added to the Inbox, sent as a
 browser notification if it needs you, and relayed to the orchestrator.
 
-**Inbox** (`i`). A page with four tabs: **Needs you** (questions from workers,
+**Inbox** (`i`). A page with five tabs: **Needs you** (questions from workers,
 where your answer goes straight back, and requested outward writes; any item
-can be deferred to a date), **To-dos**, **Tasks** (status, follow-up, relaunch,
-clean up) and **Activity** (what happened in the last 3h/8h/24h/3d). **Brief me**
-asks the orchestrator for a few-line catch-up. `j`/`k` move, `Enter` opens the
-chat. There are three modes: **normal**,
+can be deferred to a date), **Slack** (what the Slack watch found, below),
+**To-dos**, **Workers** (status, follow-up, relaunch, clean up) and
+**Activity** (what happened in the last 3h/8h/24h/3d). **Brief me** asks the
+orchestrator for a few-line catch-up. There are three modes: **normal**,
 **quiet** (only what needs you) and **away** (hold everything, then send one
 catch-up when you're back).
+
+**Slack watch** (`lib/slackwatch.js`). With a Slack user token, the server
+reads Slack every 2 minutes (Settings › Integrations), with plain API calls
+and no agent tokens:
+
+- **Mentions of you**, and new posts in the **channels you watch**, become
+  Inbox items: who, where, what. **Hand to Claude** runs the pipeline on the
+  thread, **Read thread** opens it on the Slack page, **Dismiss** drops it.
+- **Replies in a thread that already has a chat** go into that chat (it turns
+  unread), and its agent gets them at the top of its next turn. A follow-up in
+  a worked thread is never a second pipeline run.
+- Each new item and reply is a macOS notification (Settings › Notifications).
+
+The first check only sets a watermark, so turning it on never replays old
+mentions. **Watch** (the default) stops there. **Triage** also hands new items
+to the orchestrator, which starts the real work (`sb slack`) and records a
+verdict on the rest (`sb triage`). A skipped item stays in the Inbox with the
+reason, so you can overrule it. Relay modes still apply: away holds them for
+the catch-up.
 
 **Capacity.** 3 workers at once, 2 per repo by default. Extra tasks queue
 until a slot frees.
@@ -166,13 +185,13 @@ keyboard first. Everything is reachable from `⌘K`.
 | --- | --- |
 | **Sidebar** | Pinned sessions, then your **projects**: each repo with its orchestrator and live sessions. Drag a session (from the sidebar, the Board or Sessions) onto a project to move it; right-click a project to start a task in it, filter to it, rename it or make it the default |
 | **Home** `⌘1` | Running, needs-you, open PRs, reviews for you, issues in progress, spend; then what needs you, what's running, PRs needing attention, your Linear issues, dev servers and a spend chart |
-| **Inbox** `⌘2` | Workers' questions and action requests (answer, approve, defer to tomorrow, dismiss), to-dos, workers, activity; normal / quiet / away |
+| **Inbox** `⌘2` | Workers' questions and action requests (answer, approve, defer to tomorrow, dismiss), Slack mentions and watched-channel posts, to-dos, workers, activity; normal / quiet / away |
 | **Board** `⌘3` | Every session as a card in Backlog, In Progress, Needs You, In Review, Done. Cards follow their session (running, blocked, PR open, PR merged); drag one to pin it, click the pin to release it |
 | **Sessions** `⌘4` | The same sessions as a grouped list, plus the Orchestrator |
 | **Pull requests** `⌘5` | Needs attention (failing checks, changes requested, conflicts), review requested, open, merged in the last 14 days; right-click for Fix CI, Resolve comments, Fix conflicts or Review with Claude |
 | **Linear** `⌘6` | Your issues by state, with **sub-issues** as a tree under their parent (a done/total ring on the parent, each child with its own status, PR and assignee). **Start** runs a Claude worker on the issue in its own worktree, on Linear's branch name |
 | **Memory** `⌘7` | The target repo's Claude Code memory, editable (`⌘S`) |
-| **Slack** `⌘8` | Messages that mention you, newest first. Open one to read the whole thread, reply in it as yourself, or **Hand to Claude** to run the pipeline on it in a project you pick |
+| **Slack** `⌘8` | Messages that mention you, newest first; the badge counts the ones you haven't seen. Open one to read the whole thread, reply in it as yourself, or **Hand to Claude** to run the pipeline on it in a project you pick |
 | **Settings** `⌘,` | Pipeline gates, session defaults, harness caps; **Environment** edits `.env` (secrets are write-only) and restarts the server to apply it; **Develop** adds Bridge's own repo as a project and rebuilds and relaunches the app |
 
 **Agents.** The composer's first chip picks the agent: Claude Code, Codex
@@ -277,19 +296,24 @@ beside **Send** set the next job's:
 
 ## `bin/sb`
 
+The harness's tools for its agents, not for you: everything it does has a
+place in the app. The orchestrator spawns and steers workers with it; workers
+declare their phase so a long wait doesn't look like a stall.
+
 ```bash
 bin/sb spawn --repo <path> --title "Fix CSV export" --brief-file brief.md
-bin/sb status                         # tasks, live state, report status
-bin/sb catchup --since 3h             # what's waiting on you and what happened
+bin/sb status --since 3h              # decisions waiting, to-dos, tasks, what happened
+bin/sb sessions | read <id>           # every chat in scope; one chat's briefing
 bin/sb followup <id> "also handle the empty case"   # queued if mid-turn
-bin/sb decisions | decide <d-id> "CSV" | defer <d-id> 2026-12-01
+bin/sb decide <d-id> "CSV" | dismiss <d-id> | defer <d-id> 2026-12-01
+bin/sb triage <slack-item-id> skip "social, no ask"   # the orchestrator's Slack verdicts
 bin/sb todo add <key> "Merge #42" | todo done <key>
-bin/sb relaunch <id> | cleanup <id> [--force] | mode quiet
+bin/sb relaunch <id> | cleanup <id> [--force]
 bin/sb declare waiting "CI, ~10 min"  # inside a worker: not stalled, just waiting
 ```
 
 `cleanup` removes the worktree and keeps the branch. It refuses if there are
-uncommitted changes or commits that aren't pushed, unless you pass `--force`.
+uncommitted changes or commits that aren't pushed, unless `--force`.
 
 ## Settings
 
