@@ -43,7 +43,23 @@ final class TermSession: ObservableObject, @preconcurrency LocalProcessTerminalV
     }
 
     private func launch(path: String) {
-        let shell = ProcessInfo.processInfo.environment["SHELL"].flatMap { $0.isEmpty ? nil : $0 } ?? "/bin/zsh"
+        let shell = Self.shell
+        // Run the session, then stay in a shell in its folder once it exits.
+        let line = command.isEmpty ? "exec \(shell) -l" : "\(command); exec \(shell) -l"
+        let dir = FileManager.default.fileExists(atPath: workdir) ? workdir : NSHomeDirectory()
+        view.startProcess(executable: shell, args: ["-l", "-i", "-c", line], environment: Self.environment(path: path),
+                          execName: "-" + URL(fileURLWithPath: shell).lastPathComponent, currentDirectory: dir)
+        state = .running
+        DispatchQueue.main.async { self.view.window?.makeFirstResponder(self.view) }
+    }
+
+    nonisolated static var shell: String {
+        ProcessInfo.processInfo.environment["SHELL"].flatMap { $0.isEmpty ? nil : $0 } ?? "/bin/zsh"
+    }
+
+    /// The app's environment minus its secrets and snapshot knobs, dressed
+    /// for a 256-colour terminal; `path` goes in front of PATH.
+    nonisolated static func environment(path: String = "") -> [String] {
         var env = ProcessInfo.processInfo.environment
         for k in ["ACP_BACKEND", "LINEAR_API_KEY", "SLACK_USER_TOKEN", "BRIDGE_SNAPSHOT_DIR", "BRIDGE_SNAPSHOT_PAGES", "BRIDGE_SNAPSHOT_CHAT", "BRIDGE_SNAPSHOT_URL"] { env[k] = nil }
         if !path.isEmpty { env["PATH"] = path + ":" + (env["PATH"] ?? "/usr/bin:/bin") }
@@ -51,13 +67,7 @@ final class TermSession: ObservableObject, @preconcurrency LocalProcessTerminalV
         env["COLORTERM"] = "truecolor"
         env["TERM_PROGRAM"] = "Bridge"
         if env["LANG"] == nil { env["LANG"] = "en_US.UTF-8" }
-        // Run the session, then stay in a shell in its folder once it exits.
-        let line = command.isEmpty ? "exec \(shell) -l" : "\(command); exec \(shell) -l"
-        let dir = FileManager.default.fileExists(atPath: workdir) ? workdir : NSHomeDirectory()
-        view.startProcess(executable: shell, args: ["-l", "-i", "-c", line], environment: env.map { "\($0.key)=\($0.value)" },
-                          execName: "-" + URL(fileURLWithPath: shell).lastPathComponent, currentDirectory: dir)
-        state = .running
-        DispatchQueue.main.async { self.view.window?.makeFirstResponder(self.view) }
+        return env.map { "\($0.key)=\($0.value)" }
     }
 
     /// A restart's own kill must not mark the new process exited.
