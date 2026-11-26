@@ -391,6 +391,8 @@ final class AppModel {
     var drafts: [String: String] = [:]
     var attachments: [String: [Attachment]] = [:]
     var browserTabs: [String: [BrowserTab]] = [:]
+    /// Subagents and background commands open as tabs: task ids by run (Tasks.swift).
+    var taskTabs: [String: [String]] = [:]
     @ObservationIgnored let web = WebStore()
 
     func openBrowser(_ runId: String, url: String) {
@@ -425,6 +427,8 @@ final class AppModel {
 
     var paletteOpen = false
     var composeOpen = false
+    /// The MCP editor or tools list, floating over the window (Servers.swift).
+    var mcpSheet: MCPSheet? = nil
     var composeText = ""
     var toast: String? = nil
     var toastBad = false
@@ -864,6 +868,7 @@ final class AppModel {
         case "inbox": withAnimation(M.snappy) { inbox = d }
         case "slack": slackFound(d)
         case "projects": projects = d["projects"].array.map(Project.init)
+        case "mcp": MCPStore.shared.changed(d["agent"].string)
         case "message", "delta", "run-updated":
             if d["runId"].string == openId || paneRuns.contains(d["runId"].string) { scheduleRefresh() }
         case "ask" where notifyAsks:

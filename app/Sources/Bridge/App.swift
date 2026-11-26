@@ -17,7 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// Dev aid: render every page of the window to PNGs, for checking the UI
     /// without screen-recording permission. `BRIDGE_SNAPSHOT_DIR=/tmp/x Bridge`.
     private func snapshots(to dir: String) {
-        let routes: [(String, Route)] = [("home", .home), ("board", .board), ("sessions", .sessions), ("pulls", .pulls), ("linear", .linear), ("inbox", .inbox), ("inbox-slack", .inbox), ("memory", .memory), ("slack", .slack), ("usage", .usage), ("settings", .settings), ("settings-agents", .settings), ("settings-integrations", .settings), ("settings-projects", .settings), ("settings-notifications", .settings), ("settings-advanced", .settings)]
+        let routes: [(String, Route)] = [("home", .home), ("board", .board), ("sessions", .sessions), ("pulls", .pulls), ("linear", .linear), ("inbox", .inbox), ("inbox-slack", .inbox), ("memory", .memory), ("slack", .slack), ("usage", .usage), ("settings", .settings), ("settings-agents", .settings), ("settings-mcp", .settings), ("mcp-tools", .settings), ("mcp-add", .settings), ("settings-integrations", .settings), ("settings-projects", .settings), ("settings-notifications", .settings), ("settings-advanced", .settings)]
         let browser = ProcessInfo.processInfo.environment["BRIDGE_SNAPSHOT_URL"]
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 8_000_000_000)
@@ -28,7 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             if let last = pages.first(where: { $0.0 == "chat" }) {
                 pages.append(("collapsed", last.1))
                 if browser != nil { pages.append(("browser", last.1)) }
-                pages += [("split", last.1), ("split-details", last.1), ("split-wide", last.1), ("split4", last.1), ("messages", last.1), ("messages-split", last.1), ("messages-list", last.1), ("drop", last.1), ("terminal", last.1)]
+                pages += [("split", last.1), ("split-details", last.1), ("split-wide", last.1), ("split4", last.1), ("messages", last.1), ("messages-split", last.1), ("messages-list", last.1), ("drop", last.1), ("terminal", last.1), ("task", last.1), ("task-live", last.1), ("task-bash", last.1)]
             }
             let hidden = model.sidebarHidden
             if let only = ProcessInfo.processInfo.environment["BRIDGE_SNAPSHOT_PAGES"]?.split(separator: ",").map(String.init) {
@@ -62,7 +62,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 if name == "drop" { model.paneDragActive = true; model.dropZone = model.panes.last.map { DropZone(pane: $0.id, edge: model.isSplit ? .center : .trailing) } }
                 else if model.paneDragActive { model.paneDragActive = false; model.dropZone = nil }
                 if name == "terminal", case .session(let id) = route { model.openTerminalTab(id) }
+                // A finished subagent, a running one and a background command, each in its tab.
+                if name.hasPrefix("task"), case .session(let id) = route {
+                    let tasks = model.agentTasks(id)
+                    let pick = name == "task-bash" ? tasks.first { !$0.isAgent } : name == "task-live" ? tasks.first { $0.isAgent && $0.running } : tasks.first { $0.isAgent && !$0.running }
+                    if let t = pick { model.openTaskTab(id, t.id) }
+                }
                 if name == "slack", let m = model.mentions.first { model.openThread(m.permalink) }
+                if name == "mcp-tools" || name == "mcp-add" { model.settingsPane = "mcp" }
+                model.mcpSheet = name == "mcp-add" ? .add(.claude) : nil
+                if name == "mcp-tools", let s = MCPStore.shared.servers(.claude).first(where: { $0.toolCount != nil }) { model.mcpSheet = .tools(s, run: nil) }
                 var wait: UInt64 = 2_500_000_000
                 // A long chat stepped back six prompts, caught mid-flash;
                 // split: the long chat beside another, stepped in its pane.
@@ -253,18 +262,20 @@ struct RootView: View {
             .ignoresSafeArea()
         }
         .overlay {
-            if model.paletteOpen || model.composeOpen {
+            if model.paletteOpen || model.composeOpen || model.mcpSheet != nil {
                 Color.black.opacity(0.32).ignoresSafeArea()
-                    .onTapGesture { model.paletteOpen = false; model.composeOpen = false }
+                    .onTapGesture { model.paletteOpen = false; model.composeOpen = false; model.mcpSheet = nil }
                     .transition(.opacity)
             }
         }
         .overlay { if model.paletteOpen { CommandPalette().transition(.panel) } }
         .overlay { if model.composeOpen { ComposeSheet().transition(.panel) } }
+        .overlay { if let s = model.mcpSheet { MCPSheetHost(sheet: s).transition(.panel) } }
         .overlay(alignment: .bottom) { ToastView() }
         .overlay { if !model.connected && !model.everConnected { ConnectingView().transition(.opacity) } }
         .animation(M.pop, value: model.paletteOpen)
         .animation(M.pop, value: model.composeOpen)
+        .animation(M.pop, value: model.mcpSheet)
         .animation(M.page, value: model.everConnected)
     }
 
