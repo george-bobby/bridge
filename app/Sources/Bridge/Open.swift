@@ -181,6 +181,7 @@ struct OpenInButton: View {
                     }
                     if !places.folder.isEmpty {
                         Section {
+                            Button { ConsoleStore.shared.add(places.folder) } label: { Label("Open in Integrated Terminal", systemImage: "terminal") }
                             Button { copyToPasteboard(places.folder); model.say("Copied the path") } label: { Label("Copy Path", systemImage: "doc.on.doc") }
                         }
                     }
@@ -211,6 +212,10 @@ struct OpenInMenu: View {
                 ForEach(OpenTarget.allCases) { t in
                     Button { places.open(t, model: model) } label: { Label { Text(t.label) } icon: { Image(nsImage: t.icon) } }
                         .disabled(!places.available(t))
+                }
+                if !places.folder.isEmpty {
+                    Divider()
+                    Button { ConsoleStore.shared.add(places.folder) } label: { Label("Integrated Terminal", systemImage: "terminal") }
                 }
             } label: { Label("Open In", systemImage: "arrow.up.forward.app") }
         }
