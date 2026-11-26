@@ -1,5 +1,7 @@
 import AppKit
 import Combine
+import ImageIO
+import QuickLook
 import SwiftUI
 import WebKit
 
@@ -190,9 +192,46 @@ struct Attachment: Identifiable, Hashable {
         return Attachment(id: String(id), kind: .image, name: "Image", path: url.path)
     }
 
+    static let imageExts: Set<String> = ["png", "jpg", "jpeg", "gif", "webp", "heic", "tiff", "tif", "bmp"]
+    static func isImage(_ path: String) -> Bool { imageExts.contains((path as NSString).pathExtension.lowercased()) }
+
     static func file(_ url: URL) -> Attachment {
-        let isImage = ["png", "jpg", "jpeg", "gif", "webp", "heic", "tiff", "bmp"].contains(url.pathExtension.lowercased())
-        return Attachment(id: UUID().uuidString, kind: isImage ? .image : .file, name: url.lastPathComponent, path: url.path)
+        Attachment(id: UUID().uuidString, kind: isImage(url.path) ? .image : .file, name: url.lastPathComponent, path: url.path)
+    }
+
+    /// Text that is nothing but existing file paths (one per line, `~` or
+    /// absolute, maybe quoted or `file://`), as files; else nil.
+    static func paths(in text: String) -> [URL]? {
+        let lines = text.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        guard !lines.isEmpty, lines.count <= 20 else { return nil }
+        var out: [URL] = []
+        for raw in lines {
+            var l = raw
+            if l.count > 1, let f = l.first, f == l.last, f == "'" || f == "\"" { l = String(l.dropFirst().dropLast()) }
+            if l.hasPrefix("file://"), let u = URL(string: l) { l = u.path }
+            l = (l as NSString).expandingTildeInPath
+            var dir: ObjCBool = false
+            guard l.hasPrefix("/"), FileManager.default.fileExists(atPath: l, isDirectory: &dir), !dir.boolValue else { return nil }
+            out.append(URL(fileURLWithPath: l))
+        }
+        return out
+    }
+
+    /// What ⌘V should attach instead of pasting text: copied files, a copied
+    /// image, text that is only file paths, or a big paste. nil = paste as text.
+    @MainActor static func fromPasteboard(_ pb: NSPasteboard = .general) -> [Attachment]? {
+        if let urls = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL], !urls.isEmpty {
+            return urls.map(file)
+        }
+        let str = pb.string(forType: .string)
+        if let str, let urls = paths(in: str) { return urls.map(file) }
+        // Screenshot tools and browsers put a path or URL next to the image: the image wins.
+        let hasImage = pb.availableType(from: [.png, .tiff]) != nil
+        if hasImage, str == nil || !str!.contains(where: \.isWhitespace) || str!.hasPrefix("/"), let img = NSImage(pasteboard: pb), let a = image(img) {
+            return [a]
+        }
+        if let str, isLarge(str) { return [pasted(str)] }
+        return nil
     }
 
     static func pasted(_ text: String) -> Attachment {
@@ -254,6 +293,154 @@ struct AttachmentChip: View {
         }
         .hoverBox(hover)
         .help(item.kind == .text ? String(item.text.prefix(400)) : item.path)
-        .onTapGesture { if !item.path.isEmpty { NSWorkspace.shared.open(URL(fileURLWithPath: item.path)) } }
+        .onTapGesture { if !item.path.isEmpty { preview.v = URL(fileURLWithPath: item.path) } }
+        .quickLookPreview($preview.v)
+    }
+    @StateObject private var preview = Box<URL?>(nil)
+}
+
+// MARK: - Files in sent messages
+
+extension Attachment {
+    /// A sent message without the files it references, and those files: the
+    /// `[Attached …: path]` lines the composer adds, and lines that are just
+    /// an existing file's path. Cached per text (transcripts re-render often).
+    @MainActor static func split(_ text: String) -> (text: String, files: [Attachment]) {
+        if let hit = splitCache[text] { return hit }
+        var kept: [Substring] = [], files: [Attachment] = []
+        for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            let t = line.trimmingCharacters(in: .whitespaces)
+            var path: String? = nil
+            for prefix in ["[Attached image, read it with your file tool: ", "[Attached file: "] where t.hasPrefix(prefix) && t.hasSuffix("]") {
+                path = String(t.dropFirst(prefix.count).dropLast())
+            }
+            if path == nil, t.hasPrefix("/") || t.hasPrefix("~/") || t.hasPrefix("file://"), let u = paths(in: t)?.first { path = u.path }
+            if let path {
+                let url = URL(fileURLWithPath: path)
+                files.append(Attachment(id: path, kind: isImage(path) ? .image : .file, name: url.lastPathComponent, path: path))
+            } else {
+                kept.append(line)
+            }
+        }
+        var seen = Set<String>()
+        let out = (files.isEmpty ? text : kept.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines),
+                   files.filter { seen.insert($0.path).inserted })
+        if splitCache.count > 400 { splitCache.removeAll() }
+        splitCache[text] = out
+        return out
+    }
+    @MainActor private static var splitCache: [String: (text: String, files: [Attachment])] = [:]
+}
+
+/// Downsampled thumbnails, read off the main thread and kept in memory.
+enum Thumbs {
+    nonisolated(unsafe) static let cache = NSCache<NSString, NSImage>()
+
+    static func load(_ path: String, max: CGFloat) async -> NSImage? {
+        let key = "\(path)@\(Int(max))" as NSString
+        if let hit = cache.object(forKey: key) { return hit }
+        let img: NSImage? = await Task.detached(priority: .userInitiated) {
+            guard let src = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil) else { return nil }
+            let opts: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: true,
+                                         kCGImageSourceThumbnailMaxPixelSize: max * 2]
+            guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else { return nil }
+            return NSImage(cgImage: cg, size: NSSize(width: CGFloat(cg.width) / 2, height: CGFloat(cg.height) / 2))
+        }.value
+        if let img { cache.setObject(img, forKey: key) }
+        return img
+    }
+}
+
+/// The images and files a sent message references: image thumbnails and
+/// file cards; a click opens Quick Look (space bar zooms, arrows step).
+struct MessageFiles: View {
+    let files: [Attachment]
+    @StateObject private var preview = Box<URL?>(nil)
+
+    var body: some View {
+        let images = files.filter { $0.kind == .image }
+        let others = files.filter { $0.kind != .image }
+        VStack(alignment: .leading, spacing: 8) {
+            if !images.isEmpty {
+                HStack(alignment: .top, spacing: 8) {
+                    ForEach(images) { a in ImageTile(item: a) { preview.v = URL(fileURLWithPath: a.path) } }
+                }
+            }
+            if !others.isEmpty {
+                HStack(spacing: 8) {
+                    ForEach(others) { a in FileTile(item: a) { preview.v = URL(fileURLWithPath: a.path) } }
+                }
+            }
+        }
+        .quickLookPreview($preview.v, in: files.map { URL(fileURLWithPath: $0.path) })
+    }
+}
+
+struct ImageTile: View {
+    let item: Attachment
+    let open: () -> Void
+    @StateObject private var img = Box<NSImage?>(nil)
+    @StateObject private var missing = Box(false)
+    @StateObject private var hover = Box(false)
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
+        Group {
+            if let i = img.v {
+                let h: CGFloat = 120
+                let w = min(260, max(60, h * i.size.width / max(1, i.size.height)))
+                Image(nsImage: i).resizable().scaledToFill().frame(width: w, height: h).clipped()
+            } else {
+                Image(systemName: missing.v ? "photo.badge.exclamationmark" : "photo").font(.system(size: 18)).foregroundStyle(T.text3)
+                    .frame(width: 120, height: 120).background(T.hover)
+            }
+        }
+        .clipShape(shape)
+        .overlay(shape.stroke(hover.v ? T.accent.opacity(0.6) : T.line, lineWidth: 1))
+        .scaleEffect(hover.v ? 1.015 : 1)
+        .contentShape(shape)
+        .onTapGesture(perform: open)
+        .hoverBox(hover)
+        .help(item.path)
+        .contextMenu {
+            Button { NSWorkspace.shared.open(URL(fileURLWithPath: item.path)) } label: { Label("Open", systemImage: "arrow.up.forward.app") }
+            Button { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: item.path)]) } label: { Label("Reveal in Finder", systemImage: "folder") }
+            Button { copyToPasteboard(item.path) } label: { Label("Copy Path", systemImage: "doc.on.doc") }
+        }
+        .task(id: item.path) {
+            img.v = await Thumbs.load(item.path, max: 260)
+            missing.v = img.v == nil
+        }
+    }
+}
+
+struct FileTile: View {
+    let item: Attachment
+    let open: () -> Void
+    @StateObject private var hover = Box(false)
+
+    var body: some View {
+        let exists = FileManager.default.fileExists(atPath: item.path)
+        HStack(spacing: 8) {
+            Image(nsImage: NSWorkspace.shared.icon(forFile: item.path)).resizable().frame(width: 28, height: 28)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(item.name).font(T.ui(12, .medium)).foregroundStyle(T.text).lineLimit(1)
+                Text(exists ? (item.path as NSString).deletingLastPathComponent.replacingOccurrences(of: NSHomeDirectory(), with: "~") : "Missing")
+                    .font(T.ui(11)).foregroundStyle(T.text3).lineLimit(1).truncationMode(.head)
+            }
+            .frame(maxWidth: 220, alignment: .leading)
+        }
+        .padding(6).padding(.trailing, 6)
+        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(hover.v ? T.hover : T.panel))
+        .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(T.line, lineWidth: 1))
+        .contentShape(Rectangle())
+        .onTapGesture(perform: open)
+        .hoverBox(hover)
+        .help(item.path)
+        .contextMenu {
+            Button { NSWorkspace.shared.open(URL(fileURLWithPath: item.path)) } label: { Label("Open", systemImage: "arrow.up.forward.app") }
+            Button { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: item.path)]) } label: { Label("Reveal in Finder", systemImage: "folder") }
+            Button { copyToPasteboard(item.path) } label: { Label("Copy Path", systemImage: "doc.on.doc") }
+        }
     }
 }
