@@ -53,6 +53,7 @@ struct ReviewChip: View {
 struct SessionRow: View {
     @Environment(AppModel.self) var model
     let session: Session
+    var unarchive = false
 
     var body: some View {
         HoverRow(height: 46) {
@@ -69,6 +70,10 @@ struct SessionRow: View {
                 ProjectChip(session: session)
                 if !session.prUrl.isEmpty {
                     Chip(text: "#\(session.prNumber)", icon: "arrow.triangle.pull", mono: true)
+                }
+                if unarchive {
+                    Button { Task { await model.setArchived(session.id, false) } } label: { Label("Unarchive", systemImage: "tray.and.arrow.up") }
+                        .buttonStyle(LButton())
                 }
                 Text(Fmt.ago(session.updatedAt)).font(T.ui(11.5)).foregroundStyle(T.text3).frame(width: 34, alignment: .trailing)
             }
@@ -142,8 +147,12 @@ struct SessionMenu: View {
                 Button(role: .destructive) { Task { await model.clearChat(session.id) } } label: { Label("Clear Chat…", systemImage: "eraser") }
                     .disabled(model.isLive(session))
             } else {
-                Button(role: .destructive) { Task { await model.delete(session.id) } } label: { Label("Delete", systemImage: "trash") }
-                    .disabled(model.isLive(session))
+                if session.archived {
+                    Button { Task { await model.setArchived(session.id, false) } } label: { Label("Unarchive", systemImage: "tray.and.arrow.up") }
+                } else {
+                    Button { Task { await model.setArchived(session.id, true) } } label: { Label("Archive", systemImage: "archivebox") }
+                        .disabled(model.isLive(session))
+                }
             }
         }
     }
@@ -428,6 +437,7 @@ struct BoardView: View {
         VStack(spacing: 0) {
             PageHeader(title: "Sessions", subtitle: "Cards follow their session until you drag them", icon: "rectangle.stack") {
                 LayoutPicker()
+                ArchivedToggle()
                 ProjectFilterMenu()
                 SearchField(text: $query.v).frame(width: 200)
                 IconButton(icon: "plus", help: "New task (⌘N)") { model.compose(in: model.projectFilter) }
@@ -582,12 +592,38 @@ struct SessionsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PageHeader(title: "Sessions", subtitle: "\(filtered.count)", icon: "rectangle.stack") {
+            PageHeader(title: model.showArchived ? "Archived" : "Sessions", subtitle: "\(model.showArchived ? archived.count : filtered.count)", icon: model.showArchived ? "archivebox" : "rectangle.stack") {
                 LayoutPicker()
+                ArchivedToggle()
                 ProjectFilterMenu()
                 SearchField(text: $query.v).frame(width: 220)
                 IconButton(icon: "plus", help: "New task (⌘N)") { model.compose(in: model.projectFilter) }
             }
+            if model.showArchived { archivedList } else { liveList }
+        }
+    }
+
+    var archivedList: some View {
+        ScrollView {
+            LazyVStack(spacing: 0) {
+                ForEach(archived) { s in
+                    SessionRow(session: s, unarchive: true).transition(.opacity.combined(with: .move(edge: .top)))
+                }
+                if archived.isEmpty {
+                    EmptyState(icon: "archivebox", title: "Nothing archived", detail: "Archive a session from its menu to put it away. It comes back from here.")
+                }
+            }
+            .animation(M.snappy, value: archived.map(\.id))
+        }
+    }
+
+    var archived: [Session] {
+        let q = query.v.lowercased()
+        return model.archivedSessions.filter { model.inFilter($0) && (q.isEmpty || "\($0.title) \($0.text) \($0.channel) \($0.issueKey) \($0.branch)".lowercased().contains(q)) }
+    }
+
+    var liveList: some View {
+        VStack(spacing: 0) {
             ScrollView {
                 LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
                     if let o = model.sessions.first(where: { $0.id == model.orchestratorId(model.projectFilter) }) ?? model.orchestrator {
