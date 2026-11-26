@@ -376,6 +376,9 @@ struct CommandPalette: View {
             all.append(PaletteItem(id: "web", icon: sym("globe"), title: "New browser tab", hint: "⌘T") { model.openBrowser(id, url: "") })
             all.append(PaletteItem(id: "prev", icon: sym("chevron.up"), title: "Previous chat", hint: "⌥⌘↑") { model.stepChat(-1) })
             all.append(PaletteItem(id: "next", icon: sym("chevron.down"), title: "Next chat", hint: "⌥⌘↓") { model.stepChat(1) })
+            if let s = model.sessions.first(where: { $0.id == id }), s.isOrchestrator, !model.isLive(s) {
+                all.append(PaletteItem(id: "clear", icon: sym("eraser"), title: "Clear orchestrator chat") { Task { await model.clearChat(id) } })
+            }
             if let nav = model.messageNavs[id] {
                 all.append(PaletteItem(id: "prev-msg", icon: sym("arrow.up.to.line"), title: "Previous prompt", hint: "⌥↑") { nav.step(-1) })
                 all.append(PaletteItem(id: "next-msg", icon: sym("arrow.down.to.line"), title: "Next prompt", hint: "⌥↓") { nav.step(1) })

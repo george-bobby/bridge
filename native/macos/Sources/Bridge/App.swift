@@ -28,7 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             if let last = pages.first(where: { $0.0 == "chat" }) {
                 pages.append(("collapsed", last.1))
                 if browser != nil { pages.append(("browser", last.1)) }
-                pages += [("split", last.1), ("split-details", last.1), ("split-wide", last.1), ("split4", last.1), ("messages", last.1), ("messages-split", last.1), ("drop", last.1), ("terminal", last.1)]
+                pages += [("split", last.1), ("split-details", last.1), ("split-wide", last.1), ("split4", last.1), ("messages", last.1), ("messages-split", last.1), ("messages-list", last.1), ("drop", last.1), ("terminal", last.1)]
             }
             let hidden = model.sidebarHidden
             if let only = ProcessInfo.processInfo.environment["BRIDGE_SNAPSHOT_PAGES"]?.split(separator: ",").map(String.init) {
@@ -71,6 +71,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                     if name == "messages-split", case .session(let id) = route { model.openToSide(id); model.focusPane(0) }
                     try? await Task.sleep(nanoseconds: 2_500_000_000)
                     for _ in 0..<6 { model.messageNavs[long.id]?.step(-1); try? await Task.sleep(nanoseconds: 450_000_000) }
+                    if name == "messages-list" { model.messageNavs[long.id]?.list.show() }
                     wait = 500_000_000
                 }
                 try? await Task.sleep(nanoseconds: wait)
