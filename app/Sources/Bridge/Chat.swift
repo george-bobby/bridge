@@ -440,17 +440,19 @@ struct UserMessage: View {
         let role = m["role"].string
         let fromSlack = role == "slack" || role == "thread"
         let name = fromSlack ? (m["who"].nonEmpty ?? (who.isEmpty ? nil : who) ?? "Slack") : "You"
-        let text = fromSlack ? Session.plain(m["text"].string) : m["text"].string
+        let raw = fromSlack ? Session.plain(m["text"].string) : m["text"].string
+        let (text, files) = fromSlack ? (raw, []) : Attachment.split(raw)
         HStack(alignment: .top, spacing: 14) {
             Avatar(name: name, size: 28)
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 0) {
                     MessageHead(name: name, detail: fromSlack ? (channel.isEmpty ? "Slack" : "in \(channel)") : "", ts: m["ts"].double)
                     Spacer(minLength: 8)
-                    MessageActions(text: text, shown: hover.v)
+                    MessageActions(text: raw, shown: hover.v)
                 }
                 .frame(height: 18)
-                MarkdownText(text: text)
+                if !text.isEmpty { MarkdownText(text: text) }
+                if !files.isEmpty { MessageFiles(files: files) }
                 if m["queued"].bool { Chip(text: "Queued", icon: "clock") }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -928,8 +930,6 @@ struct Composer: View {
     let runId: String
     @StateObject private var text = Box("")
     @StateObject private var sending = Box(false)
-    @StateObject private var hasFocus = Box(false)
-    @StateObject private var monitor = Box<Any?>(nil)
     @StateObject private var dropping = Box(false)
     @StateObject private var barWidth = Box<CGFloat>(800)
     @FocusState private var focused: Bool
@@ -956,13 +956,10 @@ struct Composer: View {
             return !urls.isEmpty
         } isTargeted: { dropping.v = $0 }
         .modifier(ComposerFrame(focused: focused))
-        .onChange(of: focused) { hasFocus.v = focused }
         .onAppear {
             text.v = draft
-            installPasteMonitor()
             ComposerSnapshots.run(model: model) { t in text.v = t }
         }
-        .onDisappear { if let m = monitor.v { NSEvent.removeMonitor(m); monitor.v = nil } }
         .onChange(of: text.v) { if draft != text.v { model.drafts[runId] = text.v } }
         .onChange(of: draft) { if text.v != draft { text.v = draft } }
         .onChange(of: model.focusComposer, focusIfOpen)
@@ -1130,31 +1127,6 @@ struct Composer: View {
         p.urls.forEach { add(.file($0)) }
     }
 
-    func installPasteMonitor() {
-        guard monitor.v == nil else { return }
-        monitor.v = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak hasFocus] e in
-            guard hasFocus?.v == true, e.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command, e.charactersIgnoringModifiers == "v" else { return e }
-            return handlePaste() ? nil : e
-        }
-    }
-
-    func handlePaste() -> Bool {
-        let pb = NSPasteboard.general
-        if let urls = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL], !urls.isEmpty {
-            urls.forEach { add(.file($0)) }
-            return true
-        }
-        let str = pb.string(forType: .string)
-        if str == nil, let img = NSImage(pasteboard: pb) {
-            add(.image(img))
-            return true
-        }
-        if let str, Attachment.isLarge(str) {
-            add(.pasted(str))
-            return true
-        }
-        return false
-    }
 }
 
 struct ComposerChip: View {
