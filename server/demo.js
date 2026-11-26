@@ -29,6 +29,7 @@ const pr = (n, title, o = {}) => ({
   state: o.state || "OPEN",
   review: o.review || "",
   checks: o.checks || "SUCCESS",
+  checkCounts: { SUCCESS: { pass: 7, fail: 0, pending: 0, skipped: 1 }, FAILURE: { pass: 5, fail: 2, pending: 0, skipped: 1 }, PENDING: { pass: 4, fail: 0, pending: 3, skipped: 0 } }[o.checks || "SUCCESS"],
   mergeable: o.mergeable || "MERGEABLE",
   branch: o.branch || "",
   additions: o.add || 0,

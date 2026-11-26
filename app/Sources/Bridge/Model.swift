@@ -134,6 +134,12 @@ struct PullRequest: Identifiable, Hashable {
     var issueKey: String { j["issueKey"].string }
     var open: Bool { state == "OPEN" }
     var failing: Bool { checks == "FAILURE" || checks == "ERROR" }
+    var running: Bool { checks == "PENDING" || checks == "EXPECTED" }
+    var passCount: Int { j["checkCounts"]["pass"].int }
+    var failCount: Int { j["checkCounts"]["fail"].int }
+    var pendingCount: Int { j["checkCounts"]["pending"].int }
+    var skippedCount: Int { j["checkCounts"]["skipped"].int }
+    var stateLabel: String { state == "MERGED" ? "Merged" : state == "CLOSED" ? "Closed" : draft ? "Draft" : "Open" }
     var needsAttention: Bool { open && (failing || review == "CHANGES_REQUESTED" || mergeable == "CONFLICTING") }
 }
 

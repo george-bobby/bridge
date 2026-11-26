@@ -38,6 +38,129 @@ struct PRStateIcon: View {
     }
 }
 
+/// A PR in a few glyphs: its state icon and number, then "Merged"/"Draft"/
+/// "Closed" when it isn't plain open. Sits under a sidebar row's title.
+struct PRBadge: View {
+    let pr: PullRequest
+    var size: CGFloat = 11.5
+
+    var body: some View {
+        HStack(spacing: 3) {
+            Image(systemName: icon).font(.system(size: size - 1.5, weight: .semibold)).foregroundStyle(tint)
+            Text(verbatim: "\(pr.number)").font(T.ui(size)).foregroundStyle(T.text3).monospacedDigit()
+            if !pr.open || pr.draft { Text(pr.stateLabel).font(T.ui(size)).foregroundStyle(tint) }
+        }
+        .fixedSize()
+        .help("\(pr.stateLabel) pull request #\(pr.number)")
+    }
+
+    var icon: String { pr.state == "MERGED" ? "arrow.triangle.merge" : pr.state == "CLOSED" ? "xmark.circle" : "arrow.triangle.pull" }
+    var tint: Color { pr.state == "MERGED" ? T.purple : pr.state == "CLOSED" ? T.red : pr.draft ? T.text3 : T.green }
+}
+
+/// The head commit's CI in one word ("passed", "2 failing", "running"),
+/// with the counts behind it in the tooltip.
+struct ChecksBadge: View {
+    let pr: PullRequest
+    var size: CGFloat = 11.5
+
+    var body: some View {
+        if let (icon, label, tint) = look {
+            HStack(spacing: 3) {
+                Image(systemName: icon).font(.system(size: size - 1.5, weight: .semibold))
+                Text(label).font(T.ui(size))
+            }
+            .foregroundStyle(tint)
+            .fixedSize()
+            .help(ChecksBadge.detail(pr))
+        }
+    }
+
+    var look: (String, String, Color)? {
+        if pr.failing { return ("xmark.circle", pr.failCount > 0 ? "\(pr.failCount) failing" : "failing", T.red) }
+        if pr.running { return ("circle.dashed", pr.pendingCount > 0 ? "\(pr.pendingCount) running" : "running", T.orange) }
+        if pr.checks == "SUCCESS" { return ("checkmark.circle", "passed", T.green) }
+        return nil
+    }
+
+    static func detail(_ pr: PullRequest) -> String {
+        let parts = [(pr.passCount, "passed"), (pr.failCount, "failing"), (pr.pendingCount, "running"), (pr.skippedCount, "skipped")]
+            .filter { $0.0 > 0 }.map { "\($0.0) \($0.1)" }
+        return parts.isEmpty ? "Checks" : "Checks: " + parts.joined(separator: ", ")
+    }
+}
+
+/// Check counts as GitHub shows them: ✓ 6  ✗ 1  ◌ 2.
+struct CheckCounts: View {
+    let pr: PullRequest
+    var body: some View {
+        HStack(spacing: 8) {
+            if pr.passCount + pr.failCount + pr.pendingCount + pr.skippedCount == 0 {
+                ChecksBadge(pr: pr, size: 11.5)
+            } else {
+                count(pr.passCount, "checkmark.circle", T.green)
+                count(pr.failCount, "xmark.circle", T.red)
+                count(pr.pendingCount, "circle.dashed", T.orange)
+                count(pr.skippedCount, "slash.circle", T.text3)
+            }
+        }
+        .help(ChecksBadge.detail(pr))
+    }
+
+    @ViewBuilder func count(_ n: Int, _ icon: String, _ tint: Color) -> some View {
+        if n > 0 {
+            HStack(spacing: 3) {
+                Image(systemName: icon).font(.system(size: 10.5, weight: .semibold))
+                Text(verbatim: "\(n)").font(T.ui(11.5)).monospacedDigit()
+            }
+            .foregroundStyle(tint)
+        }
+    }
+}
+
+/// What a sidebar session's hover shows: its PR's title, state, size,
+/// author, branch, folder and checks.
+struct SessionHoverCard: View {
+    let session: Session
+    let pr: PullRequest
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Text(session.title).font(T.ui(13, .semibold)).foregroundStyle(T.text).lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 8) {
+                PRBadge(pr: pr, size: 12)
+                if pr.review == "APPROVED" { Text("Approved").font(T.ui(12)).foregroundStyle(T.green) }
+                if pr.review == "CHANGES_REQUESTED" { Text("Changes requested").font(T.ui(12)).foregroundStyle(T.red) }
+                if pr.open && pr.mergeable == "CONFLICTING" { Text("Conflicts").font(T.ui(12)).foregroundStyle(T.orange) }
+            }
+            row("doc.text") {
+                Text(verbatim: "+\(pr.additions)").foregroundStyle(T.green)
+                Text(verbatim: "−\(pr.deletions)").foregroundStyle(T.red)
+            }
+            if !pr.author.isEmpty { row("person") { Text(pr.author).foregroundStyle(T.text2) } }
+            if !pr.branch.isEmpty { row("arrow.triangle.branch") { Text(pr.branch).foregroundStyle(T.text2).lineLimit(1) } }
+            if !session.worktree.isEmpty { row("folder") { Text(URL(fileURLWithPath: session.worktree).lastPathComponent).foregroundStyle(T.text2).lineLimit(1) } }
+            Divider().overlay(T.line)
+            HStack(spacing: 8) {
+                Image(systemName: "checklist").font(.system(size: 11)).foregroundStyle(T.text3).frame(width: 14)
+                Text("Checks").font(T.ui(12)).foregroundStyle(T.text2)
+                Spacer(minLength: 12)
+                CheckCounts(pr: pr)
+            }
+        }
+        .padding(14)
+        .frame(width: 270, alignment: .leading)
+    }
+
+    func row<C: View>(_ icon: String, @ViewBuilder _ content: () -> C) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon).font(.system(size: 11)).foregroundStyle(T.text3).frame(width: 14)
+            HStack(spacing: 5) { content() }.font(T.ui(12))
+        }
+    }
+}
+
 struct ReviewChip: View {
     let pr: PullRequest
     var body: some View {
@@ -67,7 +190,10 @@ struct SessionRow: View {
                 Spacer(minLength: 8)
                 PortChips(servers: model.servers(for: session))
                 ProjectChip(session: session)
-                if !session.prUrl.isEmpty {
+                if let pr = model.pr(for: session.prUrl) {
+                    ChecksBadge(pr: pr, size: 11.5)
+                    PRBadge(pr: pr, size: 11.5)
+                } else if !session.prUrl.isEmpty {
                     Chip(text: "#\(session.prNumber)", icon: "arrow.triangle.pull", mono: true)
                 }
                 Text(Fmt.ago(session.updatedAt)).font(T.ui(11.5)).foregroundStyle(T.text3).frame(width: 34, alignment: .trailing)
@@ -549,10 +675,12 @@ struct BoardCard: View {
             let ports = model.servers(for: session)
             if !session.prUrl.isEmpty || !ports.isEmpty {
                 HStack(spacing: 5) {
-                    if !session.prUrl.isEmpty {
+                    if let pr {
+                        Button { openURL(session.prUrl) } label: { PRBadge(pr: pr, size: 11.5) }.buttonStyle(.plain)
+                        ChecksBadge(pr: pr, size: 11.5)
+                    } else if !session.prUrl.isEmpty {
                         Button { openURL(session.prUrl) } label: { Chip(text: "#\(session.prNumber)", icon: "arrow.triangle.pull", mono: true) }.buttonStyle(.plain)
                     }
-                    if let pr { ChecksIcon(pr: pr).font(.system(size: 11.5)) }
                     PortChips(servers: ports)
                     Spacer()
                 }
