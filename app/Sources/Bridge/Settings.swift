@@ -7,13 +7,14 @@ import SwiftUI
 // save bar. Secrets are write-only: the server only says whether one is set.
 
 enum SettingsPane: String, CaseIterable, Identifiable {
-    case general, agents, rules, mcp, integrations, projects, notifications, advanced
+    case general, agents, rules, pipeline, mcp, integrations, projects, notifications, advanced
     var id: String { rawValue }
     var label: String {
         switch self {
         case .general: return "General"
         case .agents: return "Agents"
         case .rules: return "Rules"
+        case .pipeline: return "Pipeline"
         case .mcp: return "Customize"
         case .integrations: return "Integrations"
         case .projects: return "Projects"
@@ -26,6 +27,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .general: return "gearshape"
         case .agents: return "cpu"
         case .rules: return "checklist"
+        case .pipeline: return "arrow.triangle.branch"
         case .mcp: return "puzzlepiece.extension"
         case .integrations: return "square.stack.3d.up"
         case .projects: return "folder"
@@ -36,8 +38,9 @@ enum SettingsPane: String, CaseIterable, Identifiable {
     var blurb: String {
         switch self {
         case .general: return "The server, how outcomes reach you, and what the Slack pipeline may do."
-        case .agents: return "The agents on this Mac, what a new session starts with, and the skill it opens with."
+        case .agents: return "The agents on this Mac, and what a new session starts with."
         case .rules: return "House rules every session follows, in every repo: added to each worker's and orchestrator's instructions."
+        case .pipeline: return "How every new session works its task: gather context, check it isn't built, plan or build, verify, open the PR and see it through review and CI."
         case .mcp: return "What each agent loads: MCP servers, skills and plugins. Changes go into the agent's own folders and config."
         case .integrations: return "Connect your tools. Bridge works out who you are and which repo from each connection; nothing else to type. Keys are stored in .env and never shown again."
         case .projects: return "Default and your repositories, each with its own orchestrator. Git settings come from each project's own checkout."
@@ -240,6 +243,7 @@ struct SettingsView: View {
         case .general: GeneralSettings(q: q)
         case .agents: AgentSettings(env: env, q: q)
         case .rules: CommonRulesSettings(q: q)
+        case .pipeline: PipelineSettings(q: q)
         case .mcp: CustomizeSettings(q: q)
         case .integrations: IntegrationSettings(env: env, q: q)
         case .projects: ProjectSettings(env: env, q: q)
@@ -477,7 +481,7 @@ struct EnvField: View {
         "TARGET_REPO": "Pipeline repository", "TARGET_SCOPE": "Subdirectory scope", "WORKTREE_ROOT": "Worktree folder", "BRANCH_PREFIX": "Branch prefix",
         "PRODUCT_NAME": "Product name", "PRODUCT_URL": "Product URL",
         "BRIDGE_PORT": "Server port", "LAUNCHD_LABEL": "launchd label", "PIPELINE_MODEL": "Pipeline model",
-        "EXTRA_PATH": "Extra PATH", "MCP_READ_PREFIXES": "Read-only MCP prefixes", "WORKER_SKILL": "Opening skill",
+        "EXTRA_PATH": "Extra PATH", "MCP_READ_PREFIXES": "Read-only MCP prefixes",
         "VERCEL_TOKEN": "Access token", "VERCEL_TEAM_ID": "Vercel team", "INCIDENT_API_KEY": "API key", "GRANOLA_API_KEY": "API key",
         "DD_API_KEY": "API key", "DD_APP_KEY": "Application key", "DD_SITE": "Site",
         "DEFAULT_DIR": "Default folder",
@@ -659,7 +663,6 @@ struct AgentSettings: View {
             }
             DefaultsSettings(q: q)
             FailoverSettings(q: q)
-            OpeningSkillSettings(q: q)
             WorkerSettings(q: q)
         }
     }
@@ -756,34 +759,6 @@ struct DefaultsSettings: View {
     func save(_ patch: [String: Any]) { Task { await model.saveConfig(["followup": patch]) } }
 }
 
-/// The skill every new session opens with, picked from the ones installed
-/// (Settings › Customize › Skills) instead of typed into .env.
-struct OpeningSkillSettings: View {
-    @Environment(AppModel.self) var model
-    let q: String
-    @StateObject private var skills = Box([String]())
-
-    var current: String { model.config["harness"]["workerSkill"].string }
-
-    var body: some View {
-        SSection(title: "Every new session", detail: "Opens with a skill, given the task's Linear or Slack link; Codex, Cursor and Devin get it inlined") {
-            if Prefs.hit(q, "opening skill worker skill fetch new session") {
-                SRow(title: "Opening skill", detail: current == "none" ? "Off: sessions get Bridge's built-in brief" : "A skill that isn't installed falls back to Bridge's built-in brief") {
-                    SSelect(value: current, choices: [("", "Default (fetch)"), ("none", "None")] + skills.v.map { ($0, "/\($0)") }) { v in
-                        Task { await model.saveConfig(["harness": ["workerSkill": v]]) }
-                    }
-                }
-            }
-        }
-        .task {
-            let out = (try? await API.get("/api/customize/skills")) ?? .null
-            // Claude's and the shared ones: the worker opens with a Claude skill.
-            let names = out["skills"].array.filter { ["claude", "shared"].contains($0["agent"].string) }.map { $0["folder"].string }
-            skills.v = Array(Set(names)).sorted()
-        }
-    }
-}
-
 /// House rules added to every session's instructions (server/rules.js):
 /// prompts/rules.md until edited here, then data/rules.md.
 struct CommonRulesSettings: View {
@@ -806,12 +781,9 @@ struct CommonRulesSettings: View {
     }
 
     var editor: some View {
-        TextEditor(text: $text.v)
-            .font(T.mono(12))
-            .scrollContentBackground(.hidden)
-            .padding(12)
+        MarkdownEditor(text: $text.v, enabled: loaded.v)
             .frame(minHeight: 560)
-            .disabled(!loaded.v)
+            .padding(8)
             .opacity(loaded.v ? 1 : 0.5)
     }
 

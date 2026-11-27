@@ -128,13 +128,12 @@ function jobOpts(config, run) {
  *              away:   nothing is relayed; it's held and briefed on return
  * relay        whether outcomes start a turn in the orchestrator chat at all
  * stallMinutes silence before a working worker is flagged as stalled
- * workerSkill  skill every new worker opens with; "" = WORKER_SKILL (.env), "none" = off
  * policy       per-category overrides of server/policy.js (ask | allow)
  */
 // slackWatch: "off" | "watch" (file mentions in the Inbox) | "triage" (and let
 // the orchestrator decide which ones to start); server/watch.js.
 const DEFAULT_HARNESS = {
-  mode: "normal", relay: true, stallMinutes: 15, workerSkill: "", policy: {},
+  mode: "normal", relay: true, stallMinutes: 15, policy: {},
   slackWatch: "watch", slackPollSec: 120, slackChannels: [],
   failover: false, failoverThreshold: 95, failoverOrder: ["devin", "codex", "cursor"],
 };
@@ -152,11 +151,6 @@ function sanitizeHarness(patch, base) {
   if (Array.isArray(patch.failoverOrder)) {
     const order = [...new Set(patch.failoverOrder.map(String).filter((a) => ["devin", "codex", "cursor"].includes(a)))];
     if (order.length === 3) out.failoverOrder = order;
-  }
-  // "" follows WORKER_SKILL in .env; "none" turns the worker skill off.
-  if (patch.workerSkill != null) {
-    const v = String(patch.workerSkill).trim().replace(/^\//, "");
-    if (v === "" || /^[\w.-]+(?::[\w.-]+)?$/.test(v)) out.workerSkill = v.slice(0, 64);
   }
   if (["off", "watch", "triage"].includes(patch.slackWatch)) out.slackWatch = patch.slackWatch;
   // Picked in Settings instead of typed into .env (server/identity.js): the

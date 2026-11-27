@@ -114,11 +114,6 @@ const env = {
   defaultDir: str("DEFAULT_DIR"),
   productName: str("PRODUCT_NAME", "the product"),
   productUrl: str("PRODUCT_URL"),
-  // The skill every new worker opens with (`/fetch <linear|slack url | brief>`;
-  // inlined for Codex/Cursor/Devin). "none" turns it off; a skill that isn't
-  // installed falls back to Bridge's built-in brief / pipeline prompt.
-  // Settings can override it live through config.harness.workerSkill.
-  workerSkill: str("WORKER_SKILL", "fetch"),
 
   // --- Linear -------------------------------------------------------------
   linearWorkspace: str("LINEAR_WORKSPACE"),

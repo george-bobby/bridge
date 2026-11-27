@@ -42,6 +42,7 @@ const dotenv = require("./dotenv");
 const slack = env.demo ? require("./demo").slack : require("./slack");
 const watcher = require("./watch");
 const rules = require("./rules");
+const pipeline = require("./pipeline");
 
 const ROOT = path.join(__dirname, "..");
 const PORT = env.port;
@@ -221,12 +222,6 @@ function listDirs(dir) {
 
 /* ---------------------------------------------------------------- payload */
 
-function workerSkillState(config, workdir) {
-  const name = jobs.workerSkillName(config);
-  const found = name ? require("./skill").find(name, [workdir, ROOT]) : null;
-  return { name, env: env.workerSkill, installed: !!found, file: (found && found.file) || "" };
-}
-
 function snapshot() {
   const config = store.readConfig();
   const workdir = jobs.resolveWorkdir(config);
@@ -235,9 +230,6 @@ function snapshot() {
     cost: store.summariseCost(),
     jobs: { running: jobs.runningIds(), awaiting: jobs.awaitingIds() },
     inbox: harness.inbox().counts,
-    // The skill new workers open with: the effective name ("" = off), what
-    // .env says, and whether it's installed (else the built-in prompt runs).
-    workerSkill: workerSkillState(config, workdir),
     // Only what the page actually draws: the repo a new chat's job would run
     // in, which the composer's picker opens on.
     meta: { workdir, root: ROOT, projects: projects.withRoot() },
@@ -1288,11 +1280,13 @@ async function handle(req, res) {
   }
 
   // --- toggles + settings --------------------------------------------------
-  if (p === "/api/rules" && (req.method === "GET" || req.method === "POST")) {
+  // Common rules and the pipeline share one shape: { text, default, custom }.
+  const editable = { "/api/rules": rules, "/api/pipeline": pipeline }[p];
+  if (editable && (req.method === "GET" || req.method === "POST")) {
     try {
-      if (req.method === "GET") return sendJson(res, 200, { ok: true, ...rules.get() });
+      if (req.method === "GET") return sendJson(res, 200, { ok: true, ...editable.get() });
       const body = JSON.parse((await readBody(req)) || "{}");
-      sendJson(res, 200, { ok: true, ...(body.reset ? rules.reset() : rules.save(body.text)) });
+      sendJson(res, 200, { ok: true, ...(body.reset ? editable.reset() : editable.save(body.text)) });
     } catch (e) {
       sendJson(res, 400, { ok: false, error: String(e.message || e) });
     }

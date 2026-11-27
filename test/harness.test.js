@@ -52,7 +52,7 @@ const ENV = {
   BRIDGE_TICK_MS: "300",
   BRIDGE_STALL_SEC: "2",
   STUB_LOG: path.join(tmp, "stub.log"),
-  // No user skills: these tests cover the built-in worker prompt (test/fetch.test.js covers WORKER_SKILL).
+  // A scratch ~/.claude: no user skills or settings leak into the tests.
   CLAUDE_CONFIG_DIR: path.join(tmp, "claude-home"),
   BRIDGE_URL: URL_,
   BRIDGE_TASK_ID: "",

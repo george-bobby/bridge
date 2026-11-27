@@ -1,8 +1,8 @@
 /**
- * The worker skill (WORKER_SKILL, default `fetch`) and the orchestrator's
- * session roster, against a real dashboard, a scratch repo, a scratch
- * ~/.claude (CLAUDE_CONFIG_DIR) holding a fake `fetch` skill, and the stub
- * agent. Nothing here touches the real data/ or the real ~/.claude.
+ * The pipeline every new worker opens with (server/pipeline.js, Settings ›
+ * Pipeline) and the orchestrator's session roster, against a real dashboard,
+ * a scratch repo, a scratch data dir and the stub agent. Nothing here touches
+ * the real data/ or ~/.claude.
  */
 
 const test = require("node:test");
@@ -13,24 +13,13 @@ const path = require("path");
 const { spawn, execFileSync, spawnSync } = require("child_process");
 
 const ROOT = path.join(__dirname, "..");
-const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "bridge-fetch-")));
+const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "bridge-pipeline-")));
 const DATA = path.join(tmp, "data");
 const REPO = path.join(tmp, "repo");
-const HOME_CLAUDE = path.join(tmp, "claude-home");
 const PORT = 45000 + Math.floor(Math.random() * 1500);
 const URL_ = `http://127.0.0.1:${PORT}`;
 const LINEAR = "https://linear.app/acme/issue/ABC-12/fix-the-export";
 const SLACK = "https://acme.slack.com/archives/C0123ABCD/p1784615086259089";
-
-const SKILL = `---
-name: fetch
-description: Fake fetch skill for the tests.
-argument-hint: <linear-issue-url | slack-thread-url>
----
-
-# Fetch Skill
-Work on $ARGUMENTS end to end.
-`;
 
 const git = (args, cwd = REPO) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
@@ -38,7 +27,7 @@ const ENV = {
   ...process.env,
   BRIDGE_DATA_DIR: DATA,
   CLAUDE_BIN: path.join(__dirname, "stub.js"),
-  CLAUDE_CONFIG_DIR: HOME_CLAUDE,
+  CLAUDE_CONFIG_DIR: path.join(tmp, "claude-home"),
   BRIDGE_PORT: String(PORT),
   BRIDGE_ENV_FILE: path.join(tmp, "none.env"),
   TARGET_REPO: REPO,
@@ -47,7 +36,6 @@ const ENV = {
   SLACK_USER_TOKEN: "",
   LINEAR_API_KEY: "",
   BRANCH_PREFIX: "test",
-  WORKER_SKILL: "",
   STUB_LOG: path.join(tmp, "stub.log"),
   BRIDGE_URL: URL_,
   BRIDGE_TASK_ID: "",
@@ -86,8 +74,6 @@ test.before(async () => {
   fs.writeFileSync(path.join(REPO, "README.md"), "scratch\n");
   git(["add", "."]);
   git(["commit", "-q", "-m", "init"]);
-  fs.mkdirSync(path.join(HOME_CLAUDE, "skills", "fetch"), { recursive: true });
-  fs.writeFileSync(path.join(HOME_CLAUDE, "skills", "fetch", "SKILL.md"), SKILL);
   fs.mkdirSync(DATA, { recursive: true });
   fs.writeFileSync(path.join(DATA, "config.json"), JSON.stringify({ harness: { relay: false, mode: "normal" } }));
   server = spawn(process.execPath, [path.join(ROOT, "server")], { env: ENV, stdio: ["ignore", "pipe", "pipe"] });
@@ -99,56 +85,64 @@ test.after(async () => {
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
-test("a worker from a Linear brief starts with /fetch <issue url>, Bridge's rules after it", async () => {
-  const st = await api("GET", "/api/state");
-  assert.deepEqual({ name: st.workerSkill.name, installed: st.workerSkill.installed }, { name: "fetch", installed: true });
+const PIPELINE_HEAD = fs.readFileSync(path.join(ROOT, "prompts", "pipeline.md"), "utf8").split("\n")[0];
+
+test("a worker from a Linear brief opens with its task, then the pipeline", async () => {
+  const st = await api("GET", "/api/pipeline");
+  assert.deepEqual([st.ok, st.custom, st.text], [true, false, st.default]);
 
   const t = await spawnTask("ABC-12 Fix the export", `Linear issue ABC-12: Fix the export\n${LINEAR}\n\nRead the issue.\nstub:report=ready-for-review`);
   const prompt = await promptOf(t.taskId);
-  assert.ok(prompt.startsWith(`/fetch ${LINEAR}\n\n`), prompt.slice(0, 200));
-  assert.match(prompt, /\n## Bridge\n/);
-  assert.ok(prompt.includes(path.join(DATA, "tasks", t.taskId, "report.md")), "report path in the rules");
-  assert.ok(prompt.includes(t.worktree), "worktree in the rules");
+  assert.ok(prompt.startsWith(`# Task\n\nLinear issue ABC-12: Fix the export\n${LINEAR}`), prompt.slice(0, 200));
+  assert.ok(prompt.includes(`\n\n${PIPELINE_HEAD}\n`), "the default pipeline follows the task");
+  assert.ok(prompt.includes(`The source\nis ${LINEAR}; the full brief is at \`${path.join(DATA, "tasks", t.taskId, "brief.md")}\``), "{{URL}} and {{BRIEF}} filled");
+  assert.match(prompt, /plan a large change with\nAlex /, "{{USER}} filled");
+  assert.doesNotMatch(prompt, /\{\{[A-Z_]+\}\}/);
   await waitFor(idle(t.taskId), 15000, "worker idle");
   const run = await api("GET", `/api/runs/${t.taskId}`);
   const r = run.run || run;
   assert.equal(r.linearUrl, LINEAR);
-  assert.ok(r.messages.some((m) => m.role === "event" && /with \/fetch/.test(m.text)), "spawned note names the skill");
+  assert.ok(r.messages.some((m) => m.role === "event" && /with the pipeline/.test(m.text)), "spawned note says so");
+
+  // A follow-up is a plain turn: the pipeline rides on the first one only.
+  await api("POST", `/api/runs/${t.taskId}/followup`, { text: "one more thing stub:noreport" });
+  await waitFor(idle(t.taskId), 15000, "follow-up idle");
+  const last = stubLog().filter((l) => l.prompt != null && l.env.BRIDGE_TASK_ID === t.taskId).pop().prompt;
+  assert.ok(!last.includes(PIPELINE_HEAD), "no pipeline on later turns");
 });
 
-test("a brief without a link is the skill's argument", async () => {
+test("an edited pipeline is what the next worker gets; blank turns it off; reset brings the default back", async () => {
+  const saved = await api("POST", "/api/pipeline", { text: "# Mine\r\nWork on {{URL}} for {{USER}}; brief at {{BRIEF}}; tool {{BRIDGE}}." });
+  assert.deepEqual([saved.ok, saved.custom], [true, true]);
+  assert.equal(fs.readFileSync(path.join(DATA, "pipeline.md"), "utf8"), "# Mine\nWork on {{URL}} for {{USER}}; brief at {{BRIEF}}; tool {{BRIDGE}}.\n");
   const t = await spawnTask("tidy the readme", "Tidy the README wording.\nstub:report=ready-for-review");
   const prompt = await promptOf(t.taskId);
-  assert.ok(prompt.startsWith("/fetch Tidy the README wording."), prompt.slice(0, 120));
+  const brief = path.join(DATA, "tasks", t.taskId, "brief.md");
+  assert.equal(prompt, `# Task\n\nTidy the README wording.\nstub:report=ready-for-review\n\n# Mine\nWork on the brief (no Linear or Slack link) for Alex; brief at ${brief}; tool ${path.join(ROOT, "bin", "bridge")}.`);
   await waitFor(idle(t.taskId), 15000, "worker idle");
-});
 
-test("a Slack thread pipeline runs /fetch on the thread, with the closing verdict", async () => {
-  const r = await api("POST", "/api/runs", { url: SLACK, start: true });
-  assert.equal(r.ok, true, r.error);
-  assert.equal(r.started, true);
-  const prompt = await promptOf(r.runId);
-  assert.ok(prompt.startsWith(`/fetch ${SLACK}\n\n`), prompt.slice(0, 200));
-  assert.match(prompt, /"action":"acted"/);
-  assert.match(prompt, /scripts\/emit\.sh/);
-  await waitFor(idle(r.runId), 15000, "pipeline idle");
-});
-
-test("WORKER_SKILL off or missing falls back to the built-in prompt", async () => {
-  await api("POST", "/api/config", { harness: { workerSkill: "none" } });
+  await api("POST", "/api/pipeline", { text: "  " });
   const off = await spawnTask("off", "Nothing fancy.\nstub:report=ready-for-review");
   assert.match(await promptOf(off.taskId), /^Read \S+brief\.md and begin/);
   await waitFor(idle(off.taskId), 15000, "idle");
 
-  await api("POST", "/api/config", { harness: { workerSkill: "no-such-skill" } });
-  const miss = await spawnTask("missing", "Nothing fancy.\nstub:report=ready-for-review");
-  assert.match(await promptOf(miss.taskId), /^Read \S+brief\.md and begin/);
-  await waitFor(idle(miss.taskId), 15000, "idle");
-  const run = await api("GET", `/api/runs/${miss.taskId}`);
-  assert.ok((run.run || run).messages.some((m) => /no-such-skill not installed/.test(m.text || "")));
+  const back = await api("POST", "/api/pipeline", { reset: true });
+  assert.deepEqual([back.custom, back.text === back.default], [false, true]);
+  assert.equal(fs.existsSync(path.join(DATA, "pipeline.md")), false);
+  assert.equal((await api("POST", "/api/pipeline", { text: "x".repeat(40001) })).ok, false, "size cap");
+});
 
-  await api("POST", "/api/config", { harness: { workerSkill: "" } });
-  assert.equal((await api("GET", "/api/state")).workerSkill.name, "fetch");
+test("a Slack thread pipeline runs the pipeline on the thread, with the closing verdict", async () => {
+  const r = await api("POST", "/api/runs", { url: SLACK, start: true });
+  assert.equal(r.ok, true, r.error);
+  assert.equal(r.started, true);
+  const prompt = await promptOf(r.runId);
+  assert.ok(prompt.startsWith(`# Task\n\nSlack thread: ${SLACK}\n\n${PIPELINE_HEAD}`), prompt.slice(0, 200));
+  assert.match(prompt, /"action":"acted"/);
+  assert.match(prompt, /scripts\/emit\.sh/);
+  await waitFor(idle(r.runId), 15000, "pipeline idle");
+  const sys = fs.readFileSync(path.join(DATA, "tasks", r.runId, "system.md"), "utf8");
+  assert.match(sys, /the pipeline in your first message governs the work/);
 });
 
 test("the orchestrator's prompt carries the roster of every session, rebuilt each turn", async () => {
@@ -206,19 +200,9 @@ test("clearing the orchestrator empties its chat and starts a fresh agent sessio
   assert.equal((await api("GET", "/api/runs/orchestrator")).run.messages.length, 0);
 });
 
-test("non-Claude agents get the skill inlined, $ARGUMENTS filled in", () => {
-  const ws = require("../server/skill");
-  const skill = { name: "fetch", file: "/x/SKILL.md", text: SKILL };
-  const codex = ws.prompt({ skill, agent: "codex", arg: LINEAR, rules: "## Bridge" });
-  assert.ok(codex.startsWith(`Run the \`fetch\` skill below on: ${LINEAR}`));
-  assert.ok(codex.includes(`Work on ${LINEAR} end to end.`));
-  assert.ok(!codex.includes("argument-hint"), "frontmatter stripped");
-  assert.ok(codex.trimEnd().endsWith("## Bridge"));
-  assert.equal(ws.prompt({ skill: { name: "p:s", file: "", text: "" }, agent: "devin", arg: "x" }), null);
-  assert.equal(ws.prompt({ skill, agent: "claude", arg: SLACK, rules: "R" }), `/fetch ${SLACK}\n\nR`);
-  assert.equal(ws.sourceUrl(`see ${SLACK} and ${LINEAR}.`), LINEAR);
-  assert.equal(ws.normalise("/fetch"), "fetch");
-  assert.equal(ws.normalise("none"), "");
-  assert.equal(ws.normalise(".."), "");
-  assert.ok(ws.prompt({ skill, agent: "codex", arg: "cost is $& or $'" }).includes("Work on cost is $& or $' end to end."), "$ patterns in the argument stay literal");
+test("sourceUrl picks the Linear issue over the Slack thread", () => {
+  const { sourceUrl } = require("../server/pipeline");
+  assert.equal(sourceUrl(`see ${SLACK} and ${LINEAR}.`), LINEAR);
+  assert.equal(sourceUrl(`thread: ${SLACK}.`), SLACK);
+  assert.equal(sourceUrl("no links"), "");
 });
