@@ -41,6 +41,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 pages.append(("preview", last.1))
                 pages += [("split", last.1), ("split-details", last.1), ("split-wide", last.1), ("split4", last.1), ("messages", last.1), ("messages-split", last.1), ("messages-list", last.1), ("drop", last.1), ("terminal", last.1), ("console", last.1), ("task", last.1), ("task-live", last.1), ("task-bash", last.1), ("pinned", last.1), ("pinned-collapsed", last.1)]
             }
+            // The Changes tree in a worker's chat; Source Control in an orchestrator's.
+            if let last = pages.first(where: { $0.0 == "chat" }) { pages.append(("changes", last.1)) }
+            if let o = model.orchestrator { pages.append(("scm", .session(o.id))) }
             let hidden = model.sidebarHidden
             let pin = (model.pinnedRun, model.pinnedCollapsed)
             if let only = ProcessInfo.processInfo.environment["BRIDGE_SNAPSHOT_PAGES"]?.split(separator: ",").map(String.init) {
@@ -82,6 +85,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 if name == "drop" { model.paneDragActive = true; model.dropZone = model.panes.last.map { DropZone(pane: $0.id, edge: model.isSplit ? .center : .trailing) } }
                 else if model.paneDragActive { model.paneDragActive = false; model.dropZone = nil }
                 if name == "terminal", case .session(let id) = route { model.openTerminalTab(id) }
+                if name == "changes" || name == "scm", case .session(let id) = route { model.panes = [Pane(run: id)]; model.focusedPane = 0; model.open(id); model.showTab("changes", of: id) }
                 // The VS Code-style panel under the chat, with two shells.
                 if name == "console" {
                     if ConsoleStore.shared.shells.isEmpty { ConsoleStore.shared.add(model.contextFolder); ConsoleStore.shared.add(NSHomeDirectory()) }

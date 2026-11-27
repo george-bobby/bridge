@@ -167,7 +167,8 @@ struct SessionTabs: View {
         let webTabs = model.browserTabs[runId] ?? []
         HStack(spacing: pane == nil ? 4 : 2) {
             tab("chat", icon: "bubble.left", label: "Chat")
-            tab("changes", icon: "plusminus", label: "Changes")
+            let scm = session?.isOrchestrator == true
+            tab("changes", icon: scm ? "arrow.triangle.branch" : "plusminus", label: scm ? "Source Control" : "Changes")
             if model.terminalTabs.contains(runId) {
                 tab("term", icon: "terminal", label: "Terminal", close: { model.closeTerminalTab(runId) })
                     .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .leading)))

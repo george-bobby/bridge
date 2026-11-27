@@ -3,6 +3,10 @@
  * (uncommitted) and what the branch has that the remote doesn't (unpushed),
  * with per-file diffs, and the three actions you take on them from the app:
  * commit, push, open a PR. Each action runs only on your click.
+ *
+ * An orchestrator's tab is Source Control for its project's checkout: the same
+ * status plus the commit graph, fetch, pull and sync. Pull only fast-forwards
+ * and push never forces, so none of these can drop anyone's work.
  */
 
 const fs = require("fs");
@@ -58,8 +62,10 @@ async function status(dir) {
     files.push({ path: file, kind, staged: code[0] !== " " && code[0] !== "?", ...(counts.get(file) || { additions: 0, deletions: 0 }) });
   }
   let unpushed = 0;
+  let behind = 0;
   try {
     unpushed = Number((await git(["rev-list", "--count", upstream ? "@{u}..HEAD" : "HEAD", ...(upstream ? [] : ["--not", "--remotes"])], dir)).trim()) || 0;
+    if (upstream.trim()) behind = Number((await git(["rev-list", "--count", "HEAD..@{u}"], dir)).trim()) || 0;
   } catch {}
   const log = await git(["log", "-5", "--format=%h\t%s\t%cr"], dir).catch(() => "");
   return {
@@ -68,6 +74,7 @@ async function status(dir) {
     branch: branch.trim(),
     upstream: upstream.trim(),
     unpushed,
+    behind,
     files,
     commits: log.trim().split("\n").filter(Boolean).map((l) => {
       const [sha, subject, when] = l.split("\t");
@@ -106,6 +113,76 @@ async function push(dir) {
   if (!branch || branch === "HEAD") throw new Error("not on a branch");
   await git(["push", "-u", "origin", branch], dir, 120000);
   return status(dir);
+}
+
+/** Update the remote-tracking branches; touches no local branch or file. */
+async function fetchRemote(dir) {
+  await git(["fetch", "--quiet"], dir, 120000);
+  return status(dir);
+}
+
+/** Fast-forward to the upstream, never a merge commit or a rebase; git
+ * refuses (and says why) when local changes or a diverged branch are in the way. */
+async function pull(dir) {
+  const upstream = (await git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], dir).catch(() => "")).trim();
+  if (!upstream) throw new Error("this branch has no upstream to pull from");
+  await git(["fetch", "--quiet"], dir, 120000);
+  await git(["merge", "--ff-only", "@{u}"], dir).catch((e) => {
+    throw new Error(/Not possible to fast-forward|diverg/i.test(e.message) ? `can't fast-forward: ${upstream} and this branch have diverged` : e.message);
+  });
+  return status(dir);
+}
+
+/** VS Code's Sync: pull (fast-forward only), then push what's left. */
+async function sync(dir) {
+  let st = await status(dir);
+  if (st.upstream) st = await pull(dir);
+  if (st.unpushed > 0 || !st.upstream) st = await push(dir);
+  return st;
+}
+
+/**
+ * The commit graph: HEAD and its upstream, newest first in topological order,
+ * each commit with its parents (the app draws the lanes) and ref names.
+ */
+async function graph(dir, limit = 80) {
+  if (!dir || !fs.existsSync(path.join(dir, ".git"))) return { repo: false, commits: [] };
+  const upstream = (await git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], dir).catch(() => "")).trim();
+  const n = Math.max(1, Math.min(400, Number(limit) || 80));
+  const out = await git(["log", "--topo-order", "--decorate=full", `-n${n}`, "--format=%H%x1f%h%x1f%P%x1f%D%x1f%s%x1f%an%x1f%ct", "HEAD", ...(upstream ? ["@{u}"] : [])], dir).catch(() => "");
+  return { repo: true, upstream, commits: out.split("\n").filter(Boolean).map(shapeCommit) };
+}
+
+function shapeCommit(line) {
+  const [sha, short, parents, refs, subject, author, at] = line.split("\x1f");
+  const named = String(refs || "").split(", ").filter(Boolean);
+  const out = [];
+  // Full names (--decorate=full) tell a remote branch from a local one with a
+  // slash in it. Other local branches are left off: Bridge keeps one per
+  // worktree, and they'd bury the row; remote HEAD aliases too.
+  for (const r of named) {
+    const head = r.startsWith("HEAD -> ");
+    const full = r.replace(/^HEAD -> /, "").replace(/^tag: /, "");
+    if (full.startsWith("refs/tags/")) out.push({ name: full.slice(10), kind: "tag", head: false });
+    else if (full.startsWith("refs/remotes/") && !full.endsWith("/HEAD")) out.push({ name: full.slice(13), kind: "remote", head: false });
+    else if (head && full.startsWith("refs/heads/")) out.push({ name: full.slice(11), kind: "branch", head: true });
+  }
+  return {
+    sha,
+    short,
+    parents: String(parents || "").split(" ").filter(Boolean),
+    refs: out,
+    head: named.some((r) => r === "HEAD" || r.startsWith("HEAD -> ")),
+    subject: subject || "",
+    author: author || "",
+    at: Number(at) || 0,
+  };
+}
+
+/** One commit's patch (stat + diff), for clicking a row in the graph. */
+async function show(dir, sha) {
+  if (!/^[0-9a-f]{4,40}$/i.test(String(sha || ""))) throw new Error("not a commit id");
+  return (await git(["show", "--stat", "--patch", "--format=commit %H%nAuthor: %an <%ae>%nDate:   %ad%n%n%w(0,4,4)%B", sha], dir)).slice(0, 400_000);
 }
 
 /** `gh pr create` for the folder's branch; returns the PR URL. */
@@ -209,4 +286,4 @@ async function activity(prUrl, { refresh = false } = {}) {
   return data;
 }
 
-module.exports = { status, diff, commit, push, openPr, activity, shapeActivity };
+module.exports = { status, diff, commit, push, fetchRemote, pull, sync, graph, shapeCommit, show, openPr, activity, shapeActivity };

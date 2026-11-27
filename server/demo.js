@@ -1025,4 +1025,98 @@ function tokens() {
   };
 }
 
-module.exports = { archive, seed, writeSessions, seedSkills, plugins, pulls, linear, ports, stopServer, slack, usage, agents, prActivity, mcp, git, history, vercel, incidents, granola, granolaNote, datadog, tokens, models };
+/* ------------------------------------------------- Changes / Source Control */
+
+// What the Changes tab and an orchestrator's Source Control show: a worker's
+// worktree mid-feature, and the storefront checkout three commits behind.
+const CHANGED = {
+  worker: [
+    ["src/checkout/payment/ApplePayButton.tsx", "added", 84, 0],
+    ["src/checkout/payment/PaymentStep.tsx", "modified", 22, 6],
+    ["src/checkout/payment/wallets.ts", "modified", 9, 2],
+    ["src/checkout/hooks/usePaymentRequest.ts", "added", 41, 0],
+    ["src/lib/flags.ts", "modified", 3, 0],
+    ["src/styles/checkout.css", "modified", 12, 1],
+    ["public/.well-known/apple-developer-merchantid-domain-association", "added", 1, 0],
+    ["test/checkout/applePay.test.ts", "added", 58, 0],
+    ["docs/payments.md", "modified", 14, 2],
+    ["package.json", "modified", 1, 1],
+    ["README.md", "modified", 2, 0],
+  ],
+  checkout: [
+    ["src/search/rateLimit.ts", "modified", 6, 2],
+    ["CHANGELOG.md", "modified", 8, 0],
+  ],
+};
+
+const DEMO_COMMITS = [
+  ["e91d2a7", ["b7c3f10", "4af8e21"], [{ name: "origin/main", kind: "remote" }], "Merge #482: Apple Pay in the payment step", "maya", 900],
+  ["4af8e21", ["b7c3f10"], [{ name: "origin/alex/web-124-apple-pay", kind: "remote" }], "Apple Pay behind the wallets flag", "alex-rivera", 4200],
+  ["b7c3f10", ["c55e0b9"], [], "Search: debounce the product query", "kai", 7000],
+  ["c55e0b9", ["a41c9e2"], [{ name: "v2026.11.3", kind: "tag" }], "Release 2026.11.3", "maya", 9800],
+  ["a41c9e2", ["9d03b6e", "71fe0c4"], [{ name: "main", kind: "branch", head: true }], "Merge #479: faster product grid", "alex-rivera", 3 * 3600],
+  ["71fe0c4", ["6b2a9d1"], [], "Virtualize the product grid rows", "alex-rivera", 5 * 3600],
+  ["9d03b6e", ["6b2a9d1"], [], "Fix VAT rounding on mixed carts", "maya", 6 * 3600],
+  ["6b2a9d1", ["2e8f4c3"], [], "Bump the payments SDK to 4.12", "kai", 26 * 3600],
+  ["2e8f4c3", ["0c7b5e8", "f3a19d2"], [], "Merge #471: CSV export for orders", "alex-rivera", 30 * 3600],
+  ["f3a19d2", ["0c7b5e8"], [], "Paginate the CSV export", "alex-rivera", 31 * 3600],
+  ["0c7b5e8", ["8a6d2f1"], [{ name: "v2026.11.2", kind: "tag" }], "Release 2026.11.2", "maya", 2 * DAY],
+  ["8a6d2f1", ["5e4c3b2"], [], "Sitemap: use CDN URLs", "kai", 3 * DAY],
+  ["5e4c3b2", ["1d9e8f7"], [], "Show VAT-inclusive prices in the cart", "maya", 3 * DAY + 4000],
+  ["1d9e8f7", ["0000000"], [], "Checkout: remember the last wallet", "alex-rivera", 4 * DAY],
+];
+
+const demoDiff = (file, kind, add, del) => {
+  const lines = [`diff --git a/${file} b/${file}`, kind === "added" ? "new file mode 100644" : "index 3f1c2aa..8e0b7d1 100644", `--- ${kind === "added" ? "/dev/null" : `a/${file}`}`, `+++ b/${file}`, `@@ -1,${del + 3} +1,${add + 3} @@`];
+  lines.push(" import { useWallets } from \"../hooks/useWallets\";", " ");
+  for (let i = 0; i < del; i++) lines.push(`-  const legacy${i} = wallets.filter((w) => w.kind !== "apple");`);
+  for (let i = 0; i < Math.min(add, 24); i++) lines.push(`+  ${i === 0 ? "if (!flags.applePay) return null;" : `const step${i} = await paymentRequest.next(${i});`}`);
+  lines.push(" export default PaymentStep;");
+  return lines.join("\n");
+};
+
+const changes = {
+  async status(dir) {
+    const checkout = dir === REPO;
+    const files = CHANGED[checkout ? "checkout" : "worker"].map(([p, kind, additions, deletions]) => ({ path: p, kind, staged: false, additions, deletions }));
+    return checkout
+      ? { repo: true, dir, branch: "main", upstream: "origin/main", unpushed: 0, behind: 3, files, commits: DEMO_COMMITS.slice(4, 7).map((c) => ({ sha: c[0], subject: c[3], when: "3 hours ago" })) }
+      : { repo: true, dir, branch: "alex/web-124-apple-pay", upstream: "origin/alex/web-124-apple-pay", unpushed: 2, behind: 0, files, commits: [{ sha: "4af8e21", subject: "Apple Pay behind the wallets flag", when: "1 hour ago" }] };
+  },
+  async diff(dir, file) {
+    const f = [...CHANGED.worker, ...CHANGED.checkout].find((x) => x[0] === file);
+    return f ? demoDiff(...f) : "";
+  },
+  async graph() {
+    return {
+      repo: true,
+      upstream: "origin/main",
+      commits: DEMO_COMMITS.map(([sha, parents, refs, subject, author, ago]) => ({
+        sha: sha.padEnd(40, "0"),
+        short: sha,
+        parents: parents.map((p) => p.padEnd(40, "0")),
+        refs: refs.map((r) => ({ head: false, ...r })),
+        head: refs.some((r) => r.head),
+        subject,
+        author,
+        at: now() - ago,
+      })),
+    };
+  },
+  async show(dir, sha) {
+    const c = DEMO_COMMITS.find((x) => sha.startsWith(x[0]));
+    return c ? `commit ${sha}\nAuthor: ${c[4]}\n\n    ${c[3]}\n\n${demoDiff("src/checkout/payment/PaymentStep.tsx", "modified", 6, 2)}` : "";
+  },
+  // Nothing in the demo calls out: the actions answer as if they'd worked.
+  commit: (dir) => changes.status(dir),
+  push: (dir) => changes.status(dir),
+  fetchRemote: (dir) => changes.status(dir),
+  pull: (dir) => changes.status(dir),
+  sync: (dir) => changes.status(dir),
+  async openPr() {
+    return `${GH}/482`;
+  },
+  activity: (url, o) => require("./changes").activity(url, o),
+};
+
+module.exports = { REPO, changes, archive, seed, writeSessions, seedSkills, plugins, pulls, linear, ports, stopServer, slack, usage, agents, prActivity, mcp, git, history, vercel, incidents, granola, granolaNote, datadog, tokens, models };

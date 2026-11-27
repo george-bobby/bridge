@@ -1230,22 +1230,30 @@ async function handle(req, res) {
     }
 
     // The session's working folder: what changed, per-file diffs, and the
-    // commit / push / PR actions you take on them from the app.
-    if (verb === "changes" || verb === "diff" || verb === "commit" || verb === "push" || verb === "pr") {
-      const changes = require("./changes");
+    // commit / push / PR actions you take on them from the app. An
+    // orchestrator's is its project's checkout, with the graph, fetch, pull
+    // (fast-forward only) and sync of a Source Control view.
+    if (["changes", "diff", "commit", "push", "pr", "graph", "show", "fetch", "pull", "sync"].includes(verb)) {
+      const changes = env.demo ? require("./demo").changes : require("./changes");
       try {
         const run = store.loadRun(id);
         if (!run) throw new Error("no such run");
         const meta = tasks.exists(id) ? tasks.readMeta(id) || {} : {};
-        const dir = meta.worktree && fs.existsSync(meta.worktree) ? meta.worktree : jobs.resolveWorkdir(store.readConfig(), run);
+        const project = run.kind === "orchestrator" ? projects.get(run.project) : null;
+        const dir = env.demo ? (project ? require("./demo").REPO : meta.worktree) || "" : project && project.path && fs.existsSync(project.path) ? project.path : meta.worktree && fs.existsSync(meta.worktree) ? meta.worktree : jobs.resolveWorkdir(store.readConfig(), run);
         const body = req.method === "POST" ? JSON.parse((await readBody(req)) || "{}") : {};
         if (req.method === "GET" && verb === "pr") {
           return sendJson(res, 200, { ok: true, ...(await changes.activity(run.prUrl || meta.prUrl, { refresh: url.searchParams.get("refresh") === "1" })) });
         }
         if (req.method === "GET" && verb === "changes") return sendJson(res, 200, { ok: true, ...(await changes.status(dir)) });
         if (req.method === "GET" && verb === "diff") return sendJson(res, 200, { ok: true, diff: await changes.diff(dir, url.searchParams.get("file")) });
+        if (req.method === "GET" && verb === "graph") return sendJson(res, 200, { ok: true, ...(await changes.graph(dir, url.searchParams.get("limit"))) });
+        if (req.method === "GET" && verb === "show") return sendJson(res, 200, { ok: true, diff: await changes.show(dir, url.searchParams.get("sha")) });
         if (req.method === "POST" && verb === "commit") return sendJson(res, 200, { ok: true, ...(await changes.commit(dir, body.message)) });
         if (req.method === "POST" && verb === "push") return sendJson(res, 200, { ok: true, ...(await changes.push(dir)) });
+        if (req.method === "POST" && verb === "fetch") return sendJson(res, 200, { ok: true, ...(await changes.fetchRemote(dir)) });
+        if (req.method === "POST" && verb === "pull") return sendJson(res, 200, { ok: true, ...(await changes.pull(dir)) });
+        if (req.method === "POST" && verb === "sync") return sendJson(res, 200, { ok: true, ...(await changes.sync(dir)) });
         if (req.method === "POST" && verb === "pr") {
           const prUrl = await changes.openPr(dir, body);
           const fresh = store.loadRun(id);
