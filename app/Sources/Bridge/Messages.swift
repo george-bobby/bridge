@@ -165,7 +165,7 @@ struct MessageStepper: View {
         .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(T.raised.opacity(0.92)))
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(T.line, lineWidth: 1))
-        .shadow(color: .black.opacity(0.35), radius: 10, y: 4)
+        .shadow(color: T.shade.opacity(0.35), radius: 10, y: 4)
         .opacity(hover.v || list.open ? 1 : 0.82)
         .hoverBox(hover)
         .animation(M.snappy, value: cur)

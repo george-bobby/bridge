@@ -3,32 +3,63 @@ import SwiftUI
 
 // MARK: - Palette
 //
-// Linear's palette: near-black layered surfaces, hairline borders, three steps
-// of gray text, one indigo accent. Every color resolves per appearance.
+// Linear's palette: layered surfaces, hairline borders, three steps of gray
+// text, one indigo accent. Every color resolves per appearance: near-black
+// surfaces in dark; in light a cool off-white window, white content and
+// deeper status hues so they read as text on white.
 
-private func ndyn(_ dark: UInt32, _ light: UInt32) -> NSColor {
+private func ndyn(_ dark: UInt32, _ light: UInt32, alpha da: CGFloat = 1, light la: CGFloat = 1) -> NSColor {
     NSColor(name: nil) { a in
-        let hex = a.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
-        return NSColor(srgbRed: CGFloat((hex >> 16) & 0xFF) / 255, green: CGFloat((hex >> 8) & 0xFF) / 255, blue: CGFloat(hex & 0xFF) / 255, alpha: 1)
+        let isDark = a.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let hex = isDark ? dark : light
+        return NSColor(srgbRed: CGFloat((hex >> 16) & 0xFF) / 255, green: CGFloat((hex >> 8) & 0xFF) / 255, blue: CGFloat(hex & 0xFF) / 255, alpha: isDark ? da : la)
     }
 }
 
 /// The palette as NSColors, for AppKit views (RichText); `T` wraps these.
 enum NT {
-    static let bg = ndyn(0x0B0B0D, 0xFBFBFC)
+    static let bg = ndyn(0x0B0B0D, 0xF2F2F5)
     static let panel = ndyn(0x111113, 0xFFFFFF)
-    static let raised = ndyn(0x18181B, 0xF4F4F6)
-    static let hover = ndyn(0x1C1C20, 0xEFEFF2)
-    static let selected = ndyn(0x222228, 0xE8E8EE)
-    static let line = ndyn(0x232327, 0xE6E6EA)
-    static let lineSoft = ndyn(0x1A1A1E, 0xEFEFF2)
-    static let text = ndyn(0xEDEDEF, 0x1B1B1F)
-    static let text2 = ndyn(0x9A9AA3, 0x5C5C66)
-    static let text3 = ndyn(0x5F5F68, 0x9A9AA3)
-    static let codeBg = ndyn(0x0E0E10, 0xF6F6F8)
-    static let accent = NSColor(srgbRed: 0.369, green: 0.416, blue: 0.824, alpha: 1)
-    static let green = NSColor(srgbRed: 0.30, green: 0.72, blue: 0.47, alpha: 1)
-    static let red = NSColor(srgbRed: 0.92, green: 0.34, blue: 0.34, alpha: 1)
+    static let raised = ndyn(0x18181B, 0xF6F6F8)
+    static let hover = ndyn(0x1C1C20, 0xF0F0F4)
+    static let selected = ndyn(0x222228, 0xE7E7EE)
+    static let line = ndyn(0x232327, 0xE3E3E9)
+    static let lineSoft = ndyn(0x1A1A1E, 0xEDEDF1)
+    static let text = ndyn(0xEDEDEF, 0x18181D)
+    static let text2 = ndyn(0x9A9AA3, 0x55555F)
+    static let text3 = ndyn(0x5F5F68, 0x8A8A95)
+    static let codeBg = ndyn(0x0E0E10, 0xF6F6F9)
+    static let accent = ndyn(0x5E6AD2, 0x5560D0)
+    static let link = ndyn(0x8594FA, 0x4C57C9)
+    static let green = ndyn(0x4CB878, 0x1F9254)
+    static let yellow = ndyn(0xF2C94C, 0xB98300)
+    static let orange = ndyn(0xF28C45, 0xD9661A)
+    static let red = ndyn(0xEB5757, 0xD63A3A)
+    static let purple = ndyn(0x8C6BF2, 0x7048E0)
+    static let slack = ndyn(0xCC73D9, 0xA846B8)
+    /// Shadows and scrims: black in dark, a softer cool ink in light.
+    static let shade = ndyn(0x000000, 0x1A1C3A, light: 0.55)
+    /// The hairline around floating panels: a light rim in dark, a dark one in light.
+    static let rim = ndyn(0xFFFFFF, 0x000000, alpha: 0.09, light: 0.10)
+}
+
+/// Light, dark or follow the system. Applied app-wide through
+/// `NSApp.appearance`, so SwiftUI, the dynamic NSColors above, AppKit text
+/// views and terminals all switch together. `BRIDGE_APPEARANCE=light|dark`
+/// overrides it for a run (snapshots) without saving.
+enum Appearance {
+    static let key = "appearance"
+    static var current: String {
+        if let v = ProcessInfo.processInfo.environment["BRIDGE_APPEARANCE"], ["system", "light", "dark"].contains(v) { return v }
+        return UserDefaults.standard.string(forKey: key) ?? "system"
+    }
+    @MainActor static func save(_ v: String) {
+        UserDefaults.standard.set(v, forKey: key)
+        apply(v)
+    }
+    @MainActor static func apply(_ v: String) {
+        NSApp.appearance = v == "light" ? NSAppearance(named: .aqua) : v == "dark" ? NSAppearance(named: .darkAqua) : nil
+    }
 }
 
 func hexColor(_ s: String, fallback: Color = T.text3) -> Color {
@@ -48,15 +79,18 @@ enum T {
     static let text = Color(nsColor: NT.text)
     static let text2 = Color(nsColor: NT.text2)
     static let text3 = Color(nsColor: NT.text3)
-    static let accent = Color(red: 0.369, green: 0.416, blue: 0.824)   // #5E6AD2
-    static let accentSoft = Color(red: 0.369, green: 0.416, blue: 0.824).opacity(0.16)
+    static let accent = Color(nsColor: NT.accent)   // #5E6AD2
+    static let accentSoft = Color(nsColor: NT.accent).opacity(0.16)
 
-    static let green = Color(red: 0.30, green: 0.72, blue: 0.47)
-    static let yellow = Color(red: 0.95, green: 0.79, blue: 0.30)
-    static let orange = Color(red: 0.95, green: 0.55, blue: 0.27)
-    static let red = Color(red: 0.92, green: 0.34, blue: 0.34)
-    static let purple = Color(red: 0.55, green: 0.42, blue: 0.95)
-    static let slack = Color(red: 0.80, green: 0.45, blue: 0.85)
+    static let green = Color(nsColor: NT.green)
+    static let yellow = Color(nsColor: NT.yellow)
+    static let orange = Color(nsColor: NT.orange)
+    static let red = Color(nsColor: NT.red)
+    static let purple = Color(nsColor: NT.purple)
+    static let slack = Color(nsColor: NT.slack)
+    static let shade = Color(nsColor: NT.shade)
+    static let rim = Color(nsColor: NT.rim)
+    static let codeBg = Color(nsColor: NT.codeBg)
 
     static let lightsInset: CGFloat = 158
     static let panelInset: CGFloat = 8
@@ -486,9 +520,9 @@ extension View {
         return self
             .background(T.raised.opacity(0.72), in: shape)
             .background(.regularMaterial, in: shape)
-            .overlay(shape.stroke(Color.white.opacity(0.09), lineWidth: 1))
+            .overlay(shape.stroke(T.rim, lineWidth: 1))
             .clipShape(shape)
-            .shadow(color: .black.opacity(0.5), radius: 40, y: 18)
+            .shadow(color: T.shade.opacity(0.5), radius: 40, y: 18)
     }
 }
 
@@ -617,7 +651,7 @@ struct SlidingTabs: View {
                     .background {
                         if on {
                             RoundedRectangle(cornerRadius: 6).fill(T.selected)
-                                .shadow(color: .black.opacity(0.25), radius: 1.5, y: 0.5)
+                                .shadow(color: T.shade.opacity(0.25), radius: 1.5, y: 0.5)
                                 .matchedGeometryEffect(id: "pill", in: ns)
                         }
                     }

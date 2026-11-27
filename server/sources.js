@@ -10,6 +10,7 @@
 const { execFile } = require("child_process");
 const path = require("path");
 const env = require("./env");
+const { previews } = require("./previews");
 
 const ROOT = path.join(__dirname, "..");
 
@@ -39,8 +40,11 @@ function cached(key, load, { refresh = false } = {}) {
 
 const PR_FIELDS = `number title url isDraft state createdAt updatedAt mergedAt closedAt reviewDecision mergeable
   additions deletions headRefName totalCommentsCount repository { nameWithOwner } author { login avatarUrl }
+  comments(last: 5) { nodes { author { login } body } }
   commits(last: 1) { nodes { commit { statusCheckRollup { state contexts(first: 1) {
-    checkRunCountsByState { state count } statusContextCountsByState { state count } } } } } }`;
+    checkRunCountsByState { state count } statusContextCountsByState { state count } } }
+    status { contexts { context state targetUrl } }
+    deployments(last: 6) { nodes { environment state latestStatus { state environmentUrl } } } } } }`;
 
 // Check runs and commit statuses by outcome, for "✓ 6 · ⊙ 1" next to a PR.
 const CHECK_BUCKET = {
@@ -107,6 +111,11 @@ function shapePr(n) {
     updatedAt: n.updatedAt,
     mergedAt: n.mergedAt || null,
     issueKey: key,
+    previews: previews({
+      deployments: (head && head.commit.deployments && head.commit.deployments.nodes) || [],
+      statuses: (head && head.commit.status && head.commit.status.contexts) || [],
+      comments: (n.comments && n.comments.nodes) || [],
+    }),
   };
 }
 

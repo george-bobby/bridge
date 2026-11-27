@@ -276,6 +276,7 @@ struct LinkRows: View {
             if !s.prUrl.isEmpty {
                 let pr = model.pr(for: s.prUrl)
                 LinkRow(icon: "arrow.triangle.pull", tint: pr.map(prTint) ?? T.text3, title: "Pull request", detail: "#\(s.prNumber)", url: s.prUrl)
+                PreviewRows(session: s)
             }
             if let url = linearURL {
                 let issue = model.linkedIssue(s)
@@ -312,6 +313,8 @@ struct LinkRow<Trailing: View>: View {
     let title: String
     var detail: String = ""
     let url: String
+    /// What a click does instead of opening the URL (a preview opens in Bridge's browser).
+    var open: (() -> Void)? = nil
     @ViewBuilder var trailing: () -> Trailing
     @StateObject private var hover = Box(false)
     @StateObject private var copied = Box(false)
@@ -337,7 +340,7 @@ struct LinkRow<Trailing: View>: View {
         .padding(.leading, 8).padding(.trailing, 4).frame(height: 30)
         .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(hover.v ? T.hover : .clear))
         .contentShape(Rectangle())
-        .onTapGesture { openURL(url) }
+        .onTapGesture { if let open { open() } else { openURL(url) } }
         .hoverBox(hover)
         .help(url)
         .padding(.horizontal, -8)

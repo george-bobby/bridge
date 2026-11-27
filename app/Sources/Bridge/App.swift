@@ -6,6 +6,10 @@ import UserNotifications
 final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     let model = AppModel()
 
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        Appearance.apply(model.appearance)
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Prompts are code: `--flag` must not become an em dash, nor "x" curly quotes.
         for k in ["NSAutomaticDashSubstitutionEnabled", "NSAutomaticQuoteSubstitutionEnabled", "NSAutomaticTextReplacementEnabled", "NSAutomaticPeriodSubstitutionEnabled"] {
@@ -33,6 +37,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             if let last = pages.first(where: { $0.0 == "chat" }) {
                 pages.append(("collapsed", last.1))
                 if browser != nil { pages.append(("browser", last.1)) }
+                pages.append(("preview", last.1))
                 pages += [("split", last.1), ("split-details", last.1), ("split-wide", last.1), ("split4", last.1), ("messages", last.1), ("messages-split", last.1), ("messages-list", last.1), ("drop", last.1), ("terminal", last.1), ("console", last.1), ("task", last.1), ("task-live", last.1), ("task-bash", last.1)]
             }
             let hidden = model.sidebarHidden
@@ -47,6 +52,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 if route == .inbox { model.inboxTab = name == "inbox-slack" ? "slack" : "decisions" }
                 if route == .settings { model.settingsPane = name.hasPrefix("settings-") ? String(name.dropFirst(9)) : "general" }
                 if name == "browser", case .session(let id) = route, let browser { model.open(id); model.openBrowser(id, url: browser) }
+                // A PR's preview deployment, opened the way a click on it does.
+                if name == "preview", case .session(let id) = route, let s = model.sessions.first(where: { $0.id == id }), let p = model.previews(for: s).first {
+                    model.openPreview(p.url, run: id); model.openPreview(p.url, run: id)   // twice: the second reuses the tab
+                }
                 if name.hasPrefix("split") || name.hasPrefix("messages"), case .session(let id) = route { model.panes = [Pane(run: id)]; model.focusedPane = 0 }
                 if case .session(let id) = route { model.open(id) } else { model.route = route }
                 if name == "split" { model.splitRight(); model.splitRight() }
@@ -106,9 +115,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             }
             model.sidebarHidden = hidden
             // The sidebar's usage popover lives in its own window: render it directly.
-            let card = ImageRenderer(content: UsageCard(providers: model.usageProviders) {}.background(T.raised).preferredColorScheme(.dark))
+            let dark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            let card = ImageRenderer(content: UsageCard(providers: model.usageProviders) {}.background(T.raised).environment(\.colorScheme, dark ? .dark : .light))
             card.scale = 2
-            if let img = card.nsImage, let tiff = img.tiffRepresentation, let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
+            var image: NSImage?
+            NSApp.effectiveAppearance.performAsCurrentDrawingAppearance { image = card.nsImage }
+            if let img = image, let tiff = img.tiffRepresentation, let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
                 try? png.write(to: URL(fileURLWithPath: "\(dir)/usage-popover.png"))
             }
         }
@@ -141,7 +153,6 @@ struct BridgeApp: App {
             RootView()
                 .environment(delegate.model)
                 .frame(minWidth: 1040, minHeight: 640)
-                .preferredColorScheme(.dark)
         }
         .windowStyle(.hiddenTitleBar)
         .windowBackgroundDragBehavior(.enabled)
@@ -149,7 +160,7 @@ struct BridgeApp: App {
         .commands { BridgeCommands(model: delegate.model); PaneCommands(model: delegate.model); ConsoleCommands(model: delegate.model) }
 
         MenuBarExtra {
-            MenuBarPanel().environment(delegate.model).preferredColorScheme(.dark)
+            MenuBarPanel().environment(delegate.model)
         } label: {
             Image(systemName: delegate.model.needsCount > 0 ? "circle.hexagongrid.fill" : "circle.hexagongrid")
         }
@@ -256,7 +267,7 @@ struct RootView: View {
             .frame(minWidth: 0, maxWidth: .infinity)
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(T.line.opacity(0.9), lineWidth: 1))
-            .shadow(color: .black.opacity(0.25), radius: 6, y: 1)
+            .shadow(color: T.shade.opacity(0.25), radius: 6, y: 1)
             .padding(.vertical, T.panelInset)
             .padding(.trailing, T.panelInset)
             .padding(.leading, model.sidebarHidden ? T.panelInset : 0)
@@ -282,7 +293,7 @@ struct RootView: View {
         }
         .overlay {
             if model.paletteOpen || model.importOpen || model.mcpSheet != nil {
-                Color.black.opacity(0.32).ignoresSafeArea()
+                T.shade.opacity(0.32).ignoresSafeArea()
                     .onTapGesture { model.paletteOpen = false; model.importOpen = false; model.mcpSheet = nil }
                     .transition(.opacity)
             }
@@ -547,7 +558,7 @@ struct SessionNavItem: View {
         if let meta = subtitle {
             Text(meta.0).font(T.ui(11.5)).foregroundStyle(meta.1).lineLimit(1).transition(.opacity)
         } else if let pr {
-            PRMetaLine(pr: pr).transition(.opacity)
+            PRMetaLine(pr: pr, run: session.id).transition(.opacity)
         } else if !session.prUrl.isEmpty {
             HStack(spacing: 3) {
                 Image(systemName: "arrow.triangle.pull").font(.system(size: 10, weight: .semibold))
@@ -568,7 +579,17 @@ struct SessionNavItem: View {
 /// while the PR is open.
 struct PRMetaLine: View {
     let pr: PullRequest
+    var run: String? = nil
     var body: some View {
+        // The diff size goes first when the row is tight: a row wider than
+        // the sidebar would push the whole sidebar sideways.
+        ViewThatFits(in: .horizontal) {
+            line(diff: true)
+            line(diff: false)
+        }
+    }
+
+    func line(diff: Bool) -> some View {
         HStack(spacing: 5) {
             PRBadge(pr: pr)
             if ChecksBadge(pr: pr).look != nil {
@@ -579,8 +600,12 @@ struct PRMetaLine: View {
                 Text("·").font(T.ui(11.5)).foregroundStyle(T.text3)
                 Text("approved").font(T.ui(11.5)).foregroundStyle(T.green)
             }
+            if pr.open, let p = pr.preview {
+                Text("·").font(T.ui(11.5)).foregroundStyle(T.text3)
+                PreviewChip(preview: p, run: run, compact: true)
+            }
             Spacer(minLength: 4)
-            if pr.open && pr.additions + pr.deletions > 0 {
+            if diff && pr.open && pr.additions + pr.deletions > 0 {
                 HStack(spacing: 4) {
                     Text(verbatim: "+\(pr.additions)").foregroundStyle(T.green)
                     Text(verbatim: "−\(pr.deletions)").foregroundStyle(T.red)
@@ -653,7 +678,7 @@ struct ToastView: View {
                 .padding(.horizontal, 14).padding(.vertical, 9)
                 .background(.regularMaterial, in: Capsule())
                 .overlay(Capsule().stroke(T.line, lineWidth: 1))
-                .shadow(color: .black.opacity(0.35), radius: 18, y: 6)
+                .shadow(color: T.shade.opacity(0.35), radius: 18, y: 6)
                 .padding(.bottom, 22)
                 .transition(.move(edge: .bottom).combined(with: .opacity).combined(with: .scale(scale: 0.9)))
             }
