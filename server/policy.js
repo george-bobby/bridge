@@ -398,7 +398,7 @@ const BRIDGE_WRITES = [
   /^\/api\/tasks$/,
   /^\/api\/tasks\/[^/]+\/(relaunch|declare|plan|cleanup)$/,
   /^\/api\/runs$/,
-  /^\/api\/runs\/[^/]+\/(followup|event)$/,
+  /^\/api\/runs\/[^/]+\/(followup|event|agent)$/,
   /^\/api\/decisions\/[^/]+$/,
   /^\/api\/slack\/watch\/[^/]+$/,
   /^\/api\/todos(\/done)?$/,

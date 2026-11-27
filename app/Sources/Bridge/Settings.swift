@@ -120,6 +120,7 @@ struct SettingEntry {
         .init(pane: .agents, title: "Default agent", words: "default agent new sessions", query: "default agent"),
         .init(pane: .agents, title: "Default model", words: "default model new sessions", query: "default model"),
         .init(pane: .agents, title: "Default permissions and thinking", words: "default permission thinking effort mode", query: "default permission"),
+        .init(pane: .agents, title: "Automatic failover", words: "automatic failover claude usage threshold preference order", query: "automatic failover"),
         .init(pane: .agents, title: "Opening skill", words: "opening skill worker skill fetch new session", query: "opening skill"),
         .init(pane: .agents, title: "Relay outcomes to the orchestrator", words: "relay outcomes orchestrator workers", query: "relay outcomes"),
         .init(pane: .agents, title: "Stalled after", words: "stalled silence minutes stall", query: "stalled"),
@@ -657,6 +658,7 @@ struct AgentSettings: View {
                 }
             }
             DefaultsSettings(q: q)
+            FailoverSettings(q: q)
             OpeningSkillSettings(q: q)
             WorkerSettings(q: q)
         }
@@ -675,6 +677,47 @@ struct AgentSettings: View {
             Chip(text: "Not installed", dot: T.text3)
         }
     }
+}
+
+struct FailoverSettings: View {
+    @Environment(AppModel.self) var model
+    let q: String
+
+    var h: JSON { model.config["harness"] }
+    var order: [String] {
+        let saved = h["failoverOrder"].array.map(\.string)
+        return saved.count == 3 ? saved : ["devin", "codex", "cursor"]
+    }
+    let choices = [("devin", "Devin"), ("codex", "Codex"), ("cursor", "Cursor")]
+
+    var body: some View {
+        SSection(title: "Automatic failover", detail: "Move Claude workers on their next turn when plan usage is tight") {
+            if Prefs.hit(q, "automatic failover claude usage threshold preference order") {
+                SRow(title: "Fail over workers", detail: "The orchestrator stays on Claude until a limit reaches 100%") {
+                    SToggle(on: Binding(get: { h["failover"].bool }, set: { save(["failover": $0]) }))
+                }
+                if h["failover"].bool {
+                    SRow(title: "Claude threshold", detail: "Either the 5-hour or weekly window") {
+                        SStepper(value: h["failoverThreshold"].int == 0 ? 95 : h["failoverThreshold"].int, range: 50...100, step: 5, unit: "%") { save(["failoverThreshold": $0]) }
+                    }
+                    ForEach(Array(order.enumerated()), id: \.offset) { i, agent in
+                        SRow(title: i == 0 ? "First choice" : i == 1 ? "Second choice" : "Third choice") {
+                            SSelect(value: agent, choices: choices) { pick($0, at: i) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    func pick(_ agent: String, at index: Int) {
+        var next = order
+        guard let old = next.firstIndex(of: agent) else { return }
+        next.swapAt(index, old)
+        save(["failoverOrder": next])
+    }
+
+    func save(_ patch: [String: Any]) { Task { await model.saveConfig(["harness": patch]) } }
 }
 
 struct DefaultsSettings: View {

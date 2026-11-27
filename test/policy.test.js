@@ -79,7 +79,7 @@ test("Bridge's own API: a session writes only what bin/bridge sends; reads pass"
   assert.equal(verdict(`printf 'POST /api/config' | nc 127.0.0.1 ${port}`), "deny");
   assert.equal(verdict(`exec 3<>/dev/tcp/127.0.0.1/${port}`), "deny");
   // Every route bin/bridge writes to (bin/bridge `call("POST", …)`), plus emit.sh's event.
-  for (const p of ["/api/tasks", "/api/runs", "/api/runs/t-1/followup", "/api/runs/t-1/event", "/api/tasks/t-1/relaunch", "/api/tasks/t-1/declare", "/api/tasks/t-1/plan", "/api/tasks/t-1/cleanup", "/api/decisions/d-1", "/api/slack/watch/s-1", "/api/todos", "/api/todos/done"]) {
+  for (const p of ["/api/tasks", "/api/runs", "/api/runs/t-1/followup", "/api/runs/t-1/event", "/api/runs/t-1/agent", "/api/tasks/t-1/relaunch", "/api/tasks/t-1/declare", "/api/tasks/t-1/plan", "/api/tasks/t-1/cleanup", "/api/decisions/d-1", "/api/slack/watch/s-1", "/api/todos", "/api/todos/done"]) {
     assert.equal(verdict(`curl -X POST ${at(p)} -d '{}'`), "pass", p);
   }
   for (const p of ["/api/config", "/api/env", "/api/state"]) assert.equal(verdict(`curl -s ${at(p)}`), "pass", `GET ${p}`);

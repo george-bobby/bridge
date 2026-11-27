@@ -30,6 +30,7 @@ const jobs = require("./jobs");
 const tasks = require("./tasks");
 const bus = require("./bus");
 const projects = require("./projects");
+const failover = require("./failover");
 
 const ROOT = path.join(__dirname, "..");
 const ORCH = "orchestrator";
@@ -145,6 +146,36 @@ function outcome(taskId, name, info = {}) {
   relay(taskId, name, { status, text, title, parsed, needsYou, decisions: created });
 }
 
+/** Apply automatic failover before a run's next turn. Usage.all() keeps the
+ * existing provider cache and rate-limit backoff, so this adds no new polling. */
+async function autoFailover(runId) {
+  const run = store.loadRun(runId);
+  if (!run) return null;
+  const config = store.readConfig();
+  if (!config.harness.failover) return null;
+  const currentAgent = store.jobOpts(config, run).agent || "claude";
+  if (currentAgent !== "claude") return null;
+  const [usage, catalog] = await Promise.all([require("./usage").all(), require("./agents").catalog()]);
+  const pick = failover.decide({
+    usage,
+    harness: config.harness,
+    currentAgent,
+    orchestrator: projects.isOrchestrator(runId),
+    installed: catalog.agents.filter((a) => a.installed).map((a) => a.id),
+  });
+  if (!pick) return null;
+  run.opts = { ...run.opts, agent: pick.agent };
+  delete run.opts.agentModel;
+  const label = { devin: "Devin", codex: "Codex", cursor: "Cursor" }[pick.agent];
+  const text = `Automatically switched from Claude to ${label}: Claude ${pick.window} usage is ${Math.round(pick.usedPct)}% (${pick.threshold}% threshold)`;
+  const msg = store.appendMessage(run, { role: "event", phase: "failover", text });
+  store.saveRun(run);
+  tasks.appendEvent({ taskId: runId, name: "agent-failover", text });
+  bus.broadcast("message", { runId, message: msg });
+  bus.broadcast("run-updated", { runId });
+  return pick;
+}
+
 /* ----------------------------------------------------------------- relay */
 
 function relayText(taskId, name, { status, text, title, parsed, decisions }) {
@@ -220,7 +251,7 @@ async function onJobEnd(e) {
   const { runId, role, why, result, stderr, reportHashBefore } = e;
 
   if (role === "orchestrator" || e.kind === "compact") {
-    drain(runId);
+    await drain(runId);
     return;
   }
   const meta = tasks.readMeta(runId) || {};
@@ -240,7 +271,7 @@ async function onJobEnd(e) {
 
   // A queued follow-up goes in before judging this turn: the worker is about
   // to get another turn, and it will report at the end of that one.
-  if (drain(runId)) return;
+  if (await drain(runId)) return;
 
   const r = tasks.readReport(runId);
   const changedThisTurn = r && r.hash !== reportHashBefore;
@@ -264,6 +295,7 @@ async function onJobEnd(e) {
       tasks.writeMeta(runId, { nudged: true });
       tasks.appendEvent({ taskId: runId, name: "nudged", text: "ended a turn without a report" });
       try {
+        await autoFailover(runId);
         jobs.startFollowup(
           runId,
           `[harness] You changed code but haven't written ${tasks.paths(runId).report}. Write a short one now (status frontmatter, TL;DR, what changed, how you verified it), then stop.`,
@@ -289,10 +321,11 @@ async function hasWork(meta) {
 }
 
 /** Start one queued follow-up for a chat, if any. True when one started. */
-function drain(runId) {
+async function drain(runId) {
   const next = jobs.takePending(runId);
   if (!next) return false;
   try {
+    await autoFailover(runId);
     jobs.startFollowup(runId, next.text, { config: store.readConfig(), role: next.role, label: next.label });
     return true;
   } catch (e) {
@@ -385,6 +418,7 @@ async function spawnTask({ repo, title, brief, branch, base = "", workspace = ""
   run.opts = { ...store.sanitizeJobOpts(opts), workdir: wt.worktree };
   store.appendMessage(run, { role: "user", text });
   store.saveRun(run);
+  if (!opts.agent) await autoFailover(id);
   tasks.appendEvent({ taskId: id, name: "spawned", text: `${t} · ${wt.branch} in ${wt.worktree}${wt.copied ? ` · ${wt.copied} file(s) from .worktreeinclude` : ""}` });
 
   let state = "created";
@@ -463,13 +497,14 @@ function startSlack(runId) {
 
 /* -------------------------------------------------------------- relaunch */
 
-function relaunch(taskId, note = "") {
+async function relaunch(taskId, note = "") {
   if (jobs.isRunning(taskId)) throw new Error("that worker is running; send a follow-up instead");
   const run = store.loadRun(taskId);
   if (!run) throw new Error("unknown task");
   tasks.closeTaskDecisions(taskId, ["resume"], "answered");
   tasks.writeMeta(taskId, { nudged: false, stallFlagged: false });
   tasks.appendEvent({ taskId, name: "relaunched", text: note || "" });
+  await autoFailover(taskId);
   if (!run.sessionId) {
     if (run.kind === "task") return jobs.startTask(taskId, { config: store.readConfig(), note: "Relaunched." });
     return jobs.startPipeline(taskId, { config: store.readConfig() });
@@ -544,7 +579,7 @@ function plan(taskId, op, args = []) {
  * follow-up in your words; "do it" on an action sends the worker to make
  * the call, which the guard then puts to you as an exact-payload approval.
  */
-function decide(id, { answer = "", action = "answer" } = {}) {
+async function decide(id, { answer = "", action = "answer" } = {}) {
   const d = tasks.decisions().find((x) => x.id === id);
   if (!d) throw new Error(`no such decision: ${id}`);
   if (action === "dismiss") return tasks.updateDecision(id, { state: "dismissed" });
@@ -553,7 +588,7 @@ function decide(id, { answer = "", action = "answer" } = {}) {
     return tasks.updateDecision(id, { state: "deferred", deferUntil: answer });
   }
   if (d.kind === "resume") {
-    relaunch(d.taskId, answer);
+    await relaunch(d.taskId, answer);
     return tasks.updateDecision(id, { state: "answered", answer: answer || "resumed" });
   }
   const msg =
@@ -561,6 +596,7 @@ function decide(id, { answer = "", action = "answer" } = {}) {
       ? `[harness] ${USER} approved your action request:\n"""\n${d.text}\n"""\n${answer ? `${USER} adds: ${answer}\n` : ""}Make exactly this write now (the harness will show ${USER} the exact payload once more), then update your report.`
       : `[harness] ${USER} answered your open question:\n"""\n${d.text}\n"""\nAnswer, in ${USER}'s words: ${answer}\n\nContinue, then update your report.`;
   if (d.kind === "question" && !String(answer).trim()) throw new Error("an answer needs words");
+  await autoFailover(d.taskId);
   const out = jobs.startFollowup(d.taskId, msg, { config: store.readConfig(), role: "harness", label: d.kind === "action" ? "approved" : "answer", queue: true });
   const rec = tasks.updateDecision(id, { state: "answered", answer: answer || "approved", deliveredAs: out && out.queued ? "queued" : "started" });
   tasks.appendEvent({ taskId: d.taskId, name: "decided", text: `${d.kind}: ${answer || "approved"}`.slice(0, 300) });
@@ -824,4 +860,5 @@ module.exports = {
   note,
   outcome,
   workingCount,
+  autoFailover,
 };

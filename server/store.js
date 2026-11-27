@@ -133,7 +133,11 @@ function jobOpts(config, run) {
  */
 // slackWatch: "off" | "watch" (file mentions in the Inbox) | "triage" (and let
 // the orchestrator decide which ones to start); server/watch.js.
-const DEFAULT_HARNESS = { mode: "normal", relay: true, stallMinutes: 15, workerSkill: "", policy: {}, slackWatch: "watch", slackPollSec: 120, slackChannels: [] };
+const DEFAULT_HARNESS = {
+  mode: "normal", relay: true, stallMinutes: 15, workerSkill: "", policy: {},
+  slackWatch: "watch", slackPollSec: 120, slackChannels: [],
+  failover: false, failoverThreshold: 95, failoverOrder: ["devin", "codex", "cursor"],
+};
 const POLICY_KEYS = ["chat", "tickets", "docs", "prComments", "prMerge", "otherWrites", "destructiveGit"];
 
 function sanitizeHarness(patch, base) {
@@ -143,6 +147,12 @@ function sanitizeHarness(patch, base) {
   if (patch.relay != null) out.relay = Boolean(patch.relay);
   const int = (v, lo, hi) => Math.min(hi, Math.max(lo, Math.round(Number(v))));
   if (Number.isFinite(Number(patch.stallMinutes)) && patch.stallMinutes !== "") out.stallMinutes = int(patch.stallMinutes, 1, 240);
+  if (patch.failover != null) out.failover = Boolean(patch.failover);
+  if (Number.isFinite(Number(patch.failoverThreshold)) && patch.failoverThreshold !== "") out.failoverThreshold = int(patch.failoverThreshold, 50, 100);
+  if (Array.isArray(patch.failoverOrder)) {
+    const order = [...new Set(patch.failoverOrder.map(String).filter((a) => ["devin", "codex", "cursor"].includes(a)))];
+    if (order.length === 3) out.failoverOrder = order;
+  }
   // "" follows WORKER_SKILL in .env; "none" turns the worker skill off.
   if (patch.workerSkill != null) {
     const v = String(patch.workerSkill).trim().replace(/^\//, "");
