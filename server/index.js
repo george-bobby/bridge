@@ -38,6 +38,7 @@ const harness = require("./harness");
 const tasks = require("./tasks");
 const sources = require("./sources");
 const projects = require("./projects");
+const identity = require("./identity");
 const dotenv = require("./dotenv");
 const slack = env.demo ? require("./demo").slack : require("./slack");
 const watcher = require("./watch");
@@ -626,6 +627,13 @@ async function handle(req, res) {
     } catch (e) {
       return sendJson(res, 400, { ok: false, error: String(e.message || e) });
     }
+  }
+
+  // --- what Bridge works out itself (server/identity.js) -------------------
+  if (p === "/api/identity" || p === "/api/identity/refresh") {
+    if (!sameOrigin(req)) return sendJson(res, 403, { ok: false, error: "cross-origin request refused" });
+    if (req.method === "POST") await refreshIdentity();
+    return sendJson(res, 200, { ok: true, ...identity.summary() });
   }
 
   // --- Settings › Customize: skills and plugins (server/customize.js) ---
@@ -1278,6 +1286,8 @@ async function handle(req, res) {
     try {
       const incoming = JSON.parse((await readBody(req)) || "{}");
       const config = store.writeConfig(incoming);
+      const h = incoming.harness || {};
+      if (h.pipelineProject != null || h.linearTeam != null || h.pipelineModel != null) refreshIdentity();
       bus.broadcast("state", snapshot());
       sendJson(res, 200, { ok: true, config });
     } catch (e) {
@@ -1341,7 +1351,20 @@ server.on("error", (err) => {
   process.exit(1);
 });
 
+/** Work out identities, repo and PATH again; re-render the pipeline skill when they moved. */
+async function refreshIdentity() {
+  const before = JSON.stringify(identity.summary().derived);
+  await identity.resolve().catch(() => null);
+  if (JSON.stringify(identity.summary().derived) !== before && !env.demo) {
+    try {
+      require("child_process").execFileSync(process.execPath, [path.join(ROOT, "server", "render.js")], { stdio: "ignore", timeout: 20000 });
+    } catch {}
+  }
+  bus.broadcast("identity", identity.summary());
+}
+
 server.listen(PORT, "127.0.0.1", () => {
+  setTimeout(() => refreshIdentity(), 1500);
   const config = store.readConfig();
   console.log(`bridge dashboard  ->  http://localhost:${PORT}`);
   console.log(`  runs:      ${store.PATHS.runs}`);

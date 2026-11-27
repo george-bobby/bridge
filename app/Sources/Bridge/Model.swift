@@ -354,6 +354,12 @@ final class AppModel {
     var terminalTabs: Set<String> = []
     @ObservationIgnored let terms = TermStore()
     var slack: JSON = .null
+    /// What the server worked out (server/identity.js): GitHub, Slack and Linear
+    /// identities, the pipeline repo, and `derived` values for each overridable key.
+    var identity: JSON = .null
+    func loadIdentity(refresh: Bool = false) async {
+        if let out = try? await (refresh ? API.post("/api/identity/refresh") : API.get("/api/identity")) { identity = out }
+    }
     var mentions: [Mention] = []
     /// The newest mention shown on the Slack page; persists so a relaunch doesn't relight them.
     var slackSeen = UserDefaults.standard.double(forKey: "slack.seen") {
@@ -1054,6 +1060,7 @@ final class AppModel {
         case "slack": slackFound(d)
         case "projects": projects = d["projects"].array.map(Project.init)
         case "mcp": MCPStore.shared.changed(d["agent"].string)
+        case "identity": identity = d
         case "delta":
             // Tokens stream at dozens a second: patched into the chat held
             // here, never a re-fetch, and no badge recount.
