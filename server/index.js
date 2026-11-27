@@ -240,7 +240,7 @@ function snapshot() {
     workerSkill: workerSkillState(config, workdir),
     // Only what the page actually draws: the repo a new chat's job would run
     // in, which the composer's picker opens on.
-    meta: { workdir, root: ROOT, projects: projects.withRoot(workdir) },
+    meta: { workdir, root: ROOT, projects: projects.withRoot() },
     now: Date.now(),
   };
 }
@@ -656,7 +656,7 @@ async function handle(req, res) {
     try {
       const body = req.method === "POST" ? JSON.parse((await readBody(req)) || "{}") : {};
       const m = p.match(/^\/api\/projects\/([a-z0-9-]+)(?:\/(orchestrator))?$/);
-      const all = () => projects.withRoot(jobs.resolveWorkdir(store.readConfig()));
+      const all = () => projects.withRoot();
       let out;
       if (req.method === "GET" && p === "/api/projects") out = { projects: all() };
       else if (req.method === "POST" && p === "/api/projects") out = { project: projects.add(body) };

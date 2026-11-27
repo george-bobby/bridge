@@ -8,7 +8,7 @@ import SwiftUI
 // any number of plain login shells, toggled with ⌃` (⌘J hides or shows the
 // panel, ⌃⇧` adds a shell). A new shell starts in the folder of what's on
 // screen: the open session's worktree, else the filtered project, else the
-// default workdir. Unlike a chat's Terminal tab it never resumes an agent.
+// Default project's folder. Unlike a chat's Terminal tab it never resumes an agent.
 
 @MainActor
 final class Shell: ObservableObject, Identifiable, @preconcurrency LocalProcessTerminalViewDelegate {
@@ -153,7 +153,7 @@ final class ConsoleStore: ObservableObject {
 
 extension AppModel {
     /// Where a new shell starts: the open session's folder, else the
-    /// filtered project's, else the default workdir, else home.
+    /// filtered project's, else Default's folder, else home.
     var contextFolder: String {
         let fm = FileManager.default
         if case .session(let id) = route, let s = sessions.first(where: { $0.id == id }) {
@@ -161,7 +161,7 @@ extension AppModel {
             if !dir.isEmpty, fm.fileExists(atPath: dir) { return dir }
         }
         if let p = projectFilter.flatMap(project), fm.fileExists(atPath: p.path) { return p.path }
-        if !defaultWorkdir.isEmpty, fm.fileExists(atPath: defaultWorkdir) { return defaultWorkdir }
+        if let root = project(AppModel.rootId)?.path, fm.fileExists(atPath: root) { return root }
         return NSHomeDirectory()
     }
 }

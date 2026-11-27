@@ -56,10 +56,6 @@ const EFFORT_LEVELS = ["", "low", "medium", "high", "xhigh", "max"];
 
 const DEFAULT_JOB_OPTS = {
   model: env.pipelineModel,
-  // Where the spawned session runs. It must be the repo the pipeline builds
-  // against, not this folder, or Claude lands somewhere with no code in it —
-  // hence TARGET_REPO in .env rather than a path baked in here.
-  workdir: env.targetRepo,
   // How much the session may do unattended. bypassPermissions is what every
   // job hard-coded before this was selectable; plan, manual and acceptEdits are
   // the three ways to hand it less rope. They stopped being merely narrower
@@ -214,11 +210,18 @@ const writeRun = (run) => writeJsonAtomic(runPath(run.runId), run, { compact: tr
 
 /* ------------------------------------------------------------------ config */
 
+// A workdir is a chat's own (run.opts); there is no global one. A chat with
+// none runs in Default's folder (jobs.resolveWorkdir), never a project.
+function withoutWorkdir(opts) {
+  const { workdir, ...rest } = opts || {};
+  return rest;
+}
+
 function readConfig() {
   const raw = readJson(PATHS.config, {});
   const config = {
     ...DEFAULT_CONFIG,
-    followup: { ...DEFAULT_CONFIG.followup, ...(raw.followup || {}) },
+    followup: { ...DEFAULT_CONFIG.followup, ...withoutWorkdir(raw.followup) },
     harness: sanitizeHarness(raw.harness, DEFAULT_HARNESS),
   };
   for (const key of TOGGLE_KEYS) if (key in raw) config[key] = Boolean(raw[key]);
@@ -233,7 +236,7 @@ function writeConfig(patch) {
     if (key in patch) next[key] = Boolean(patch[key]);
   }
   if (patch.followup && typeof patch.followup === "object") {
-    Object.assign(next.followup, sanitizeJobOpts(patch.followup));
+    Object.assign(next.followup, withoutWorkdir(sanitizeJobOpts(patch.followup)));
   }
   if (patch.harness && typeof patch.harness === "object") next.harness = sanitizeHarness(patch.harness, next.harness);
   writeJsonAtomic(PATHS.config, next);

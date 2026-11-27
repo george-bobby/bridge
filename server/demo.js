@@ -514,7 +514,7 @@ function seed(dataDir) {
   );
   fs.writeFileSync(
     path.join(dataDir, "config.json"),
-    JSON.stringify({ followup: { workdir: REPO, model: "opus", permissionMode: "bypassPermissions", effort: "medium" }, harness: { relay: false } }),
+    JSON.stringify({ followup: { model: "opus", permissionMode: "bypassPermissions", effort: "medium" }, harness: { relay: false } }),
   );
 }
 

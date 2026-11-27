@@ -372,3 +372,24 @@ test("import a chat from an agent's own history: a worker in its folder that res
   if (devinOrCursor) assert.match((await post("/api/history/import", { agent: devinOrCursor.agent, id: devinOrCursor.id })).error, /folder this chat ran in is gone/);
   fs.renameSync(`${repo}-moved`, repo);
 });
+
+test("Default's folder is the fallback everywhere, not the first project; only Slack pipeline runs default to its repo", async () => {
+  const root = path.join(tmp, "default-root");
+  fs.mkdirSync(root, { recursive: true });
+  await post("/api/projects/default", { path: root });
+  const all = (await get("/api/projects")).projects;
+  assert.ok(all[1] && all[1].path !== root, "a real project comes first after Default");
+  // The global default (the app's terminal and pickers read meta.workdir).
+  assert.strictEqual((await get("/api/state")).meta.workdir, root);
+  // A global workdir is no longer a setting.
+  const saved = await post("/api/config", { followup: { workdir: all[1].path } });
+  assert.strictEqual(saved.config.followup.workdir, undefined);
+  assert.strictEqual((await get("/api/state")).meta.workdir, root);
+  // A task with no repo works in Default's folder.
+  const t = await post("/api/tasks", { title: "no repo", brief: "anything", start: false });
+  assert.strictEqual(t.worktree, root);
+  // A Slack chat with no project still runs in the pipeline's repo (TARGET_REPO).
+  const slack = "1700000002.000200";
+  fs.writeFileSync(path.join(DATA, "runs", `${slack}.json`), JSON.stringify({ runId: slack, createdAt: 1700000000, updatedAt: 1700000000, who: "Sam", text: "a thread", action: "pending", messages: [] }));
+  assert.strictEqual((await get(`/api/memory?runId=${slack}`)).workdir, tmp);
+});

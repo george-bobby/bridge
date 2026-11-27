@@ -105,19 +105,20 @@ const awaitingIds = () =>
   [...running.entries()].filter(([, j]) => j.asks && j.asks.size).map(([id]) => id);
 
 /**
- * Where a job is rooted, narrowest first: the chat's own pick, then the
- * Settings default, then TARGET_REPO from .env, then this folder — which has
- * no product code in it, and is deliberately inert rather than a guess at a
- * repo. `run` is optional: omit it for the global default.
+ * Where a job is rooted: the chat's own pick, then (Slack pipeline runs only)
+ * the pipeline's repo, then Default's folder. `run` is optional: omit it for
+ * the global default, which is Default's folder, never a project.
  *
  * Each candidate is checked for existence rather than trusted, because a job
  * rooted at a path that isn't there is a session rooted at `/`.
  */
 function resolveWorkdir(config, run) {
-  for (const w of [store.jobOpts(config, run).workdir, env.targetRepo]) {
+  const own = run && run.opts && run.opts.workdir;
+  const pipeline = run && roleOf(run) === "slack" ? env.targetRepo : "";
+  for (const w of [own, pipeline]) {
     if (w && path.isAbsolute(w) && fs.existsSync(w)) return w;
   }
-  return ROOT;
+  return projects.rootDir();
 }
 
 /**
