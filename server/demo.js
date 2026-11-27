@@ -819,4 +819,46 @@ function granolaNote(id) {
   return { id, title: n[1], url: `https://notes.granola.ai/d/${id}`, attendees: n[3], event: n[1], summary: n[4], createdAt: iso(n[2]) };
 }
 
-module.exports = { seed, writeSessions, pulls, linear, ports, slack, usage, agents, prActivity, mcp, git, history, vercel, incidents, granola, granolaNote };
+/* ------------------------------------------------- skills and plugins */
+
+/** A fake home with a few skills, for Settings › Customize (server/customize.js). */
+function seedSkills(h) {
+  const skill = (rel, name, desc, body) => {
+    const dir = path.join(h, rel, name);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "SKILL.md"), `---\nname: ${name}\ndescription: ${desc}\n---\n\n${body}\n`);
+  };
+  skill(".claude/skills", "fetch", "Gather a Linear issue or Slack thread's full context, then plan or implement it and open the PR.", "# Fetch\n\n1. Read the issue and every linked thread.\n2. Reproduce, fix, test.\n3. Open the PR with the issue key in the title.");
+  skill(".claude/skills", "release-notes", "Write release notes from the merged PRs since the last tag.", "# Release notes\n\nGroup by feature, fix and chore. One line each, user-facing words.");
+  skill(".claude/skills", "pr-review", "Review a pull request for correctness, tests and naming before merge.", "# PR review\n\nCheck the diff against its Linear issue, then post inline comments.");
+  skill(".agents/skills", "storefront-conventions", "House rules for the storefront repo: naming, tests, analytics events.", "# Storefront conventions\n\n- Events are `noun_verb` in snake case\n- Every checkout change gets an e2e test");
+  skill(".codex/skills", "triage", "Sort a bug report into needs-repro, known, or ready to fix.", "# Triage");
+  skill(".cursor/skills", "figma-to-code", "Turn a Figma frame into a React component with the design tokens.", "# Figma to code");
+}
+
+function plugins() {
+  return {
+    claude: {
+      ok: true,
+      installed: [
+        { id: "vercel@claude-plugins-official", name: "vercel", marketplace: "claude-plugins-official", version: "0.48.0", description: "Build and deploy web apps and agents", enabled: true, scope: "user", dir: "" },
+        { id: "linear@claude-plugins-official", name: "linear", marketplace: "claude-plugins-official", version: "1.2.0", description: "Linear issues, projects and cycles from Claude Code", enabled: false, scope: "user", dir: "" },
+      ],
+      available: [
+        { id: "sentry@claude-plugins-official", name: "sentry", marketplace: "claude-plugins-official", description: "Investigate Sentry issues and traces without leaving the session", installs: 18200 },
+        { id: "playwright@claude-plugins-official", name: "playwright", marketplace: "claude-plugins-official", description: "Drive a browser to test what you built", installs: 15400 },
+        { id: "stripe@claude-plugins-official", name: "stripe", marketplace: "claude-plugins-official", description: "Stripe API docs, test cards and webhooks", installs: 9100 },
+        { id: "figma@claude-plugins-official", name: "figma", marketplace: "claude-plugins-official", description: "Read Figma files and turn frames into code", installs: 8700 },
+      ],
+    },
+    cursor: {
+      ok: true,
+      plugins: [
+        { id: "vercel@cursor-public", name: "vercel", marketplace: "cursor-public", version: "0.48.0", description: "Build and deploy web apps and agents", homepage: "https://vercel.com", mcp: true, skills: 12, dir: "" },
+        { id: "datadog@cursor-public", name: "datadog", marketplace: "cursor-public", version: "1.4.1", description: "Logs, traces and monitors from Datadog", homepage: "", mcp: true, skills: 3, dir: "" },
+      ],
+    },
+  };
+}
+
+module.exports = { seed, writeSessions, seedSkills, plugins, pulls, linear, ports, slack, usage, agents, prActivity, mcp, git, history, vercel, incidents, granola, granolaNote };
