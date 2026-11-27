@@ -125,13 +125,12 @@ struct ChatView: View {
                 }
                 OpenInButton(session: s)
                 IconButton(icon: s.pinned ? "star.fill" : "star", help: s.pinned ? "Unpin" : "Pin to the sidebar") { Task { await model.setPinned(s.id, !s.pinned) } }
-                Menu {
+                MoreMenu {
                     Button { model.splitRight() } label: { Label("Split Right", systemImage: "rectangle.split.2x1") }.keyboardShortcut("\\")
                     Divider()
                     if !s.permalink.isEmpty { Button { model.openThread(s.permalink) } label: { Label("Read the Slack Thread", systemImage: "number") } }
                     SessionMenu(session: s, inChat: true)
-                } label: { Image(systemName: "ellipsis").font(.system(size: 13.5)).foregroundStyle(T.text2).frame(width: 28, height: 28) }
-                    .menuStyle(.borderlessButton).menuIndicator(.hidden).frame(width: 32)
+                }
             }
             IconButton(icon: "sidebar.right", help: model.inspectorShown ? "Hide details (⌥⌘I)" : "Show details (⌥⌘I)") {
                 model.toggleDetails()
@@ -154,20 +153,7 @@ struct StepButton: View {
     let help: String
     let enabled: Bool
     let action: () -> Void
-    @StateObject private var hover = Box(false)
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: icon).font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(enabled ? (hover.v ? T.text : T.text2) : T.text3.opacity(0.5))
-                .frame(width: 26, height: 24)
-                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(hover.v && enabled ? T.hover : .clear))
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(Pressable(scale: 0.88))
-        .disabled(!enabled)
-        .help(help)
-        .hoverBox(hover)
-    }
+    var body: some View { IconButton(icon: icon, help: help, size: B.small, action: action).disabled(!enabled) }
 }
 
 struct SessionTabs: View {
@@ -234,7 +220,7 @@ struct SessionTabs: View {
     var newTabMenu: some View {
         let s = session
         let ports = s.map { model.servers(for: $0) } ?? []
-        return Menu {
+        return MoreMenu(help: "Open a tab: a browser on this session's dev server, its PR or any page", size: pane == nil ? B.regular : B.small, icon: "plus") {
             Section("Browser") {
                 ForEach(ports) { sv in
                     ForEach(sv.ports, id: \.self) { p in
@@ -249,12 +235,7 @@ struct SessionTabs: View {
                 Button { model.openTerminalTab(runId) } label: { Label("Terminal", systemImage: "terminal") }
                 Button { model.splitRight() } label: { Label("Split Right", systemImage: "rectangle.split.2x1") }
             }
-        } label: {
-            Image(systemName: "plus").font(.system(size: pane == nil ? 11.5 : 10.5, weight: .semibold)).foregroundStyle(T.text2)
-                .frame(width: pane == nil ? 28 : 24, height: pane == nil ? 28 : 24)
         }
-        .menuStyle(.borderlessButton).menuIndicator(.hidden).frame(width: pane == nil ? 32 : 28)
-        .help("Open a tab: a browser on this session's dev server, its PR or any page")
     }
 }
 
@@ -1140,8 +1121,8 @@ struct ComposerChip: View {
             if !text.isEmpty { Text(text).font(T.ui(12, .medium)) }
         }
         .foregroundStyle(warn ? T.orange : T.text2)
-        .padding(.horizontal, 8).frame(height: 26)
-        .background(RoundedRectangle(cornerRadius: 6).fill(hover.v ? T.hover : .clear))
+        .padding(.horizontal, 8).frame(minWidth: B.regular).frame(height: B.regular)
+        .background(RoundedRectangle(cornerRadius: B.radius(B.regular), style: .continuous).fill(hover.v ? T.hover : .clear))
         .hoverBox(hover)
     }
 }

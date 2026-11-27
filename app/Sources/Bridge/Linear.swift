@@ -330,8 +330,7 @@ struct LinearColumn: View {
                             .transition(.opacity.combined(with: .scale(scale: 0.96)))
                     }
                     if shown.count < group.issues.count {
-                        Button("Show \(group.issues.count - shown.count) more") { withAnimation(M.snappy) { showAll.v = true } }
-                            .buttonStyle(.plain).font(T.ui(12)).foregroundStyle(T.text3).padding(6)
+                        LinkButton("Show \(group.issues.count - shown.count) more") { withAnimation(M.snappy) { showAll.v = true } }.padding(6)
                     }
                 }
                 .padding(.horizontal, 6).padding(.bottom, 14)
