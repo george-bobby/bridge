@@ -366,6 +366,22 @@ test("a permission ask reaches the dashboard and the answer reaches the worker",
   await waitFor(statusIs(t.taskId, "ready-for-review"), 15000);
 });
 
+test("a permission prompt is an Inbox item until answered; always allow sends the agent's rules", async () => {
+  const t = await spawnTask("permy", "stub:ask=suggest\nstub:report=ready-for-review");
+  const item = await waitFor(async () => (await api("GET", "/api/inbox")).permissions.find((p) => p.runId === t.taskId), 10000, "inbox item");
+  assert.equal(item.tool, "Bash");
+  assert.equal(item.command, "git push --force");
+  assert.equal(item.always, true);
+  assert.ok(item.title, "it names the chat");
+  assert.ok((await api("GET", "/api/inbox")).counts.permissions >= 1);
+  const ans = await api("POST", `/api/runs/${t.taskId}/answer`, { askId: item.askId, behavior: "allow", always: true });
+  assert.equal(ans.ok, true);
+  await waitFor(statusIs(t.taskId, "ready-for-review"), 15000);
+  const run = (await api("GET", `/api/runs/${t.taskId}`)).run;
+  assert.ok(JSON.stringify(run.messages).includes("answer: allow always: 1"), "the rules reached the agent");
+  assert.ok(!(await api("GET", "/api/inbox")).permissions.some((p) => p.runId === t.taskId), "answered prompts leave the Inbox");
+});
+
 test("subagents and background commands become tasks, apart from the parent's steps", async () => {
   const t = await spawnTask("tasky", "stub:tasks\nstub:report=ready-for-review");
   await waitFor(statusIs(t.taskId, "ready-for-review"), 15000, "report");

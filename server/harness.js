@@ -817,7 +817,16 @@ function inbox() {
   const todos = tasks.todos().filter((x) => !x.done).map((x) => ({ ...x, title: x.taskId ? t(x.taskId) : "" }));
   // Required here, not at the top: watch.js starts pipelines through this module.
   const slack = require("./watch").open();
-  return { mode: c.mode, decisions, todos, slack, counts: { decisions: decisions.length, todos: todos.length, slack: slack.filter((i) => i.verdict !== "skip").length } };
+  // Allow/deny prompts live sessions are blocked on, answered with POST /api/runs/:id/answer.
+  const permissions = jobs.pendingPermissions().map((p) => ({ ...p, title: t(p.runId) }));
+  return {
+    mode: c.mode,
+    decisions,
+    todos,
+    slack,
+    permissions,
+    counts: { decisions: decisions.length, todos: todos.length, slack: slack.filter((i) => i.verdict !== "skip").length, permissions: permissions.length },
+  };
 }
 
 function catchup(since) {
