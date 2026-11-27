@@ -66,7 +66,10 @@ async function user(id) {
       id,
       call("users.info", { user: id })
         .then((u) => ({ name: u.user.profile.display_name || u.user.real_name || u.user.name, real: u.user.real_name || "", avatar: u.user.profile.image_72 || "" }))
-        .catch(() => ({ name: id, avatar: "" })),
+        .catch(() => {
+          users.delete(id);
+          return { name: id, avatar: "" };
+        }),
     );
   }
   return users.get(id);
@@ -78,7 +81,10 @@ async function channel(id) {
       id,
       call("conversations.info", { channel: id })
         .then((c) => (c.channel.is_im ? "Direct message" : `#${c.channel.name}`))
-        .catch(() => ""),
+        .catch(() => {
+          channels.delete(id);
+          return "";
+        }),
     );
   }
   return channels.get(id);

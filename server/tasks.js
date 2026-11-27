@@ -202,7 +202,7 @@ function parseReport(text) {
     // "None." or "None. (an aside about what isn't needed)" both mean none.
     return out.filter((b) => !/^(none|n\/a|nothing|-|\(none\))(\.|$|[.:,;]\s)/i.test(b.trim()));
   };
-  const status = REPORT_STATUSES.includes(fields.status) ? fields.status : fields.status ? "unknown" : "unknown";
+  const status = REPORT_STATUSES.includes(fields.status) ? fields.status : "unknown";
   return {
     status,
     fields,
@@ -437,13 +437,14 @@ async function createWorktree({ repo, branch, from: pick = "" }) {
   const remotes = picked ? (await git(["remote"], repo).catch(() => "")).split("\n").filter(Boolean) : [];
   const remote = remotes.find((r) => picked.startsWith(`${r}/`)) || "";
   const base = picked ? (remote ? picked.slice(remote.length + 1) : picked) : await defaultBranch(repo);
+  if (!base || base.startsWith("-")) throw new Error(`bad base branch: ${picked || base}`);
   const via = remote || "origin";
   let from = picked || base;
   // Fresh base: fetch it, and branch from the remote copy so a stale local
   // copy never leaks into the task. No remote (scratch repos) or a branch
   // that only exists here: branch from what was picked, if it's there.
   try {
-    await git(["fetch", "--quiet", via, base], repo, 120000);
+    await git(["fetch", "--quiet", "--", via, base], repo, 120000);
     from = `${via}/${base}`;
   } catch {
     if (picked) await git(["rev-parse", "--verify", "--quiet", `${from}^{commit}`], repo).catch(() => {
@@ -582,9 +583,7 @@ function pidsInside(dir) {
 }
 
 async function removeWorktree({ repo, worktree, force }) {
-  const args = ["worktree", "remove", worktree];
-  if (force) args.splice(2, 0, "--force");
-  await git(args, repo, 60000);
+  await git(["worktree", "remove", ...(force ? ["--force"] : []), "--", worktree], repo, 60000);
 }
 
 /** A task's title from its brief: the first line that says something, not a

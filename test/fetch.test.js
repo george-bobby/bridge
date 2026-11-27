@@ -89,7 +89,7 @@ test.before(async () => {
   fs.mkdirSync(path.join(HOME_CLAUDE, "skills", "fetch"), { recursive: true });
   fs.writeFileSync(path.join(HOME_CLAUDE, "skills", "fetch", "SKILL.md"), SKILL);
   fs.mkdirSync(DATA, { recursive: true });
-  fs.writeFileSync(path.join(DATA, "config.json"), JSON.stringify({ harness: { maxWorkers: 5, maxPerRepo: 5, relay: false, mode: "normal" } }));
+  fs.writeFileSync(path.join(DATA, "config.json"), JSON.stringify({ harness: { relay: false, mode: "normal" } }));
   server = spawn(process.execPath, [path.join(ROOT, "server")], { env: ENV, stdio: ["ignore", "pipe", "pipe"] });
   server.stderr.on("data", (d) => process.env.BRIDGE_TEST_VERBOSE && process.stderr.write(d));
   await waitFor(async () => fetch(`${URL_}/api/state`).then((r) => r.ok).catch(() => false), 10000, "server up");
@@ -219,4 +219,6 @@ test("non-Claude agents get the skill inlined, $ARGUMENTS filled in", () => {
   assert.equal(ws.sourceUrl(`see ${SLACK} and ${LINEAR}.`), LINEAR);
   assert.equal(ws.normalise("/fetch"), "fetch");
   assert.equal(ws.normalise("none"), "");
+  assert.equal(ws.normalise(".."), "");
+  assert.ok(ws.prompt({ skill, agent: "codex", arg: "cost is $& or $'" }).includes("Work on cost is $& or $' end to end."), "$ patterns in the argument stay literal");
 });

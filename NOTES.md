@@ -54,9 +54,9 @@ A restarted server rereads them (see Recovery).
 - **How you're told**: the Orchestrator's relay, the Inbox, browser
   notifications (opt-in, Settings), and the tab title. No phone push: the
   existing design dropped OS-level notifications deliberately.
-- **Shared local resources (ports, DBs)**: no lock yet. Capacity defaults to
-  2 per repo, which keeps collisions rare. Add a lock if dev servers
-  start fighting.
+- **Shared local resources (ports, DBs)**: no lock yet, and no worker cap:
+  every task starts right away in its own worktree. Add a lock if dev
+  servers start fighting.
 - **Secrets**: workers use whatever the repo's setup copies (by name, never
   printed). The guard refuses env dumps, `printenv`, `.env` reads, argv
   listings, and a bare `gh auth token`.
@@ -91,7 +91,7 @@ review to-do), a browser notification if it needs you, and a relay turn
 
 At boot: pending asks are swept (as before); a task still marked `working`
 becomes `worker-gone` with a **Resume** decision; any report written while
-the server was down is caught up; tasks left queued are started. Workers are
+the server was down is caught up. Workers are
 children of the server and die with it, so **resume is a relaunch** (`--resume
 <session>` with a note to check git state), not a reattach.
 

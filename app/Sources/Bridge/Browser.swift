@@ -49,7 +49,9 @@ final class WebPage: ObservableObject {
     static func normalize(_ raw: String) -> URL? {
         let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return nil }
-        if t.range(of: #"^[a-z][a-z0-9+.-]*://"#, options: [.regularExpression, .caseInsensitive]) != nil { return URL(string: t) }
+        if t.range(of: #"^[a-z][a-z0-9+.-]*://"#, options: [.regularExpression, .caseInsensitive]) != nil {
+            return URL(string: t).flatMap { ["http", "https"].contains($0.scheme?.lowercased() ?? "") ? $0 : nil }
+        }
         if t.range(of: #"^(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?(/.*)?$"#, options: .regularExpression) != nil || t.range(of: #"^:\d+"#, options: .regularExpression) != nil {
             return URL(string: "http://" + (t.hasPrefix(":") ? "localhost" + t : t))
         }
@@ -264,7 +266,7 @@ struct AttachmentChip: View {
     var body: some View {
         HStack(spacing: 8) {
             Group {
-                if item.kind == .image, let img = NSImage(contentsOfFile: item.path) {
+                if item.kind == .image, let img = thumb.v {
                     Image(nsImage: img).resizable().scaledToFill()
                 } else {
                     Image(systemName: item.kind == .text ? "text.alignleft" : item.kind == .session ? "number" : "doc").font(.system(size: 13)).foregroundStyle(T.text2)
@@ -295,8 +297,10 @@ struct AttachmentChip: View {
         .help(item.kind == .text ? String(item.text.prefix(400)) : item.path)
         .onTapGesture { if !item.path.isEmpty { preview.v = URL(fileURLWithPath: item.path) } }
         .quickLookPreview($preview.v)
+        .task(id: item.path) { if item.kind == .image { thumb.v = await Thumbs.load(item.path, max: 34) } }
     }
     @StateObject private var preview = Box<URL?>(nil)
+    @StateObject private var thumb = Box<NSImage?>(nil)
 }
 
 // MARK: - Files in sent messages

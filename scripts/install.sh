@@ -43,11 +43,6 @@ DASH_PLIST_SRC="$SCRIPTS/launchd.plist"
 DASH_PLIST_DST="$HOME/Library/LaunchAgents/$DASH_LABEL.plist"
 PORT="${BRIDGE_PORT:-4319}"
 
-# Earlier versions installed a launchd poller under the bare label and a
-# /scan-mentions command. Both are gone; clear them out if they're still here.
-OLD_POLLER_PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
-OLD_CMD_DST="$HOME/.claude/commands/scan-mentions.md"
-
 SKILL_SRC="$PROJ/.claude/skills/slack-fetch-pipeline"
 SKILL_DST="$HOME/.claude/skills/slack-fetch-pipeline"
 
@@ -75,19 +70,6 @@ reload_job() {
   done
   echo "error: could not bootstrap $label" >&2
   launchctl bootstrap "gui/$UID" "$plist"  # run once more, unmuted, for the real message
-}
-
-remove_old_poller() {
-  if launchctl print "gui/$UID/$LABEL" >/dev/null 2>&1 || [[ -f "$OLD_POLLER_PLIST" ]]; then
-    launchctl bootout "gui/$UID/$LABEL" 2>/dev/null || true
-    rm -f "$OLD_POLLER_PLIST"
-    echo "removed the old launchd poller ($LABEL)"
-  fi
-  if [[ -L "$OLD_CMD_DST" ]]; then
-    rm "$OLD_CMD_DST"
-    echo "unlinked the old $OLD_CMD_DST"
-  fi
-  return 0
 }
 
 # --- render skills/ -> .claude/ -----------------------------------------
@@ -152,7 +134,7 @@ dashboard_start() {
   # KeepAlive means "running" is the steady state, so a port that never opens is
   # a real failure worth surfacing now rather than at first use.
   for _ in $(seq 1 20); do
-    curl -fs -o /dev/null --max-time 1 "http://127.0.0.1:$PORT/" 2>/dev/null && DASH_UP=1 && break
+    curl -fs -o /dev/null --max-time 1 "http://127.0.0.1:$PORT/api/state" 2>/dev/null && DASH_UP=1 && break
     sleep 0.5
   done
   return 0
@@ -169,12 +151,11 @@ case "${1:-}" in
     render
     ;;
   start)
-    remove_old_poller
     link
     dashboard_start
     echo
     if [[ "${DASH_UP:-}" == "1" ]]; then
-      echo "dashboard on http://localhost:$PORT — paste a Slack thread link to start a run."
+      echo "server on http://localhost:$PORT — open the Bridge app (npm run app builds it)."
     else
       echo "loaded $DASH_LABEL — but nothing is answering on port $PORT yet."
       echo "  check:  tail $PROJ/logs/dashboard.err.log"
@@ -185,17 +166,14 @@ case "${1:-}" in
     ;;
   stop)
     dashboard_stop
-    remove_old_poller
     echo "dashboard stopped."
     ;;
   uninstall)
     # Only remove it if it's a symlink — never delete a real directory.
     [[ -L "$SKILL_DST" ]] && rm "$SKILL_DST" && echo "unlinked $SKILL_DST"
-    remove_old_poller
     echo "done — project files untouched at $PROJ"
     ;;
   "")
-    remove_old_poller
     link
     echo
     echo "next:"

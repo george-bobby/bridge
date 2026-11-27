@@ -82,36 +82,9 @@ function write(all) {
   fs.renameSync(tmp, FILE);
 }
 
-/**
- * Once, for a projects.json from before Default: the project that was marked
- * `default` owned the original `orchestrator` chat. Hand that chat to the
- * project (as `orchestrator-<id>`) so its history stays with its repo, and
- * let Default start a fresh one. Then drop the flag.
- */
-function migrateDefault(all) {
-  const old = all.find((p) => p.default);
-  if (!old) return all;
-  const runs = path.join(env.dataDir, "runs");
-  const from = path.join(runs, "orchestrator.json");
-  const to = path.join(runs, `orchestrator-${old.id}.json`);
-  try {
-    const run = JSON.parse(fs.readFileSync(from, "utf8"));
-    // Default's orchestrator may have tagged it already; the flag says it predates Default.
-    if (!fs.existsSync(to) && (!run.project || run.project === old.id || run.project === DEFAULT)) {
-      fs.writeFileSync(to, JSON.stringify({ ...run, runId: `orchestrator-${old.id}`, project: old.id }));
-      fs.unlinkSync(from);
-    }
-  } catch {
-    // No orchestrator chat yet, or it already moved.
-  }
-  const next = all.map(({ default: _, ...p }) => p);
-  write(next);
-  return next;
-}
-
 /** Real projects (git checkouts), in sidebar order. Seeds one on first use. */
 function list(fallbackRepo = "") {
-  let all = migrateDefault(read());
+  let all = read();
   if (!all.length) {
     const repo = env.targetRepo || fallbackRepo;
     if (repo) {
@@ -123,13 +96,10 @@ function list(fallbackRepo = "") {
 }
 
 /** Default first, then every project: what the sidebar and pickers show. */
-const withRoot = (fallbackRepo = "") => [rootProject(), ...list(fallbackRepo).map(({ default: _, ...p }) => p)];
+const withRoot = (fallbackRepo = "") => [rootProject(), ...list(fallbackRepo)];
 
 function get(id) {
-  if (id === DEFAULT) {
-    list(); // runs the one-time migration before anyone touches Default's orchestrator
-    return rootProject();
-  }
+  if (id === DEFAULT) return rootProject();
   return list().find((p) => p.id === id) || null;
 }
 

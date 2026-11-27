@@ -72,18 +72,22 @@ const chatFor = (threadTs) => {
   const id = store.safeId(threadTs);
   return id ? store.loadRun(id) : null;
 };
+const chatIdFor = (threadTs) => {
+  const id = store.safeId(threadTs);
+  return id && store.runStamp(id) ? id : "";
+};
 
 /** Items still waiting on you: not dismissed, and no chat has been started on the thread. */
 function open() {
   return read()
-    .items.filter((i) => i.state === "new" && !chatFor(i.threadTs))
+    .items.filter((i) => i.state === "new" && !chatIdFor(i.threadTs))
     .sort((a, b) => num(b.ts) - num(a.ts));
 }
 
 function all() {
   return read().items.map((i) => {
-    const run = i.state === "new" && chatFor(i.threadTs);
-    return run ? { ...i, state: "started", runId: run.runId } : i;
+    const runId = i.state === "new" && chatIdFor(i.threadTs);
+    return runId ? { ...i, state: "started", runId } : i;
   });
 }
 
@@ -146,11 +150,11 @@ function prune(s) {
   const cutoff = now() - KEEP_CLOSED_DAYS * 86400;
   // Started for good once a chat exists, so deleting that chat later doesn't bring the item back.
   for (const i of s.items) {
-    const run = i.state === "new" && chatFor(i.threadTs);
-    if (run) Object.assign(i, { state: "started", runId: run.runId });
+    const runId = i.state === "new" && chatIdFor(i.threadTs);
+    if (runId) Object.assign(i, { state: "started", runId });
   }
   s.items = s.items.filter((i) => i.state === "new" || i.at > cutoff).slice(-MAX_ITEMS);
-  for (const id of Object.keys(s.threadMarks)) if (!store.loadRun(id)) delete s.threadMarks[id];
+  for (const id of Object.keys(s.threadMarks)) if (!store.runStamp(id)) delete s.threadMarks[id];
 }
 
 /* ------------------------------------------------------------ reading */
@@ -206,13 +210,15 @@ async function readChannels(marks, me, channels, errors) {
  */
 async function readThreads(marks, errors) {
   const cutoff = now() - SYNC_DAYS * 86400;
-  const runs = store
+  const runs = [];
+  for (const r of store
     .listRunSummaries()
-    .filter((r) => (r.updatedAt || 0) > cutoff)
-    .map((r) => store.loadRun(r.runId))
-    .filter((r) => r && r.channelId && r.threadTs && r.kind !== "orchestrator")
-    .sort((a, b) => (marks.threadSyncAt[a.runId] || 0) - (marks.threadSyncAt[b.runId] || 0))
-    .slice(0, SYNC_THREADS);
+    .filter((r) => (r.updatedAt || 0) > cutoff && r.channelId && r.kind !== "orchestrator")
+    .sort((a, b) => (marks.threadSyncAt[a.runId] || 0) - (marks.threadSyncAt[b.runId] || 0))) {
+    if (runs.length >= SYNC_THREADS) break;
+    const run = store.loadRun(r.runId);
+    if (run && run.channelId && run.threadTs && run.kind !== "orchestrator") runs.push(run);
+  }
   const out = [];
   for (const run of runs) {
     marks.threadSyncAt[run.runId] = Date.now();

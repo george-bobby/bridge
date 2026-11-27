@@ -115,7 +115,7 @@ async function spawnTask(title, brief, extra = {}) {
 test.before(async () => {
   makeRepo();
   fs.mkdirSync(DATA, { recursive: true });
-  fs.writeFileSync(path.join(DATA, "config.json"), JSON.stringify({ harness: { maxWorkers: 2, maxPerRepo: 2, relay: true, mode: "normal" } }));
+  fs.writeFileSync(path.join(DATA, "config.json"), JSON.stringify({ harness: { relay: true, mode: "normal" } }));
   await startServer();
 });
 test.after(async () => {
@@ -267,6 +267,21 @@ test("a stop you ask for ends the turn as stopped, not as an error", async () =>
   const m = (await api("GET", `/api/runs/${t.taskId}`)).run.messages.filter((x) => x.role === "assistant").pop();
   assert.equal(m.state, "stopped");
   assert.equal(m.error, undefined);
+});
+
+test("a turn's late close (a tool's orphan held stdout) doesn't end the next turn", async () => {
+  const t = await spawnTask("orphan", "stub:orphan=7\nstub:report=ready-for-review");
+  await waitFor(idle(t.taskId), 12000, "first turn ended by its exit");
+  assert.equal((await api("POST", `/api/runs/${t.taskId}/followup`, { text: "stub:stall=6" })).ok, true);
+  await new Promise((r) => setTimeout(r, 3500));
+  assert.ok((await api("GET", "/api/state")).jobs.running.includes(t.taskId), "the second turn is still running after the first one's close");
+  await waitFor(idle(t.taskId), 15000, "second turn ends");
+});
+
+test("bridge spawn --repo resolves a relative path from where it's run", async () => {
+  const r = spawnSync(process.execPath, [path.join(ROOT, "bin", "bridge"), "spawn", "--repo", ".", "--title", "relative", "--brief", "x", "--no-start"], { env: ENV, cwd: REPO, encoding: "utf8" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(meta(r.stdout.split(/\s/)[0]).repo, REPO);
 });
 
 test("a permission ask reaches the dashboard and the answer reaches the worker", async () => {
@@ -426,7 +441,7 @@ test("workspaces: a worktree from any branch, or the main checkout, which cleanu
   git(["branch", "-D", "feature"]);
 });
 
-test("no cap: every task starts at once, even past an old saved maxWorkers", async () => {
+test("no cap: every task starts at once", async () => {
   const a = await spawnTask("cap a", "stub:stall=1\nstub:report=ready-for-review");
   const b = await spawnTask("cap b", "stub:stall=1\nstub:report=ready-for-review");
   const c = await spawnTask("cap c", "stub:report=ready-for-review");
@@ -565,7 +580,7 @@ test("restart: a worker lost mid-turn is reported and resumable; reports written
   await waitFor(statusIs(lost.taskId, "ready-for-review"), 15000, "resumed → report");
 });
 
-test("deleting a chat clears its to-dos and decisions; chats deleted before that heal on restart", async () => {
+test("deleting a chat clears its to-dos and decisions", async () => {
   const mine = async (id) => {
     const i = await api("GET", "/api/inbox");
     return [...i.decisions, ...i.todos].filter((x) => x.taskId === id);
@@ -585,10 +600,7 @@ test("deleting a chat clears its to-dos and decisions; chats deleted before that
   assert.ok(fs.existsSync(done.worktree), "worktree left for bridge cleanup");
   assert.ok(!(await api("GET", "/api/tasks")).tasks.some((t) => t.id === done.taskId), "gone from bridge status");
 
-  // The old server only removed the chat file; the next start closes the rest.
-  await stopServer();
-  fs.unlinkSync(path.join(DATA, "runs", `${asking.taskId}.json`));
-  await startServer();
+  assert.equal((await api("DELETE", `/api/runs/${asking.taskId}`)).ok, true);
   assert.deepEqual(await mine(asking.taskId), []);
   assert.equal(meta(asking.taskId).status, "deleted");
 });

@@ -239,7 +239,7 @@ async function claudePlugins({ refresh = false } = {}) {
 /** Install, uninstall, enable or disable one of Claude Code's plugins. */
 async function claudePlugin(action, id) {
   if (!["install", "uninstall", "enable", "disable"].includes(action)) throw new Error(`unknown action: ${action}`);
-  if (!/^[A-Za-z0-9._@/-]+$/.test(String(id || ""))) throw new Error("bad plugin id");
+  if (!/^[A-Za-z0-9][A-Za-z0-9._@/-]*$/.test(String(id || ""))) throw new Error("bad plugin id");
   if (env.demo) return { ok: true, demo: true };
   const args = ["plugin", action, id];
   if (action === "install") args.push("--scope", "user");

@@ -156,7 +156,8 @@ enum API {
     @discardableResult
     static func delete(_ path: String) async throws -> JSON { try await request("DELETE", path) }
 
-    static func q(_ s: String) -> String { s.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? s }
+    static func q(_ s: String) -> String { s.addingPercentEncoding(withAllowedCharacters: unreserved) ?? s }
+    private static let unreserved = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
 }
 
 // MARK: - Server-sent events
@@ -252,11 +253,6 @@ enum Fmt {
         return v
     }
 
-    static func money(_ n: Double) -> String {
-        if n == 0 { return "$0" }
-        return n < 1 ? String(format: "$%.2f", n) : String(format: "$%.2f", n)
-    }
-
     static func tokens(_ n: Int) -> String {
         let short = { (v: Double, u: String) in (v >= 100 || v.rounded() == v ? String(format: "%.0f", v) : String(format: "%.1f", v)) + u }
         return n >= 1_000_000 ? short(Double(n) / 1_000_000, "M") : n >= 1000 ? short(Double(n) / 1000, "k") : "\(n)"
@@ -284,8 +280,10 @@ enum Fmt {
     }
 }
 
+func isWebLink(_ u: URL) -> Bool { ["http", "https", "mailto"].contains(u.scheme?.lowercased() ?? "") }
+
 func openURL(_ s: String) {
-    if let u = URL(string: s), !s.isEmpty { NSWorkspace.shared.open(u) }
+    if let u = URL(string: s), isWebLink(u) { NSWorkspace.shared.open(u) }
 }
 
 func copyToPasteboard(_ s: String) {

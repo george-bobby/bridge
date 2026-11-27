@@ -64,6 +64,7 @@ const tasks = require("./tasks");
 const memory = require("./memory");
 const skills = require("./skill");
 const roster = require("./roster");
+const commonRules = require("./rules");
 
 const ROOT = path.join(__dirname, "..");
 const USER = env.slackUserName;
@@ -197,7 +198,7 @@ const roleOf = (run) => (run && run.kind === "orchestrator" ? "orchestrator" : r
  * start is never affected by it. See server/policy.js for what it decides.
  */
 function guardSettings() {
-  const cmd = `${JSON.stringify(process.execPath)} ${JSON.stringify(path.join(ROOT, "hooks", "guard.js"))}`;
+  const cmd = `${shellQuote(process.execPath)} ${shellQuote(path.join(ROOT, "hooks", "guard.js"))}`;
   return JSON.stringify({ hooks: { PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: cmd, timeout: 10 }] }] } });
 }
 
@@ -230,6 +231,7 @@ function fill(text, values) {
 function systemPrompt(run, config) {
   const role = roleOf(run);
   const read = (f) => fs.readFileSync(path.join(ROOT, "prompts", f), "utf8");
+  const house = fill(commonRules.block(), { USER, BRIDGE });
   if (role === "orchestrator") {
     const project = run.project && projects.get(run.project);
     const base = fill(read("orchestrator.md"), {
@@ -238,7 +240,7 @@ function systemPrompt(run, config) {
       DATA: env.dataDir,
       REPO: project ? project.path : resolveWorkdir(config, null),
     });
-    return `${base}\n\n${orchestratorRoster(run)}\n`;
+    return `${base}\n\n${house}${orchestratorRoster(run)}\n`;
   }
   const p = tasks.paths(run.runId);
   const meta = tasks.readMeta(run.runId) || {};
@@ -257,7 +259,7 @@ function systemPrompt(run, config) {
           `- When you create the worktree, record it: \`${path.join(ROOT, "scripts", "emit.sh")} ${run.runId} build "<one line>" worktree=<abs path> branch=<name>\``,
           "- The pipeline's closing JSON verdict is still required, after the report.",
         ].join("\n");
-  return fill(read("worker.md"), { USER, BRIDGE, TASK_ID: run.runId, REPORT: p.report, BRIEF: p.brief, WHERE: where });
+  return `${fill(read("worker.md"), { USER, BRIDGE, TASK_ID: run.runId, REPORT: p.report, BRIEF: p.brief, WHERE: where }).trimEnd()}\n\n${house}`;
 }
 
 /* ------------------------------------------------------- orchestrator roster */
@@ -468,7 +470,7 @@ function launch(run, { prompt: ask, kind, config, label }) {
   // Mint the chat's Claude session id on Claude's first turn here; reuse it
   // after. Turns other agents ran never made a Claude session to resume.
   const agentHere = opts.agent || "claude";
-  const claudeBefore = (run.messages || []).some((m) => m.role === "assistant" && (m.agent || "claude") === "claude" && (m.state === "done" || m.state === "stopped" || m.turns > 0));
+  const claudeBefore = (run.messages || []).some((m) => m.role === "assistant" && m.agent === "claude" && (m.state === "done" || m.state === "stopped" || m.turns > 0));
   const fresh = agentHere === "claude" && (!run.sessionId || !claudeBefore);
   if (fresh) run.sessionId = crypto.randomUUID();
 
@@ -581,26 +583,7 @@ function launch(run, { prompt: ask, kind, config, label }) {
   // `#!/usr/bin/env node` can land on a version-manager shim (mise), and the
   // mise shim is SIGKILLed on a long argv like the appended system prompt.
   const [bin, argv] = env.claudeBin.endsWith(".js") ? [process.execPath, [env.claudeBin, ...args]] : [env.claudeBin, args];
-  const child = spawn(bin, argv, {
-    cwd: workdir,
-    stdio: ["pipe", "pipe", "pipe"],
-    env: {
-      ...process.env,
-      // `claude` and uvx (which some MCP servers are spawned through) live outside
-      // launchd's default PATH — see EXTRA_PATH in .env.
-      PATH: `${env.extraPath}:${process.env.PATH || "/usr/bin:/bin"}`,
-      BRIDGE_RUNNER: kind,
-      BRIDGE_RUN_ID: run.runId,
-      // What bin/bridge and the guard hook key on. BRIDGE_GUARD tells the pipeline
-      // skill that outward writes are already gated on the exact payload.
-      BRIDGE_ROLE: role,
-      BRIDGE_TASK_ID: run.runId,
-      BRIDGE_REPORT: role === "orchestrator" ? "" : tasks.paths(run.runId).report,
-      BRIDGE_GUARD: "1",
-      BRIDGE_URL: `http://127.0.0.1:${env.port}`,
-      BRIDGE_DATA_DIR: env.dataDir,
-    },
-  });
+  const child = spawn(bin, argv, { cwd: workdir, stdio: ["pipe", "pipe", "pipe"], env: sessionEnv(run, kind, role) });
 
   const reportBefore = role === "orchestrator" ? null : tasks.readReport(run.runId);
   running.set(run.runId, {
@@ -642,9 +625,13 @@ function sessionEnv(run, kind, role) {
   delete base.ACP_BACKEND;
   return {
     ...base,
+    // `claude` and uvx (which some MCP servers are spawned through) live outside
+    // launchd's default PATH — see EXTRA_PATH in .env.
     PATH: `${env.extraPath}:${process.env.PATH || "/usr/bin:/bin"}`,
     BRIDGE_RUNNER: kind,
     BRIDGE_RUN_ID: run.runId,
+    // What bin/bridge and the guard hook key on. BRIDGE_GUARD tells the pipeline
+    // skill that outward writes are already gated on the exact payload.
     BRIDGE_ROLE: role,
     BRIDGE_TASK_ID: run.runId,
     BRIDGE_REPORT: role === "orchestrator" ? "" : tasks.paths(run.runId).report,
@@ -810,7 +797,7 @@ function compact(runId, { config, instructions = "" }) {
   const agent = opts.agent || "claude";
   const done = (run.messages || []).filter((m) => m.role === "assistant" && m.kind !== "compact" && (m.state === "done" || m.state === "stopped"));
   if (!done.length) throw new Error("nothing to compact yet");
-  const last = agents.agentOf(done[done.length - 1]);
+  const last = done[done.length - 1].agent;
   const extra = String(instructions || "").replace(/\s+/g, " ").trim().slice(0, 500);
   if (agent === "claude" && last === "claude" && run.sessionId) {
     const userMsg = store.appendMessage(run, { role: "user", text: `/compact${extra ? ` ${extra}` : ""}` });
@@ -858,7 +845,7 @@ function clear(runId) {
   return run;
 }
 
-/** Take the next queued follow-up for a chat, if any (server/watch.js drains). */
+/** Take the next queued follow-up for a chat, if any (server/harness.js drains). */
 function takePending(runId) {
   const q = pending.get(runId);
   if (!q || !q.length) return null;
@@ -1444,8 +1431,8 @@ function wire(child, runId, msgId, kind) {
 
   // Hung off the job record so answerAsk() — which is called from an HTTP route
   // with only a runId — can reach this closure's `patch`/`push`/`child`.
-  const job = running.get(runId);
-  if (job) job.settle = settle;
+  const owner = running.get(runId);
+  if (owner) owner.settle = settle;
 
   let compacted = null;
   function handle(ev) {
@@ -1470,10 +1457,6 @@ function wire(child, runId, msgId, kind) {
       return;
     }
 
-    // The CLI's own live estimate of the thinking block in flight. It is the
-    // only per-block token number anybody actually publishes, so it beats the
-    // apportioned guess — and it ticks *while* the model thinks, which is what
-    // makes the counter move instead of jumping at the end.
     if (ev.type === "system" && ev.subtype === "init" && ev.bridgeAgent && ev.session_id) {
       commit((m, run) => {
         run.agentSessions = { ...(run.agentSessions || {}), [ev.bridgeAgent]: ev.session_id };
@@ -1488,6 +1471,10 @@ function wire(child, runId, msgId, kind) {
       });
       return;
     }
+    // The CLI's own live estimate of the thinking block in flight. It is the
+    // only per-block token number anybody actually publishes, so it beats the
+    // apportioned guess — and it ticks *while* the model thinks, which is what
+    // makes the counter move instead of jumping at the end.
     if (ev.type === "system" && ev.subtype === "thinking_tokens") {
       const i = [...openBlock.values()].find((n) => (stepAt(n) || {}).kind === "thinking");
       if (i === undefined) return;
@@ -1676,7 +1663,7 @@ function wire(child, runId, msgId, kind) {
 
   const finish = (why) => {
     const job = running.get(runId);
-    if (!job) return;
+    if (!job || job !== owner) return;
     running.delete(runId);
     // Told after the run file is settled (below), via setImmediate, so the
     // watcher reads the final state.
@@ -1740,11 +1727,10 @@ function wire(child, runId, msgId, kind) {
   };
 
   // A stop you asked for is "stopped", not a crash with SIGTERM's exit code.
-  const end = (code) => finish((running.get(runId) || {}).stopped ? "stopped" : code === 0 ? "closed" : `exit ${code}`);
+  const end = (code) => finish(owner && owner.stopped ? "stopped" : code === 0 ? "closed" : `exit ${code}`);
   child.on("close", end);
   // A tool's subprocess that inherited the session's stdout keeps the pipe,
   // and so `close`, open after the session itself has exited.
-  const owner = running.get(runId);
   child.on("exit", (code) => setTimeout(() => running.get(runId) === owner && end(code), 5000).unref());
   child.on("error", (err) => {
     stderr += String(err.message || err);
@@ -1886,16 +1872,10 @@ function stop(runId) {
   return true;
 }
 
-/** Stop with no process behind it: a queued task, or a chat whose file still
- *  says "running" after its process died. Settle it so Stop always ends it. */
+/** Stop with no process behind it: a chat whose file still says "running"
+ *  after its process died. Settle it so Stop always ends it. */
 function settleStopped(runId) {
   let changed = false;
-  const meta = tasks.readMeta(runId);
-  if (meta && meta.status === "queued") {
-    tasks.writeMeta(runId, { status: "stopped" });
-    tasks.appendEvent({ taskId: runId, name: "stopped", text: "stopped from the dashboard before it started" });
-    changed = true;
-  }
   const run = store.loadRun(runId);
   if (run) {
     let dirty = false;
@@ -2087,14 +2067,11 @@ MEMORY>>>`;
       },
       (err, stdout, stderr) => {
         if (err && !stdout) return reject(new Error(String(stderr || err.message).trim().slice(-400) || "claude failed"));
-        let result = String(stdout || "");
-        // --output-format json wraps the reply; older CLIs print it bare.
+        // --output-format json wraps the reply.
+        let result = "";
         try {
-          const env0 = JSON.parse(result);
-          if (env0 && typeof env0.result === "string") result = env0.result;
-        } catch {
-          /* bare output */
-        }
+          result = String(JSON.parse(stdout).result || "");
+        } catch {}
         // The file comes back between markers rather than inside the JSON: a
         // memory is multi-line prose full of quotes and backticks, and asking a
         // model to escape all of that into a JSON string reliably fails on the

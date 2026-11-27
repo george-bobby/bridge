@@ -7,12 +7,13 @@ import SwiftUI
 // save bar. Secrets are write-only: the server only says whether one is set.
 
 enum SettingsPane: String, CaseIterable, Identifiable {
-    case general, agents, mcp, integrations, projects, notifications, advanced
+    case general, agents, rules, mcp, integrations, projects, notifications, advanced
     var id: String { rawValue }
     var label: String {
         switch self {
         case .general: return "General"
         case .agents: return "Agents"
+        case .rules: return "Rules"
         case .mcp: return "Customize"
         case .integrations: return "Integrations"
         case .projects: return "Projects"
@@ -24,6 +25,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         switch self {
         case .general: return "gearshape"
         case .agents: return "cpu"
+        case .rules: return "checklist"
         case .mcp: return "puzzlepiece.extension"
         case .integrations: return "square.stack.3d.up"
         case .projects: return "folder"
@@ -35,6 +37,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         switch self {
         case .general: return "The server, how outcomes reach you, and what the Slack pipeline may do."
         case .agents: return "The agents on this Mac, what a new session starts with, and the skill it opens with."
+        case .rules: return "House rules every session follows, in every repo: added to each worker's and orchestrator's instructions."
         case .mcp: return "What each agent loads: MCP servers, skills and plugins. Changes go into the agent's own folders and config."
         case .integrations: return "Connect your tools. Bridge works out who you are and which repo from each connection; nothing else to type. Keys are stored in .env and never shown again."
         case .projects: return "Default and your repositories, each with its own orchestrator. Git settings come from each project's own checkout."
@@ -177,6 +180,7 @@ struct SettingsView: View {
         switch p {
         case .general: GeneralSettings(q: q)
         case .agents: AgentSettings(env: env, q: q)
+        case .rules: CommonRulesSettings(q: q)
         case .mcp: CustomizeSettings(q: q)
         case .integrations: IntegrationSettings(env: env, q: q)
         case .projects: ProjectSettings(env: env, q: q)
@@ -563,11 +567,6 @@ struct GeneralSettings: View {
                         Button("Restart") { Task { await model.restartServer() } }.buttonStyle(LButton())
                     }
                 }
-                if Prefs.hit(q, "legacy web ui browser") {
-                    SRow(title: "Legacy web UI", detail: "The original dashboard, in your browser") {
-                        Button { openURL(API.base.absoluteString) } label: { Label("Open", systemImage: "arrow.up.right") }.buttonStyle(LButton())
-                    }
-                }
             }
             SSection(title: "Inbox", detail: "How the orchestrator hears back from sessions it started") {
                 if Prefs.hit(q, "relay mode normal quiet away inbox") {
@@ -679,6 +678,64 @@ struct OpeningSkillSettings: View {
             // Claude's and the shared ones: the worker opens with a Claude skill.
             let names = out["skills"].array.filter { ["claude", "shared"].contains($0["agent"].string) }.map { $0["folder"].string }
             skills.v = Array(Set(names)).sorted()
+        }
+    }
+}
+
+/// House rules added to every session's instructions (server/rules.js):
+/// prompts/rules.md until edited here, then data/rules.md.
+struct CommonRulesSettings: View {
+    let q: String
+    @StateObject private var text = Box("")
+    @StateObject private var saved = Box("")
+    @StateObject private var custom = Box(false)
+    @StateObject private var loaded = Box(false)
+    @Environment(AppModel.self) var model
+
+    var dirty: Bool { text.v != saved.v }
+
+    var body: some View {
+        SSection(title: "Common rules", detail: "Markdown. {{USER}} becomes your name; a repo's own CLAUDE.md or AGENTS.md still applies on top. Clear it to turn the rules off") {
+            if Prefs.hit(q, "common rules house rules instructions prompt worktree rebase branch pr") { editor }
+        } trailing: {
+            actions
+        }
+        .task { apply(try? await API.get("/api/rules")) }
+    }
+
+    var editor: some View {
+        TextEditor(text: $text.v)
+            .font(T.mono(12))
+            .scrollContentBackground(.hidden)
+            .padding(12)
+            .frame(minHeight: 560)
+            .disabled(!loaded.v)
+            .opacity(loaded.v ? 1 : 0.5)
+    }
+
+    var actions: some View {
+        HStack(spacing: 8) {
+            if dirty { Button("Revert") { text.v = saved.v }.buttonStyle(LButton(small: true)) }
+            else if custom.v { Button("Reset to Default") { post(["reset": true], done: "Common rules reset") }.buttonStyle(LButton(small: true)) }
+            Button("Save") { post(["text": text.v], done: "Common rules saved") }
+                .buttonStyle(LButton(primary: true, small: true)).keyboardShortcut("s").disabled(!dirty)
+        }
+    }
+
+    func apply(_ j: JSON?) {
+        guard let j else { return }
+        text.v = j["text"].string
+        saved.v = text.v
+        custom.v = j["custom"].bool
+        loaded.v = true
+    }
+
+    func post(_ body: [String: Any], done: String) {
+        Task {
+            await model.act {
+                self.apply(try await API.post("/api/rules", body))
+                self.model.say(done)
+            }
         }
     }
 }

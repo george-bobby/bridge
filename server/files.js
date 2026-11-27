@@ -25,7 +25,8 @@ const git = (dir, args) =>
 function walk(dir) {
   const out = [];
   const queue = [""];
-  while (queue.length && out.length < MAX) {
+  let dirs = 0;
+  while (queue.length && out.length < MAX && dirs++ < MAX) {
     const rel = queue.shift();
     let entries = [];
     try {
@@ -67,6 +68,7 @@ async function list(dir) {
     }
   }
   const data = { root: dir, git: isGit, files, dirs: [...dirs].sort(), truncated: files.length >= MAX };
+  for (const [k, v] of cache) if (Date.now() - v.at >= TTL) cache.delete(k);
   cache.set(dir, { at: Date.now(), data });
   return data;
 }

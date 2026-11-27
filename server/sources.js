@@ -276,7 +276,7 @@ async function loadPorts() {
 async function getJson(url, headers, what) {
   const res = await fetch(url, { headers: { Accept: "application/json", ...headers }, signal: AbortSignal.timeout(20_000) });
   const out = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error((out.error && (out.error.message || out.error)) || out.message || `${what} answered ${res.status}`);
+  if (!res.ok) throw new Error((out.error && (out.error.message || (typeof out.error === "string" && out.error))) || out.message || `${what} answered ${res.status}`);
   return out;
 }
 
@@ -372,6 +372,7 @@ async function granolaNote(id) {
   if (env.demo) return require("./demo").granolaNote(id);
   if (!env.granolaApiKey) throw new Error("GRANOLA_API_KEY isn't set");
   if (!/^[A-Za-z0-9_-]+$/.test(String(id))) throw new Error("bad note id");
+  for (const [k, v] of cache) if (k.startsWith("granola:") && !v.inflight && !(v.data && Date.now() - v.at < TTL)) cache.delete(k);
   return cached(`granola:${id}`, async () => {
     const n = await getJson(`${GRANOLA}/notes/${id}`, granolaAuth(), "Granola");
     return {

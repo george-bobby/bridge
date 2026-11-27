@@ -216,7 +216,7 @@ function setMode(mode) {
 
 const LIMIT = /(usage limit|rate[ -]?limit(ed)?|limit reached|quota exceeded|credit balance is too low|out of (extra )?usage|5-hour limit|weekly limit)/i;
 
-function onJobEnd(e) {
+async function onJobEnd(e) {
   const { runId, role, why, result, stderr, reportHashBefore } = e;
 
   if (role === "orchestrator" || e.kind === "compact") {
@@ -229,14 +229,12 @@ function onJobEnd(e) {
     tasks.writeMeta(runId, { status: "stopped" });
     tasks.appendEvent({ taskId: runId, name: "stopped", text: "stopped from the dashboard" });
     bus.broadcast("inbox", inbox());
-    dispatch();
     return;
   }
 
   const said = `${(result && result.text) || ""}\n${stderr || ""}`;
   if (LIMIT.test(said) && (!result || result.failed || why !== "closed")) {
     outcome(runId, "usage-limit", { text: (said.match(new RegExp(`.{0,120}${LIMIT.source}.{0,120}`, "i")) || [said.trim().slice(-200)])[0] });
-    dispatch();
     return;
   }
 
@@ -251,9 +249,11 @@ function onJobEnd(e) {
     outcome(runId, "report", { parsed: r.parsed });
   } else if (!changedThisTurn) {
     const crashed = !result && why !== "closed";
+    const work = !crashed && !meta.imported && !r && (await hasWork(meta));
+    if (jobs.isRunning(runId)) return;
     if (crashed) {
       outcome(runId, "worker-gone", { text: `the session ended without a result (${why}). ${String(stderr || "").trim().split("\n").slice(-2).join(" ")}`.trim() });
-    } else if (meta.imported || r || !hasWork(meta)) {
+    } else if (!work) {
       // A turn that answered a question, or a follow-up on a chat that already
       // has a report, ends like any chat's: no nudge (a nudge is a whole extra
       // turn), no outcome. An imported chat never took on the report contract.
@@ -275,23 +275,17 @@ function onJobEnd(e) {
       outcome(runId, "idle-without-report", { text: "changed code but ended without a report, even after a nudge" });
     }
   }
-  dispatch();
 }
 
 /** Whether a task's checkout holds work worth a report: uncommitted changes or commits on its branch. */
-function hasWork(meta) {
+async function hasWork(meta) {
   const dir = meta.worktree;
   if (!dir || !fs.existsSync(dir)) return false;
-  const git = (args) => {
-    try {
-      return require("child_process").execFileSync("git", ["-C", dir, ...args], { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] }).trim();
-    } catch {
-      return "";
-    }
-  };
-  if (git(["status", "--porcelain"])) return true;
+  const git = (args) =>
+    new Promise((resolve) => require("child_process").execFile("git", ["-C", dir, ...args], { encoding: "utf8", timeout: 5000 }, (err, out) => resolve(err ? "" : String(out).trim())));
+  if (await git(["status", "--porcelain"])) return true;
   const base = meta.from || meta.base;
-  return !!base && Number(git(["rev-list", "--count", `${base}..HEAD`])) > 0;
+  return !!base && Number(await git(["rev-list", "--count", `${base}..HEAD`])) > 0;
 }
 
 /** Start one queued follow-up for a chat, if any. True when one started. */
@@ -348,26 +342,6 @@ function workingCount() {
     total++;
   }
   return { total };
-}
-
-/** Start tasks left queued (by an older capped build), oldest first. */
-function dispatch() {
-  const queued = tasks
-    .list()
-    .filter((m) => m.status === "queued")
-    .sort((a, b) => (a.queuedAt || a.createdAt) - (b.queuedAt || b.createdAt));
-  for (const m of queued) {
-    if (jobs.isRunning(m.id)) continue;
-    try {
-      if (m.kind === "slack") jobs.startPipeline(m.id, { config: store.readConfig() });
-      else jobs.startTask(m.id, { config: store.readConfig(), note: "Dequeued: a slot opened up." });
-      tasks.appendEvent({ taskId: m.id, name: "dequeued", text: "started from the queue" });
-    } catch (e) {
-      tasks.writeMeta(m.id, { status: "error" });
-      tasks.appendEvent({ taskId: m.id, name: "dispatch-failed", text: e.message });
-    }
-  }
-  bus.broadcast("runs", { runs: store.listRunSummaries() });
 }
 
 /* ----------------------------------------------------------------- spawn */
@@ -429,27 +403,22 @@ async function spawnTask({ repo, title, brief, branch, base = "", workspace = ""
  * same agent session on your next message. The folder is adopted, never
  * removed by cleanup. Importing the same chat again opens the first import.
  */
-function importChat({ agent, id, project = "", history = require("./history") }) {
+async function importChat({ agent, id, project = "", history = require("./history") }) {
   if (!history.AGENTS.includes(agent)) throw new Error(`unknown agent: ${agent}`);
   if (!id) throw new Error("which chat?");
-  const runs = store.listRunSessions();
-  const existing = history.known(runs).get(`${agent}:${id}`);
-  if (existing) return { taskId: existing, existing: true };
-  const chat = history.list({ agents: [agent], runs }).chats.find((c) => c.id === id) || {};
-  const t = history.read(agent, id);
+  const known = () => history.known(store.listRunSessions()).get(`${agent}:${id}`);
+  if (known()) return { taskId: known(), existing: true };
+  const opts = { agents: [agent], runs: store.listRunSessions() };
+  const [list, t] = await Promise.all([history.listAsync ? history.listAsync(opts) : history.list(opts), history.readAsync ? history.readAsync(agent, id) : history.read(agent, id)]);
+  const chat = list.chats.find((c) => c.id === id) || {};
   if (!t.messages.length) throw new Error("that chat has nothing to import");
   // Its session only makes sense in the folder it ran in: never carry it on elsewhere.
   if (!env.demo && (!t.cwd || !fs.existsSync(t.cwd))) throw new Error(`the folder this chat ran in is gone${t.cwd ? ` (${t.cwd})` : ""}, so it can't carry on`);
   const cwd = t.cwd;
-  const git = (args) => {
-    try {
-      return require("child_process").execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] }).trim();
-    } catch {
-      return "";
-    }
-  };
-  const branch = cwd ? git(["rev-parse", "--abbrev-ref", "HEAD"]) : "";
-  const common = cwd ? git(["rev-parse", "--path-format=absolute", "--git-common-dir"]) : "";
+  const git = (args) =>
+    new Promise((resolve) => require("child_process").execFile("git", ["-C", cwd, ...args], { encoding: "utf8", timeout: 5000 }, (err, out) => resolve(err ? "" : String(out).trim())));
+  const [branch, common] = cwd ? await Promise.all([git(["rev-parse", "--abbrev-ref", "HEAD"]), git(["rev-parse", "--path-format=absolute", "--git-common-dir"])]) : ["", ""];
+  if (known()) return { taskId: known(), existing: true };
   const repo = common ? path.dirname(common) : cwd;
   const label = { claude: "Claude Code", codex: "Codex", cursor: "Cursor", devin: "Devin" }[agent];
   const title = String(chat.title || (t.messages.find((m) => m.role === "user") || {}).text || `${label} chat`)
@@ -773,23 +742,13 @@ function brief({ since = "8h", orchestrator = "" } = {}) {
 
 /**
  * After a restart. Every child died with the old process, so a task still
- * marked `working` was lost mid-turn; a report written while nobody watched
- * is caught up on; queued tasks get their chance.
+ * marked `working` was lost mid-turn, and a report written while nobody
+ * watched is caught up on.
  */
 function recover() {
   ensureOrchestrator();
   for (const m of tasks.list()) {
-    if (m.status === "deleted" || m.archived) continue;
-    // Cleaned up before cleanup closed its Inbox items: heal it now.
-    if (m.status === "cleaned") {
-      closeInbox(m.id);
-      continue;
-    }
-    // A chat deleted before deleting closed its task: heal it now.
-    if (!store.loadRun(m.id)) {
-      discard(m.id);
-      continue;
-    }
+    if (GONE.has(m.status) || m.archived) continue;
     const r = tasks.readReport(m.id);
     if (r && r.hash !== m.reportHash) {
       tasks.writeMeta(m.id, { reportHash: r.hash, nudged: false });
@@ -810,7 +769,6 @@ function recover() {
       store.saveRun(run);
     }
   }
-  dispatch();
 }
 
 /* -------------------------------------------------------------- wiring */
@@ -832,13 +790,7 @@ function start() {
   if (started) return;
   started = true;
   fs.mkdirSync(tasks.DIR, { recursive: true });
-  jobs.events.on("end", (e) => {
-    try {
-      onJobEnd(e);
-    } catch (err) {
-      console.error("harness: job end handling failed:", err);
-    }
-  });
+  jobs.events.on("end", (e) => onJobEnd(e).catch((err) => console.error("harness: job end handling failed:", err)));
   recover();
   const tick = Number(process.env.BRIDGE_TICK_MS) || 30000;
   setInterval(() => {
@@ -870,7 +822,6 @@ module.exports = {
   brief,
   setMode,
   note,
-  dispatch,
   outcome,
   workingCount,
 };

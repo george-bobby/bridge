@@ -73,7 +73,7 @@ async function slack() {
   try {
     const s = require("./slack");
     const me = await s.status();
-    const u = me.userId ? await fetch(`https://slack.com/api/users.info?user=${me.userId}`, { headers: { Authorization: `Bearer ${env.slackUserToken}` }, signal: AbortSignal.timeout(10000) }).then((r) => r.json()) : {};
+    const u = me.userId ? await fetch(`https://slack.com/api/users.info?user=${encodeURIComponent(me.userId)}`, { headers: { Authorization: `Bearer ${env.slackUserToken}` }, signal: AbortSignal.timeout(10000) }).then((r) => r.json()) : {};
     const p = (u.user && u.user.profile) || {};
     return { userId: me.userId || "", name: p.real_name || p.display_name || me.user || "", team: me.team || "" };
   } catch {

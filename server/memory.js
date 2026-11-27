@@ -44,12 +44,8 @@ const ARCHIVE = ".archive";
  * `-Users-you-Development-repo--claude-worktrees-exp-379`: the slash and the
  * dot of `/.claude` both become dashes and collapse into a visible `--`.
  */
-function slugFor(workdir) {
-  return path.resolve(workdir).replace(/[^a-zA-Z0-9]/g, "-");
-}
-
 function dirFor(workdir) {
-  return path.join(PROJECTS, slugFor(workdir), "memory");
+  return path.join(PROJECTS, reads.slugFor(workdir), "memory");
 }
 
 /**
@@ -252,8 +248,9 @@ function addToIndex(text, { name, title, hook, section }) {
   const lines = text.split("\n");
   if (lines.some((l) => (l.match(ENTRY) || [, ""])[1] === name)) return text;
 
-  const entry = `- [${title}](${name})${hook ? ` — ${hook}` : ""}`;
-  const heading = String(section || "").trim();
+  const one = (s) => String(s || "").replace(/\s+/g, " ").trim();
+  const entry = `- [${one(title).replace(/[[\]]/g, "")}](${name})${one(hook) ? ` — ${one(hook)}` : ""}`;
+  const heading = one(section);
   const at = heading
     ? lines.findIndex((l) => /^#{1,6}\s/.test(l) && l.replace(/^#{1,6}\s*/, "").trim() === heading)
     : -1;
@@ -388,7 +385,8 @@ function archive(workdir, name) {
   const dir = dirFor(workdir);
   const into = path.join(dir, ARCHIVE);
   fs.mkdirSync(into, { recursive: true });
-  fs.renameSync(file, path.join(into, name));
+  const to = fs.existsSync(path.join(into, name)) ? name.replace(/\.md$/, `-${Date.now()}.md`) : name;
+  fs.renameSync(file, path.join(into, to));
   saveText(indexOf(dir), removeFromIndex(readIndex(dir), name));
   return { name, archivedAt: Math.floor(Date.now() / 1000) };
 }

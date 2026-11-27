@@ -284,7 +284,11 @@ struct SkillEditor: View {
                 .font(T.ui(11.5)).foregroundStyle(T.text3)
         }
         .task {
-            let out = (try? await API.get("/api/customize/skills/file?path=\(API.q(skill.file))&project=\(API.q(project))")) ?? .null
+            guard let out = try? await API.get("/api/customize/skills/file?path=\(API.q(skill.file))&project=\(API.q(project))") else {
+                if Task.isCancelled { return }
+                model.say("Couldn't read \(skill.name)'s SKILL.md", bad: true)
+                return close()
+            }
             text.v = out["text"].string
             saved.v = text.v
             loading.v = false

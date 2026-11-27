@@ -280,7 +280,7 @@ struct ImportSheet: View {
         let out = (try? await API.get("/api/history")) ?? .null
         chats.v = out["chats"].array.map(HistoryChat.init)
         counts.v = out["counts"]
-        sqlite.v = out["sqlite"].isNull ? true : out["sqlite"].bool
+        sqlite.v = out.isNull || out["sqlite"].bool
         loading.v = false
         await loadPreview()
     }

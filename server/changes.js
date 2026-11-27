@@ -84,6 +84,8 @@ async function diff(dir, file) {
   const out = await git(["diff", "HEAD", "--", rel], dir).catch(() => "");
   if (out.trim()) return out.slice(0, 400_000);
   try {
+    const st = fs.lstatSync(abs);
+    if (!st.isFile() || st.size > 4e6) return "";
     const text = fs.readFileSync(abs, "utf8").split("\n").slice(0, 2000);
     return `--- /dev/null\n+++ b/${rel}\n@@ -0,0 +1,${text.length} @@\n${text.map((l) => `+${l}`).join("\n")}`;
   } catch {
@@ -185,8 +187,8 @@ function shapeActivity(pr, inline, head = null) {
 
 /** A PR's review state, checks and comments, by URL. */
 async function activity(prUrl, { refresh = false } = {}) {
-  const m = String(prUrl || "").match(/^https:\/\/github\.com\/([^/\s]+)\/([^/\s]+)\/pull\/(\d+)/);
-  if (!m) return { pr: null };
+  const m = String(prUrl || "").match(/^https:\/\/github\.com\/([A-Za-z0-9-]+)\/([A-Za-z0-9_.-]+)\/pull\/(\d+)/);
+  if (!m || /^\.+$/.test(m[2])) return { pr: null };
   if (env.demo) return { pr: require("./demo").prActivity(prUrl) };
   const key = m[0];
   const hit = activityCache.get(key);
@@ -202,6 +204,7 @@ async function activity(prUrl, { refresh = false } = {}) {
       .catch(() => null),
   ]);
   const data = { pr: shapeActivity(JSON.parse(view), Array.isArray(inline) ? inline : [], head) };
+  for (const [k, v] of activityCache) if (Date.now() - v.at >= ACTIVITY_TTL) activityCache.delete(k);
   activityCache.set(key, { at: Date.now(), data });
   return data;
 }

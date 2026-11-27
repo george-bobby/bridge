@@ -10,8 +10,8 @@ bin/        bridge, the agents' tool for the harness (spawn, status, declare, ..
 data/       runtime state (gitignored; config.example.json is the template)
 docs/       Slack setup, its app manifest, screenshots
 hooks/      guard.js, the safety hook every session loads
-legacy/     the previous browser UI, still served at :4319
-prompts/    orchestrator.md and worker.md, the harness's instructions
+legacy/     the previous browser UI, served only with BRIDGE_LEGACY_WEB=1
+prompts/    orchestrator.md, worker.md and rules.md (Common rules), the harness's instructions
 scripts/    install.sh, build.sh, demo.js, lint.js, emit.sh (run narration), launchd.plist, icon.swift
 server/     the Node server (stdlib only): index.js routes; jobs (sessions), harness, tasks,
             watch (Slack), slack, sources (GitHub, Linear, ports), store, policy, memory, ...

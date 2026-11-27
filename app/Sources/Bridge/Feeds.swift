@@ -73,7 +73,7 @@ extension AppModel {
         if shown { h.remove(s.rawValue) } else { h.insert(s.rawValue) }
         withAnimation(M.snappy) { hiddenSources = h }
         UserDefaults.standard.set(h.sorted().joined(separator: ","), forKey: Sources.key)
-        if shown { Task { await load(s == .github ? "pulls" : s.rawValue) } }
+        if shown { Task { if s == .slack { await loadSlack() } else { await load(s == .github ? "pulls" : s.rawValue) } } }
     }
     var vercelDeployments: [JSON] { vercel["deployments"].array }
     var liveIncidents: [JSON] { incidents["incidents"].array.filter { ["live", "triage"].contains($0["category"].string) } }
