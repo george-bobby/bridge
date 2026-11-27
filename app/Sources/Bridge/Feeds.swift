@@ -68,6 +68,25 @@ enum Sources {
 
 extension AppModel {
     func sourceShown(_ s: SourceKind) -> Bool { !hiddenSources.contains(s.rawValue) }
+    /// In the sidebar and connected (or not loaded yet): ⌘K leaves the rest out.
+    func sourceLive(_ s: SourceKind) -> Bool {
+        guard sourceShown(s) else { return false }
+        let feed: JSON
+        switch s {
+        case .slack: feed = slack
+        case .linear: feed = linear
+        case .vercel: feed = vercel
+        case .incidents: feed = incidents
+        case .granola: feed = granola
+        case .github: return true
+        }
+        return feed["configured"].isNull || feed["configured"].bool
+    }
+    /// A page that isn't a source, or a source that's live.
+    func routeLive(_ r: Route) -> Bool {
+        guard let s = SourceKind.allCases.first(where: { $0.route == r }) else { return true }
+        return sourceLive(s)
+    }
     func setSource(_ s: SourceKind, shown: Bool) {
         var h = hiddenSources
         if shown { h.remove(s.rawValue) } else { h.insert(s.rawValue) }

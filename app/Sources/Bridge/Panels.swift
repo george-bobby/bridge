@@ -390,6 +390,8 @@ struct PaletteItem: Identifiable {
     var detail: String = ""
     var hint: String = ""
     var group: String = "Actions"
+    /// More words it's found by, not shown (a setting's search words).
+    var words: String = ""
     let run: () -> Void
 }
 
@@ -403,7 +405,7 @@ struct CommandPalette: View {
     @StateObject private var searching = Box(false)
     @FocusState private var focused: Bool
 
-    static let groups = ["Suggestions", "Actions", "Go to", "Sessions", "Pull requests", "Issues", "Transcripts"]
+    static let groups = ["Suggestions", "Actions", "Go to", "Settings", "Sessions", "Pull requests", "Issues", "Transcripts"]
 
     var body: some View {
         let items = results
@@ -420,7 +422,11 @@ struct CommandPalette: View {
             .padding(.top, 96)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .onAppear { focused = true }
+        .onAppear {
+            focused = true
+            // Dev aid: BRIDGE_SNAPSHOT_PALETTE_QUERY=theme snapshots a search.
+            if let q = ProcessInfo.processInfo.environment["BRIDGE_SNAPSHOT_PALETTE_QUERY"], ProcessInfo.processInfo.environment["BRIDGE_SNAPSHOT_DIR"] != nil { query.v = q }
+        }
         .onKeyPress(.downArrow) { move(1, items.count); return .handled }
         .onKeyPress(.upArrow) { move(-1, items.count); return .handled }
         .onKeyPress(.escape) { if query.v.isEmpty { close() } else { query.v = "" }; return .handled }
@@ -464,7 +470,7 @@ struct CommandPalette: View {
                         PaletteRow(item: it, query: query.v, selected: i == sel.v)
                             .onTapGesture { sel.v = i; pick(items) }
                             .onHover { if $0 { sel.v = i } }
-                            .id(i)
+                            .id(it.id)
                     }
                     if items.isEmpty { empty }
                 }
@@ -473,7 +479,7 @@ struct CommandPalette: View {
             .scrollIndicators(.never)
             .frame(maxHeight: 420)
             .fixedSize(horizontal: false, vertical: true)
-            .onChange(of: sel.v) { withAnimation(M.hover) { proxy.scrollTo(sel.v) } }
+            .onChange(of: sel.v) { if items.indices.contains(sel.v) { withAnimation(M.hover) { proxy.scrollTo(items[sel.v].id) } } }
         }
     }
 
@@ -536,7 +542,7 @@ struct CommandPalette: View {
         func sym(_ s: String, _ c: Color = T.text2) -> AnyView { AnyView(Image(systemName: s).font(.system(size: 12, weight: .medium)).foregroundStyle(c)) }
         var all: [PaletteItem] = [
             PaletteItem(id: "new", icon: sym("square.and.pencil"), title: "New task", hint: "⌘N", group: "Suggestions") { model.composeOpen = true },
-            PaletteItem(id: "import", icon: sym("square.and.arrow.down.on.square"), title: "Import a chat from Claude Code, Codex, Cursor or Devin…", hint: "⇧⌘I", group: "Suggestions") { model.openImport() },
+            PaletteItem(id: "import", icon: sym("square.and.arrow.down.on.square"), title: "Import chat", detail: "Claude Code, Codex, Cursor or Devin", hint: "⇧⌘I", group: "Suggestions") { model.openImport() },
             PaletteItem(id: "project", icon: sym("folder.badge.plus"), title: "Add a project…") { model.addProject() },
             PaletteItem(id: "refresh", icon: sym("arrow.clockwise"), title: "Refresh GitHub and Linear", hint: "⌘R") { Task { await model.loadSources(refresh: true) } },
         ]
@@ -548,14 +554,22 @@ struct CommandPalette: View {
             all.append(PaletteItem(id: "term-max", icon: sym("arrow.up.left.and.arrow.down.right"), title: "Maximize panel size") { ConsoleStore.shared.show(); ConsoleStore.shared.toggleMaximized() })
         }
         all.append(PaletteItem(id: "sidebar", icon: sym("sidebar.left"), title: "Toggle sidebar", hint: "⌘B") { model.toggleSidebar() })
-        for (i, n) in navOrder.enumerated() {
+        for (i, n) in navOrder.enumerated() where model.routeLive(n.route) {
             all.append(PaletteItem(id: "go-\(n.label)", icon: sym(n.icon), title: n.label, hint: i < 9 ? "⌘\(i + 1)" : "", group: "Go to") { model.navigate(n.route) })
         }
         all.append(PaletteItem(id: "go-settings", icon: sym("gearshape"), title: "Settings", hint: "⌘,", group: "Go to") { model.navigate(.settings) })
         all.append(PaletteItem(id: "board-view", icon: sym("rectangle.split.3x1"), title: "Sessions as a board", group: "Go to") { model.route = .board })
         all.append(PaletteItem(id: "list-view", icon: sym("list.bullet"), title: "Sessions as a list", group: "Go to") { model.showArchived = false; model.route = .sessions })
         all.append(PaletteItem(id: "archived-view", icon: sym("archivebox"), title: "Archived sessions", group: "Go to") { model.showArchived = true; model.route = .sessions })
+        for a in ["light", "dark", "system"] where a != model.appearance {
+            all.append(PaletteItem(id: "theme-\(a)", icon: sym(a == "light" ? "sun.max" : a == "dark" ? "moon" : "circle.lefthalf.filled"), title: "Theme: \(a.capitalized)", words: "appearance mode") { model.appearance = a })
+        }
         if case .session(let id) = model.route {
+            all.append(PaletteItem(id: "split", icon: sym("rectangle.split.2x1"), title: "Split right", hint: "⌘\\") { model.splitRight() })
+            all.append(PaletteItem(id: "details", icon: sym("sidebar.right"), title: "Toggle details", hint: "⌥⌘I") { model.toggleDetails() })
+            if let s = model.sessions.first(where: { $0.id == id }), !s.isOrchestrator {
+                all.append(PaletteItem(id: "pin", icon: sym(s.pinned ? "pin.slash" : "pin"), title: s.pinned ? "Unpin this chat" : "Pin this chat") { Task { await model.setPinned(id, !s.pinned) } })
+            }
             all.append(PaletteItem(id: "web", icon: sym("globe"), title: "New browser tab", hint: "⌘T") { model.openBrowser(id, url: "") })
             all.append(PaletteItem(id: "prev", icon: sym("chevron.up"), title: "Previous chat", hint: "⌥⌘↑") { model.stepChat(-1) })
             all.append(PaletteItem(id: "next", icon: sym("chevron.down"), title: "Next chat", hint: "⌥⌘↓") { model.stepChat(1) })
@@ -584,10 +598,16 @@ struct CommandPalette: View {
         for s in model.boardSessions {
             all.append(PaletteItem(id: "s-\(s.id)", icon: AnyView(SessionIcon(session: s, size: 13)), title: s.title, detail: [s.issueKey, s.snippet].filter { !$0.isEmpty }.joined(separator: " · "), group: "Sessions") { model.open(s.id) })
         }
-        for pr in model.openPulls + model.reviewPulls {
+        for pr in model.openPulls + model.reviewPulls where model.sourceLive(.github) {
             all.append(PaletteItem(id: "p-\(pr.url)", icon: AnyView(PRStateIcon(pr: pr)), title: pr.title, detail: "\(pr.repoName)#\(pr.number)", group: "Pull requests") { openURL(pr.url) })
         }
-        for i in model.issues where i.active {
+        for e in SettingEntry.all {
+            all.append(PaletteItem(id: "set-\(e.pane.rawValue)-\(e.title)", icon: sym(e.pane.icon), title: e.title, detail: "Settings › \(e.pane.label)", group: "Settings", words: e.words) { model.openSettings(e.pane, query: e.query) })
+        }
+        for p in SettingsPane.allCases {
+            all.append(PaletteItem(id: "set-\(p.rawValue)", icon: sym(p.icon), title: "\(p.label) settings", detail: p.blurb, group: "Settings") { model.openSettings(p) })
+        }
+        for i in model.issues where model.sourceLive(.linear) && i.active {
             all.append(PaletteItem(id: "i-\(i.key)", icon: AnyView(StatusIcon(kind: i.status, color: hexColor(i.stateColor), size: 13)), title: i.title, detail: i.key, group: "Issues") { openURL(i.url) })
         }
         let order = Dictionary(uniqueKeysWithValues: Self.groups.enumerated().map { ($1, $0) })
@@ -601,7 +621,7 @@ struct CommandPalette: View {
         }
         let words = q.split(separator: " ").map(String.init)
         let matched = all.filter { it in
-            let hay = "\(it.title) \(it.detail) \(it.group)".lowercased()
+            let hay = "\(it.title) \(it.detail) \(it.group) \(it.words)".lowercased()
             return words.allSatisfy { hay.contains($0) }
         }
         let seen = Set(matched.map(\.id))

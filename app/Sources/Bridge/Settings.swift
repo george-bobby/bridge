@@ -94,6 +94,56 @@ enum Prefs {
     static var placed: Set<String> { Set(connectionKeys) }
 }
 
+extension AppModel {
+    /// Settings on `pane` with its search set to `query` ("" clears a search left open).
+    func openSettings(_ pane: SettingsPane, query: String = "") {
+        settingsPane = pane.rawValue
+        settingsQuery = query.isEmpty ? " " : query
+        navigate(.settings)
+    }
+}
+
+/// A setting ⌘K can find: its pane, title, the words it's found by (its
+/// row's `Prefs.hit` words), and the Settings search that shows it on a pick.
+struct SettingEntry {
+    let pane: SettingsPane
+    let title: String
+    let words: String
+    let query: String
+
+    static let all: [SettingEntry] = [
+        .init(pane: .general, title: "Theme", words: "appearance theme light dark mode system color", query: "theme"),
+        .init(pane: .general, title: "Server status", words: "server status connected offline address", query: "server status"),
+        .init(pane: .general, title: "Restart the server", words: "restart server reload", query: "restart server"),
+        .init(pane: .general, title: "Relay mode", words: "relay mode normal quiet away inbox", query: "relay mode"),
+        .init(pane: .agents, title: "Installed agents", words: "agent installed version claude codex cursor devin", query: "agent installed"),
+        .init(pane: .agents, title: "Default agent", words: "default agent new sessions", query: "default agent"),
+        .init(pane: .agents, title: "Default model", words: "default model new sessions", query: "default model"),
+        .init(pane: .agents, title: "Default permissions and thinking", words: "default permission thinking effort mode", query: "default permission"),
+        .init(pane: .agents, title: "Opening skill", words: "opening skill worker skill fetch new session", query: "opening skill"),
+        .init(pane: .agents, title: "Relay outcomes to the orchestrator", words: "relay outcomes orchestrator workers", query: "relay outcomes"),
+        .init(pane: .agents, title: "Stalled after", words: "stalled silence minutes stall", query: "stalled"),
+        .init(pane: .rules, title: "Common rules", words: "common rules house rules instructions prompt worktree rebase branch pr", query: "common rules"),
+        .init(pane: .mcp, title: "MCP servers", words: "mcp server tools customize", query: ""),
+        .init(pane: .integrations, title: "GitHub", words: "github pull requests gh login checks", query: "github"),
+        .init(pane: .integrations, title: "Linear", words: "linear issues api key team tickets", query: "linear"),
+        .init(pane: .integrations, title: "Slack", words: "slack token mentions channels threads", query: "slack"),
+        .init(pane: .integrations, title: "Slack watch", words: "slack watch mentions mode off triage poll interval check every minutes watched channels", query: "slack watch"),
+        .init(pane: .integrations, title: "Slack pipeline", words: "slack pipeline works in model reply linear ticket bot review memories", query: "slack pipeline"),
+        .init(pane: .integrations, title: "Vercel", words: "vercel deployments token", query: "vercel"),
+        .init(pane: .integrations, title: "incident.io", words: "incident.io incidents api key", query: "incidents"),
+        .init(pane: .integrations, title: "Granola", words: "granola meeting notes api key", query: "granola"),
+        .init(pane: .projects, title: "Projects", words: "project repository default add", query: ""),
+        .init(pane: .notifications, title: "When a session needs you", words: "notify session needs you question ask", query: "notify ask"),
+        .init(pane: .notifications, title: "When a worker reports", words: "notify worker outcome finished blocked stalled review", query: "notify worker"),
+        .init(pane: .notifications, title: "When something new reaches you on Slack", words: "notify slack mention message", query: "notify slack"),
+        .init(pane: .notifications, title: "Dock badge", words: "dock badge count", query: "dock badge"),
+        .init(pane: .notifications, title: "Banners and sounds", words: "system notification settings sound banner", query: "sound banner"),
+        .init(pane: .advanced, title: ".env file", words: ".env file environment reveal", query: ".env"),
+        .init(pane: .advanced, title: "Rebuild and relaunch", words: "bridge source repository develop rebuild relaunch app build", query: "rebuild"),
+    ]
+}
+
 // MARK: - Page
 
 struct SettingsView: View {
@@ -128,6 +178,14 @@ struct SettingsView: View {
             if let q = ProcessInfo.processInfo.environment["BRIDGE_SNAPSHOT_SETTINGS_QUERY"], ProcessInfo.processInfo.environment["BRIDGE_SNAPSHOT_DIR"] != nil { query.v = q }
             Task { await env.load() }
         }
+        .onChange(of: model.settingsQuery, initial: true) { takeQuery() }
+    }
+
+    /// A search handed over by ⌘K: shown here, then cleared so the next one lands too.
+    func takeQuery() {
+        guard !model.settingsQuery.isEmpty else { return }
+        query.v = model.settingsQuery.trimmingCharacters(in: .whitespaces)
+        model.settingsQuery = ""
     }
 
     var nav: some View {
