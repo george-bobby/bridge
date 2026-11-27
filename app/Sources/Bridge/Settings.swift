@@ -13,7 +13,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         switch self {
         case .general: return "General"
         case .agents: return "Agents & models"
-        case .mcp: return "MCP servers"
+        case .mcp: return "Customize"
         case .integrations: return "Integrations"
         case .projects: return "Projects"
         case .notifications: return "Notifications"
@@ -35,7 +35,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         switch self {
         case .general: return "The server, how outcomes reach you, and what the Slack pipeline may do."
         case .agents: return "Which agent and model new sessions start with, and how many sessions run at once."
-        case .mcp: return "The tool servers each agent loads: add, edit, switch off and inspect them. Changes go into the agent's own config."
+        case .mcp: return "What each agent loads: MCP servers, skills and plugins. Changes go into the agent's own folders and config."
         case .integrations: return "Slack, GitHub, Linear, Vercel, incident.io and Granola, and which of them the sidebar shows. Tokens are stored in .env and never shown again."
         case .projects: return "The repositories in the sidebar, each with its own orchestrator."
         case .notifications: return "When Bridge interrupts you, on this Mac."
@@ -185,7 +185,7 @@ struct SettingsView: View {
         switch p {
         case .general: GeneralSettings(q: q)
         case .agents: AgentSettings(env: env, q: q)
-        case .mcp: MCPSettings(q: q)
+        case .mcp: CustomizeSettings(q: q)
         case .integrations: IntegrationSettings(env: env, q: q)
         case .projects: ProjectSettings(env: env, q: q)
         case .notifications: NotificationSettings(q: q)

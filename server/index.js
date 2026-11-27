@@ -628,6 +628,32 @@ async function handle(req, res) {
     }
   }
 
+  // --- Settings › Customize: skills and plugins (server/customize.js) ---
+  if (p === "/api/customize/skills" || p.startsWith("/api/customize/")) {
+    if (!sameOrigin(req)) return sendJson(res, 403, { ok: false, error: "cross-origin request refused" });
+    const customize = require("./customize");
+    try {
+      const body = req.method === "POST" ? JSON.parse((await readBody(req)) || "{}") : Object.fromEntries(url.searchParams);
+      const proj = body.project ? projects.get(String(body.project)) : null;
+      const repo = proj && !proj.root ? proj.path : "";
+      const ok = (extra) => sendJson(res, 200, { ok: true, ...extra });
+      if (req.method === "GET" && p === "/api/customize/skills") return ok(customize.listSkills(repo));
+      if (req.method === "GET" && p === "/api/customize/skills/file") return ok(customize.readSkill(body.path, repo));
+      if (req.method === "POST" && p === "/api/customize/skills/file") return ok(customize.writeSkill(body.path, body.text, repo));
+      if (req.method === "POST" && p === "/api/customize/skills") return ok(customize.createSkill({ ...body, repo }));
+      if (req.method === "POST" && p === "/api/customize/skills/delete") return ok(customize.deleteSkill(body.path, repo));
+      if (req.method === "GET" && p === "/api/customize/plugins") {
+        const refresh = url.searchParams.get("refresh") === "1";
+        const [claude, cursor] = await Promise.all([customize.claudePlugins({ refresh }), customize.cursorPlugins()]);
+        return ok({ claude, cursor });
+      }
+      if (req.method === "POST" && p === "/api/customize/plugins/claude") return ok(await customize.claudePlugin(String(body.action || ""), String(body.id || "")));
+      return sendJson(res, 404, { ok: false, error: `no customize route for ${req.method} ${p}` });
+    } catch (e) {
+      return sendJson(res, 400, { ok: false, error: String(e.message || e) });
+    }
+  }
+
   // --- projects: the repos in the sidebar, each with its own orchestrator ---
   if (p === "/api/projects" || p.startsWith("/api/projects/")) {
     if (!sameOrigin(req)) return sendJson(res, 403, { ok: false, error: "cross-origin request refused" });
