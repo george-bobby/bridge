@@ -355,6 +355,21 @@ final class AppModel {
     /// single chat; the focused one is the route's session and `chatTab`.
     var panes: [Pane] = [Pane(run: "")]
     var focusedPane = 0
+    /// The orchestrator pinned to the right of the chat page (`PinnedDock` in
+    /// Panes.swift): its run id, "" once unpinned; its share of the page's
+    /// width, and whether it's folded to a strip. All kept across launches.
+    var pinnedRun = UserDefaults.standard.string(forKey: "pin.run") ?? "orchestrator" {
+        didSet { UserDefaults.standard.set(pinnedRun, forKey: "pin.run") }
+    }
+    var pinnedShare: CGFloat = {
+        let v = UserDefaults.standard.double(forKey: "pin.share")
+        return v > 0 ? min(max(CGFloat(v), pinShareRange.lowerBound), pinShareRange.upperBound) : 0.35
+    }() {
+        didSet { UserDefaults.standard.set(Double(pinnedShare), forKey: "pin.share") }
+    }
+    var pinnedCollapsed = UserDefaults.standard.bool(forKey: "pin.collapsed") {
+        didSet { UserDefaults.standard.set(pinnedCollapsed, forKey: "pin.collapsed") }
+    }
     /// A session or tab is being dragged: panes show their drop zones.
     var paneDragActive = false
     /// The pane and edge a drag would land on, for the highlight.
@@ -501,7 +516,8 @@ final class AppModel {
     }
 
     func stepChat(_ delta: Int) {
-        let order = chatOrder
+        // Stepping chats never lands on the pinned orchestrator: it's already beside them.
+        let order = chatOrder.filter { $0 != pinnedRun || route == .session($0) }
         guard !order.isEmpty else { return }
         guard case .session(let id) = route, let i = order.firstIndex(of: id) else { return open(order[0]) }
         let j = i + delta
@@ -1209,6 +1225,12 @@ final class AppModel {
     // MARK: sessions
 
     func open(_ id: String) {
+        // The pinned orchestrator stays on the right: opening it from a chat
+        // page unfolds it there rather than taking over the focused pane.
+        if !travelling, id == pinnedRun, dockShown {
+            if pinnedCollapsed { withAnimation(M.snappy) { pinnedCollapsed = false } }
+            return
+        }
         placeInPanes(id)
         route = .session(id)
         guard openId != id else { return }
