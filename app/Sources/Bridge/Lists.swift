@@ -497,7 +497,7 @@ struct Card<Content: View>: View {
                 Text(title).font(T.ui(12.5, .medium)).foregroundStyle(T.text)
                 if let count { Text(verbatim: "\(count)").font(T.ui(12)).foregroundStyle(T.text3) }
                 Spacer()
-                if let more { Button(more.0, action: more.1).buttonStyle(.plain).font(T.ui(12)).foregroundStyle(T.text3) }
+                if let more { LinkButton(more.0, action: more.1) }
             }
             .padding(.horizontal, 20).frame(height: 46)
             Hairline()
@@ -627,7 +627,7 @@ struct BoardColumn: View {
                             .transition(.opacity.combined(with: .scale(scale: 0.96)))
                     }
                     if shown.count < sessions.count {
-                        Button("Show \(sessions.count - shown.count) more") { showAll.v = true }.buttonStyle(.plain).font(T.ui(12)).foregroundStyle(T.text3).padding(6)
+                        LinkButton("Show \(sessions.count - shown.count) more") { showAll.v = true }.padding(6)
                     }
                     if sessions.isEmpty {
                         RoundedRectangle(cornerRadius: 8).stroke(targeted.v ? T.accent.opacity(0.7) : T.line, style: StrokeStyle(lineWidth: 1, dash: [4, 3]))

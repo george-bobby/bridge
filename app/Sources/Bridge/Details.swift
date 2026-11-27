@@ -618,16 +618,7 @@ struct MiniButton: View {
     let icon: String
     let help: String
     let action: () -> Void
-    @StateObject private var hover = Box(false)
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: icon).font(.system(size: 10, weight: .medium)).foregroundStyle(hover.v ? T.text : T.text2)
-                .frame(width: 20, height: 20)
-                .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(hover.v ? T.selected : .clear))
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(Pressable(scale: 0.88)).help(help).hoverBox(hover)
-    }
+    var body: some View { IconButton(icon: icon, help: help, size: B.mini, action: action) }
 }
 
 // MARK: report
@@ -697,7 +688,7 @@ struct Callout: View {
                     .buttonStyle(LButton())
                     .help("Quote this in the composer to answer it")
                 Button { copyToPasteboard(text); model.say("Copied") } label: { Image(systemName: "doc.on.doc").font(.system(size: 11)) }
-                    .buttonStyle(LButton())
+                    .buttonStyle(LButton(square: true))
                     .help("Copy")
             }
             .padding(.top, 2)

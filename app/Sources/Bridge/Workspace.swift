@@ -122,7 +122,7 @@ struct SidebarFooter: View {
                 Text(model.connected ? "\(model.sessions.filter(model.isLive).count) running" : "Offline").font(T.ui(11.5)).foregroundStyle(T.text3)
                     .contentTransition(.numericText())
                 Spacer()
-                FooterButton(icon: "gauge.with.dots.needle.50percent", help: "Usage", on: model.route == .usage, fill: false) { model.route = .usage }
+                IconButton(icon: "gauge.with.dots.needle.50percent", help: "Usage", on: model.route == .usage) { model.route = .usage }
             }
             .padding(.horizontal, 4)
         }
@@ -161,25 +161,6 @@ struct OpenSettingsButton: View {
     }
 }
 
-struct FooterButton: View {
-    let icon: String
-    let help: String
-    let on: Bool
-    var fill = true
-    let action: () -> Void
-    @StateObject private var hover = Box(false)
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: on && fill ? icon + ".fill" : icon).font(.system(size: 13)).foregroundStyle(on ? T.accent : hover.v ? T.text : T.text2)
-                .frame(width: 28, height: 28)
-                .background(RoundedRectangle(cornerRadius: 6).fill(on ? T.sideSelected : hover.v ? T.sideHover : .clear))
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(Pressable(scale: 0.9))
-        .help(help)
-        .hoverBox(hover)
-    }
-}
 
 /// One repo in the sidebar: its live sessions, and its orchestrator as the
 /// sparkles button at the right end of the header. Drop a
@@ -203,17 +184,11 @@ struct ProjectSection: View {
                     .rotationEffect(.degrees(collapsed ? 0 : 90))
                 ProjectBadge(project: project)
                 Text(project.name).font(T.ui(13.5, .medium)).foregroundStyle(model.projectFilter == project.id ? T.text : T.text2).lineLimit(1)
-                if project.root { Text(project.shortPath).font(T.ui(10.5)).foregroundStyle(T.text3).lineLimit(1).help("Default sessions run in \(project.path), outside any project") }
                 Spacer(minLength: 4)
-                if hover.v {
-                    Button { model.openMemory(project.id) } label: { Image(systemName: "book.closed").font(.system(size: 10.5, weight: .medium)).foregroundStyle(T.text2) }
-                        .buttonStyle(.plain).help("\(project.name)'s memory")
-                    Button { model.compose(in: project.id) } label: { Image(systemName: "plus").font(.system(size: 10.5, weight: .semibold)).foregroundStyle(T.text2) }
-                        .buttonStyle(.plain).help("New task in \(project.name)")
-                } else if !sessions.isEmpty {
+                if !sessions.isEmpty {
                     Text(verbatim: "\(sessions.count)").font(T.ui(11.5)).foregroundStyle(T.text3)
                 }
-                ArchivedButton(project: project)
+                // New task, memory, archived chats and the rest are in the right-click menu.
                 OrchestratorButton(project: project)
             }
             .padding(.leading, 10).padding(.trailing, 3)
@@ -248,7 +223,7 @@ struct ProjectSection: View {
                             .transition(.opacity.combined(with: .move(edge: .leading)))
                     }
                     if sessions.count > 8 && !showAll.v {
-                        Button("Show \(sessions.count - 8) more") { withAnimation(M.snappy) { showAll.v = true } }.buttonStyle(.plain).font(T.ui(12)).foregroundStyle(T.text3).padding(.leading, 34).frame(height: 24)
+                        LinkButton("Show \(sessions.count - 8) more") { withAnimation(M.snappy) { showAll.v = true } }.padding(.leading, 34).frame(height: 24)
                     }
                 }
                 .padding(.leading, 12)
@@ -278,8 +253,8 @@ struct OrchestratorButton: View {
             if let s, model.isLive(s) { LiveIcon(size: 11) }
             else { Image(systemName: "sparkles").font(.system(size: 11.5, weight: .medium)).foregroundStyle(T.purple) }
         }
-        .frame(width: 24, height: 24)
-        .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(on ? T.sideSelected : hover.v ? T.hover : .clear))
+        .frame(width: B.small, height: B.small)
+        .background(RoundedRectangle(cornerRadius: B.radius(B.small), style: .continuous).fill(on ? T.sideSelected : hover.v ? T.hover : .clear))
         .overlay(alignment: .topTrailing) {
             if let s, s.unread && !on && !model.isLive(s) { Circle().fill(T.accent).frame(width: 6, height: 6).offset(x: -2, y: 2) }
         }
@@ -302,81 +277,53 @@ struct OrchestratorButton: View {
     }
 }
 
-/// A project's archived chats, beside its orchestrator in the header: opens
-/// Sessions › Archived scoped to the project. Hidden until something is archived there.
-struct ArchivedButton: View {
-    @Environment(AppModel.self) var model
-    let project: Project
-    @StateObject private var hover = Box(false)
-    var body: some View {
-        let count = model.archivedSessions.filter { $0.project == project.id }.count
-        let on = model.route == .sessions && model.showArchived && model.projectFilter == project.id
-        if count > 0 {
-            Image(systemName: "archivebox").font(.system(size: 11, weight: .medium)).foregroundStyle(T.text3)
-                .frame(width: 24, height: 24)
-                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(on ? T.sideSelected : hover.v ? T.hover : .clear))
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    withAnimation(M.snappy) {
-                        model.projectFilter = project.id
-                        model.showArchived = true
-                        model.route = .sessions
-                    }
-                }
-                .hoverBox(hover)
-                .help("\(count) archived in \(project.name)")
-        }
-    }
-}
-
+/// A project's right-click menu: everything its header doesn't show.
 struct ProjectMenu: View {
     @Environment(AppModel.self) var model
     let project: Project
     var body: some View {
         Section {
             Button { model.compose(in: project.id) } label: { Label("New Task in \(project.name)…", systemImage: "square.and.pencil") }
-            Button { model.openOrchestrator(project.id) } label: { Label("Open Orchestrator", systemImage: "sparkles") }
-            Button { model.openMemory(project.id) } label: { Label("Memory", systemImage: "book.closed") }
             Button { model.openImport(into: project.id) } label: { Label("Import a Chat…", systemImage: "square.and.arrow.down.on.square") }
+            Button { model.openOrchestrator(project.id) } label: { Label("Open Orchestrator", systemImage: "sparkles") }
         }
         Section {
+            Button { model.openMemory(project.id) } label: { Label("Memory", systemImage: "book.closed") }
+            let archived = model.archivedSessions.filter { $0.project == project.id }.count
+            Button {
+                withAnimation(M.snappy) {
+                    model.projectFilter = project.id
+                    model.showArchived = true
+                    model.route = .sessions
+                }
+            } label: { Label(archived == 0 ? "Archived Chats" : "Archived Chats (\(archived))", systemImage: "archivebox") }
+            .disabled(archived == 0)
             let only = model.projectFilter == project.id
             Button {
                 model.projectFilter = only ? nil : project.id
                 if model.route != .board && model.route != .sessions { model.navigate(.sessions) }
             } label: { Label(only ? "Show All Projects" : "Show Only \(project.name)", systemImage: only ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle") }
-            Button { model.projectFilter = project.id; model.navigate(.sessions) } label: { Label("View Sessions", systemImage: "rectangle.stack") }
+        }
+        if !project.root {
+            Section {
+                let i = model.projects.firstIndex(where: { $0.id == project.id }) ?? 0
+                let first = model.projects.first?.root == true ? 1 : 0
+                Button { Task { await model.moveProject(project.id, to: i - 1) } } label: { Label("Move Up", systemImage: "arrow.up") }
+                    .disabled(i <= first)
+                Button { Task { await model.moveProject(project.id, to: i + 1) } } label: { Label("Move Down", systemImage: "arrow.down") }
+                    .disabled(i >= model.projects.count - 1)
+            }
         }
         Section {
+            Button { model.renameProject(project) } label: { Label("Rename…", systemImage: "pencil") }
+            if project.root { Button { model.chooseRootFolder() } label: { Label("Change Folder…", systemImage: "folder.badge.gearshape") } }
             Button { NSWorkspace.shared.open(URL(fileURLWithPath: project.path)) } label: { Label("Reveal in Finder", systemImage: "folder") }
             Button { copyToPasteboard(project.path) } label: { Label("Copy Path", systemImage: "doc.on.doc") }
         }
-        if !project.root { realProjectItems }
-    }
-
-    @ViewBuilder var realProjectItems: some View {
-        Section {
-            let i = model.projects.firstIndex(where: { $0.id == project.id }) ?? 0
-            let first = model.projects.first?.root == true ? 1 : 0
-            Button { Task { await model.moveProject(project.id, to: i - 1) } } label: { Label("Move Up", systemImage: "arrow.up") }
-                .disabled(i <= first)
-            Button { Task { await model.moveProject(project.id, to: i + 1) } } label: { Label("Move Down", systemImage: "arrow.down") }
-                .disabled(i >= model.projects.count - 1)
-        }
-        Section {
-            Button {
-                let a = NSAlert()
-                a.messageText = "Rename \(project.name)"
-                let f = NSTextField(string: project.name)
-                f.frame = NSRect(x: 0, y: 0, width: 240, height: 24)
-                a.accessoryView = f
-                a.addButton(withTitle: "Rename")
-                a.addButton(withTitle: "Cancel")
-                if a.runModal() == .alertFirstButtonReturn, !f.stringValue.isEmpty { Task { await model.updateProject(project.id, ["name": f.stringValue]) } }
-            } label: { Label("Rename…", systemImage: "pencil") }
-        }
-        Section {
-            Button(role: .destructive) { Task { await model.removeProject(project.id) } } label: { Label("Remove from Bridge", systemImage: "trash") }
+        if !project.root {
+            Section {
+                Button(role: .destructive) { model.confirmRemoveProject(project) } label: { Label("Remove from Bridge…", systemImage: "trash") }
+            }
         }
     }
 }
