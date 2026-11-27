@@ -97,6 +97,19 @@ test("a task's meta.json and the project list refresh the summary on their own",
   assert.equal(store.listRunSummaries()[0].project, "other");
 });
 
+test("a projects.json from before Default hands the old default's orchestrator chat to it", () => {
+  const runs = path.join(tmp, "runs");
+  fs.writeFileSync(path.join(runs, "orchestrator.json"), JSON.stringify({ runId: "orchestrator", kind: "orchestrator", sessionId: "s-9", messages: [{ role: "user", text: "hi", ts: 1 }] }));
+  fs.writeFileSync(projects.FILE, JSON.stringify([{ id: "studio", name: "Studio", path: tmp, default: true }, { id: "other", name: "Other", path: os.tmpdir() }]));
+  const ids = projects.list().map((p) => [p.id, !!p.default]);
+  assert.deepEqual(ids, [["studio", false], ["other", false]]);
+  const moved = JSON.parse(fs.readFileSync(path.join(runs, "orchestrator-studio.json"), "utf8"));
+  assert.deepEqual([moved.runId, moved.project, moved.sessionId, moved.messages.length], ["orchestrator-studio", "studio", "s-9", 1]);
+  assert.ok(!fs.existsSync(path.join(runs, "orchestrator.json")), "Default starts its own");
+  assert.ok(!JSON.parse(fs.readFileSync(projects.FILE, "utf8")).some((p) => p.default));
+  fs.unlinkSync(path.join(runs, "orchestrator-studio.json"));
+});
+
 test("board and pin moves show at once", () => {
   store.setBoard("big", "review");
   store.setPinned("big", true);

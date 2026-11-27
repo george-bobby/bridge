@@ -51,9 +51,35 @@ function write(all) {
   fs.renameSync(tmp, FILE);
 }
 
+/**
+ * Once, for a projects.json from before Default: the project that was marked
+ * `default` owned the original `orchestrator` chat. Hand that chat to the
+ * project (as `orchestrator-<id>`) so its history stays with its repo, and
+ * let Default start a fresh one. Then drop the flag.
+ */
+function migrateDefault(all) {
+  const old = all.find((p) => p.default);
+  if (!old) return all;
+  const runs = path.join(env.dataDir, "runs");
+  const from = path.join(runs, "orchestrator.json");
+  const to = path.join(runs, `orchestrator-${old.id}.json`);
+  try {
+    const run = JSON.parse(fs.readFileSync(from, "utf8"));
+    if (!fs.existsSync(to) && (!run.project || run.project === old.id)) {
+      fs.writeFileSync(to, JSON.stringify({ ...run, runId: `orchestrator-${old.id}`, project: old.id }));
+      fs.unlinkSync(from);
+    }
+  } catch {
+    // No orchestrator chat yet, or it already moved.
+  }
+  const next = all.map(({ default: _, ...p }) => p);
+  write(next);
+  return next;
+}
+
 /** Real projects (git checkouts), in sidebar order. Seeds one on first use. */
 function list(fallbackRepo = "") {
-  let all = read();
+  let all = migrateDefault(read());
   if (!all.length) {
     const repo = env.targetRepo || fallbackRepo;
     if (repo) {
