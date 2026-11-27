@@ -25,7 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// Dev aid: render every page of the window to PNGs, for checking the UI
     /// without screen-recording permission. `BRIDGE_SNAPSHOT_DIR=/tmp/x Bridge`.
     private func snapshots(to dir: String) {
-        let routes: [(String, Route)] = [("home", .home), ("board", .board), ("sessions", .sessions), ("archived", .sessions), ("pulls", .pulls), ("linear", .linear), ("inbox", .inbox), ("inbox-slack", .inbox), ("memory", .memory), ("slack", .slack), ("usage", .usage), ("settings", .settings), ("compose", .compose), ("settings-agents", .settings), ("settings-mcp", .settings), ("mcp-tools", .settings), ("mcp-add", .settings), ("settings-integrations", .settings), ("settings-projects", .settings), ("settings-notifications", .settings), ("settings-advanced", .settings)]
+        let routes: [(String, Route)] = [("home", .home), ("board", .board), ("sessions", .sessions), ("archived", .sessions), ("pulls", .pulls), ("linear", .linear), ("vercel", .vercel), ("incidents", .incidents), ("granola", .granola), ("inbox", .inbox), ("inbox-slack", .inbox), ("memory", .memory), ("slack", .slack), ("usage", .usage), ("settings", .settings), ("compose", .compose), ("settings-agents", .settings), ("settings-mcp", .settings), ("mcp-tools", .settings), ("mcp-add", .settings), ("settings-integrations", .settings), ("settings-projects", .settings), ("settings-notifications", .settings), ("settings-advanced", .settings)]
         let browser = ProcessInfo.processInfo.environment["BRIDGE_SNAPSHOT_URL"]
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 8_000_000_000)
@@ -175,6 +175,9 @@ let navOrder: [(label: String, icon: String, route: Route)] = [
     ("Slack", "number", .slack),
     ("GitHub", "arrow.triangle.pull", .pulls),
     ("Linear", "circle.lefthalf.filled", .linear),
+    ("Vercel", "triangle", .vercel),
+    ("Incidents", "flame", .incidents),
+    ("Granola", "note.text", .granola),
     ("Memory", "book.closed", .memory),
     ("Usage", "gauge.with.dots.needle.50percent", .usage),
 ]
@@ -205,7 +208,7 @@ struct BridgeCommands: Commands {
                 if case .session(let id) = model.route { model.openBrowser(id, url: "") }
             } label: { Label("New Browser Tab", systemImage: "globe") }
             .keyboardShortcut("t")
-            Button { model.importOpen = true } label: { Label("Import Chat…", systemImage: "square.and.arrow.down.on.square") }
+            Button { model.openImport() } label: { Label("Import Chat…", systemImage: "square.and.arrow.down.on.square") }
                 .keyboardShortcut("i", modifiers: [.command, .shift])
         }
         CommandGroup(after: .pasteboard) {
@@ -221,8 +224,12 @@ struct BridgeCommands: Commands {
             Button { model.paletteOpen = true } label: { Label("Command Menu…", systemImage: "command") }.keyboardShortcut("k")
             Button { model.paletteOpen = true } label: { Label("Quick Open…", systemImage: "magnifyingglass") }.keyboardShortcut("p")
             Divider()
-            ForEach(Array(navOrder.enumerated()), id: \.offset) { i, item in
+            // ⌘1…⌘9 for the first nine; the rest are in the menu and ⌘K.
+            ForEach(Array(navOrder.prefix(9).enumerated()), id: \.offset) { i, item in
                 Button { model.navigate(item.route) } label: { Label(item.label, systemImage: item.icon) }.keyboardShortcut(KeyEquivalent(Character("\(i + 1)")))
+            }
+            ForEach(Array(navOrder.dropFirst(9).enumerated()), id: \.offset) { _, item in
+                Button { model.navigate(item.route) } label: { Label(item.label, systemImage: item.icon) }
             }
             Divider()
             Button { model.back() } label: { Label("Back", systemImage: "chevron.left") }.keyboardShortcut("[")
@@ -319,6 +326,9 @@ struct RootView: View {
         case .sessions: SessionsView()
         case .pulls: PullsView()
         case .linear: LinearView()
+        case .vercel: VercelView()
+        case .incidents: IncidentsView()
+        case .granola: GranolaView()
         case .memory: MemoryView()
         case .settings: SettingsView()
         case .compose: ComposeSheet()

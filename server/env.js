@@ -111,6 +111,7 @@ const env = {
   // Where a run creates its git worktree. Empty means a sibling folder of the
   // repo named `<repo>-worktrees`.
   worktreeRoot: str("WORKTREE_ROOT"),
+  defaultDir: str("DEFAULT_DIR"),
   productName: str("PRODUCT_NAME", "the product"),
   productUrl: str("PRODUCT_URL"),
   // The skill every new worker opens with (`/fetch <linear|slack url | brief>`;
@@ -127,6 +128,10 @@ const env = {
   // Personal API key for the Linear view. Read by the server only, never sent
   // to the page or a session; empty hides the view's data.
   linearApiKey: str("LINEAR_API_KEY"),
+  vercelToken: str("VERCEL_TOKEN"),
+  vercelTeamId: str("VERCEL_TEAM_ID"),
+  incidentApiKey: str("INCIDENT_API_KEY"),
+  granolaApiKey: str("GRANOLA_API_KEY"),
   // Slack user token (xoxp-) for the native Slack connector (server/slack.js).
   // Acts as you: no bot, nothing to add to a channel. Server-only, like the
   // Linear key.
@@ -174,6 +179,9 @@ const env = {
 
 // Server-only secret: keep it out of the environment every session inherits.
 delete process.env.LINEAR_API_KEY;
+delete process.env.VERCEL_TOKEN;
+delete process.env.INCIDENT_API_KEY;
+delete process.env.GRANOLA_API_KEY;
 delete process.env.SLACK_USER_TOKEN;
 
 module.exports = env;

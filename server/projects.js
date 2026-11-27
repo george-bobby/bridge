@@ -3,20 +3,30 @@
  *
  * A project is a name and a git checkout. Every session belongs to one: the
  * one you dragged it to, else the one whose checkout (or worktree folder) it
- * runs in, else the default project. Each project has its own orchestrator
- * chat, so a worker's outcome is relayed to the orchestrator of the repo it
- * worked in.
+ * runs in. Anything else is "Default": not a repo, just a folder (DEFAULT_DIR,
+ * else your home) for general questions and one-off work. Default is listed
+ * first, can't be renamed, moved or removed, and its orchestrator keeps the
+ * original `orchestrator` id; every real project gets `orchestrator-<id>`.
  *
- * Stored in data/projects.json, in sidebar order. The first project is seeded
- * from TARGET_REPO (or the job default workdir). The default is the one marked
- * `default`, else the first, so reordering never moves the default.
+ * Stored in data/projects.json, in sidebar order (Default isn't stored). The
+ * first project is seeded from TARGET_REPO on first use.
  */
 
 const fs = require("fs");
 const path = require("path");
 const env = require("./env");
 
+const os = require("os");
+
 const FILE = path.join(env.dataDir, "projects.json");
+const DEFAULT = "default";
+
+/** The folder Default sessions and its orchestrator work in. */
+function rootDir() {
+  const d = env.defaultDir ? path.resolve(env.defaultDir.replace(/^~(?=$|\/)/, os.homedir())) : os.homedir();
+  return fs.existsSync(d) ? d : os.homedir();
+}
+const rootProject = () => ({ id: DEFAULT, name: "Default", path: rootDir(), root: true });
 
 const slug = (s) =>
   String(s || "")
@@ -41,9 +51,35 @@ function write(all) {
   fs.renameSync(tmp, FILE);
 }
 
-/** Every project, in sidebar order. Seeds the default on first use. */
+/**
+ * Once, for a projects.json from before Default: the project that was marked
+ * `default` owned the original `orchestrator` chat. Hand that chat to the
+ * project (as `orchestrator-<id>`) so its history stays with its repo, and
+ * let Default start a fresh one. Then drop the flag.
+ */
+function migrateDefault(all) {
+  const old = all.find((p) => p.default);
+  if (!old) return all;
+  const runs = path.join(env.dataDir, "runs");
+  const from = path.join(runs, "orchestrator.json");
+  const to = path.join(runs, `orchestrator-${old.id}.json`);
+  try {
+    const run = JSON.parse(fs.readFileSync(from, "utf8"));
+    if (!fs.existsSync(to) && (!run.project || run.project === old.id)) {
+      fs.writeFileSync(to, JSON.stringify({ ...run, runId: `orchestrator-${old.id}`, project: old.id }));
+      fs.unlinkSync(from);
+    }
+  } catch {
+    // No orchestrator chat yet, or it already moved.
+  }
+  const next = all.map(({ default: _, ...p }) => p);
+  write(next);
+  return next;
+}
+
+/** Real projects (git checkouts), in sidebar order. Seeds one on first use. */
 function list(fallbackRepo = "") {
-  let all = read();
+  let all = migrateDefault(read());
   if (!all.length) {
     const repo = env.targetRepo || fallbackRepo;
     if (repo) {
@@ -54,10 +90,11 @@ function list(fallbackRepo = "") {
   return all;
 }
 
-const defaultOf = (all) => (all.find((p) => p.default) || all[0] || {}).id || "";
-const defaultId = () => defaultOf(list());
+/** Default first, then every project: what the sidebar and pickers show. */
+const withRoot = (fallbackRepo = "") => [rootProject(), ...list(fallbackRepo).map(({ default: _, ...p }) => p)];
 
 function get(id) {
+  if (id === DEFAULT) return rootProject();
   return list().find((p) => p.id === id) || null;
 }
 
@@ -68,26 +105,20 @@ function add({ path: repo, name }) {
   const existing = all.find((p) => p.path === dir);
   if (existing) return existing;
   let id = slug(name || path.basename(dir));
-  while (all.some((p) => p.id === id)) id = `${id}-2`;
+  while (id === DEFAULT || all.some((p) => p.id === id)) id = `${id}-2`;
   const p = { id, name: String(name || path.basename(dir)).slice(0, 60), path: dir, createdAt: Date.now() };
   write([...all, p]);
   return p;
 }
 
 function update(id, patch) {
+  if (id === DEFAULT) throw new Error("Default can't be renamed or moved");
   const all = list();
   const p = all.find((x) => x.id === id);
   if (!p) throw new Error(`no such project: ${id}`);
   if (patch.name) p.name = String(patch.name).slice(0, 60);
-  if (patch.makeDefault) {
-    for (const x of all) delete x.default;
-    p.default = true;
-  }
   if (patch.index !== undefined) {
-    // Pin the default by flag before the order changes, so its orchestrator stays put.
-    const def = defaultOf(all);
-    for (const x of all) delete x.default;
-    all.find((x) => x.id === def).default = true;
+    // An index among the real projects (Default is always first, outside them).
     const to = Math.max(0, Math.min(all.length - 1, Math.floor(Number(patch.index)) || 0));
     all.splice(all.indexOf(p), 1);
     all.splice(to, 0, p);
@@ -97,9 +128,8 @@ function update(id, patch) {
 }
 
 function remove(id) {
-  const all = list();
-  if (all.length <= 1) throw new Error("keep at least one project");
-  write(all.filter((p) => p.id !== id));
+  if (id === DEFAULT) throw new Error("Default can't be removed");
+  write(list().filter((p) => p.id !== id));
 }
 
 /** Worktrees of `repo` live here (same rule as server/tasks.js). */
@@ -113,18 +143,17 @@ const inside = (dir, root) => !!dir && (dir === root || dir.startsWith(root + pa
 /** The project a run belongs to. `meta` is its task meta, when it has one. */
 function of(run, meta = {}) {
   const all = list();
-  if (run.project && all.some((p) => p.id === run.project)) return run.project;
+  if (run.project === DEFAULT || (run.project && all.some((p) => p.id === run.project))) return run.project;
   const dirs = [meta.repo, meta.worktree, run.opts && run.opts.workdir, ...(run.messages || []).filter((m) => m.workdir).slice(0, 1).map((m) => m.workdir)].filter(Boolean);
   for (const dir of dirs) {
     const hit = all.find((p) => inside(path.resolve(dir), p.path) || inside(path.resolve(dir), worktreeRoot(p.path)));
     if (hit) return hit.id;
   }
-  return defaultOf(all);
+  return DEFAULT;
 }
 
-/** Run id of a project's orchestrator chat. The default project keeps the
- *  original id, so an existing orchestrator chat stays where it was. */
-const orchestratorId = (projectId) => (!projectId || projectId === defaultId() ? "orchestrator" : `orchestrator-${projectId}`);
+/** Run id of a project's orchestrator chat: Default keeps the original id. */
+const orchestratorId = (projectId) => (!projectId || projectId === DEFAULT ? "orchestrator" : `orchestrator-${projectId}`);
 const isOrchestrator = (runId) => runId === "orchestrator" || String(runId || "").startsWith("orchestrator-");
 
-module.exports = { list, get, add, update, remove, of, defaultId, orchestratorId, isOrchestrator, FILE };
+module.exports = { list, withRoot, get, add, update, remove, of, rootDir, DEFAULT, orchestratorId, isOrchestrator, FILE };

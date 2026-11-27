@@ -240,7 +240,7 @@ function snapshot() {
     workerSkill: workerSkillState(),
     // Only what the page actually draws: the repo a new chat's job would run
     // in, which the composer's picker opens on.
-    meta: { workdir: jobs.resolveWorkdir(store.readConfig()), root: ROOT, projects: projects.list(jobs.resolveWorkdir(store.readConfig())) },
+    meta: { workdir: jobs.resolveWorkdir(store.readConfig()), root: ROOT, projects: projects.withRoot(jobs.resolveWorkdir(store.readConfig())) },
     now: Date.now(),
   };
 }
@@ -514,7 +514,7 @@ async function handle(req, res) {
       }
       if (req.method === "POST" && p === "/api/history/import") {
         const body = JSON.parse((await readBody(req)) || "{}");
-        const out = harness.importChat({ agent: String(body.agent || ""), id: String(body.id || ""), history });
+        const out = harness.importChat({ agent: String(body.agent || ""), id: String(body.id || ""), project: String(body.project || ""), history });
         return sendJson(res, 200, { ok: true, ...out });
       }
       const m = p.match(/^\/api\/history\/([a-z]+)\/([^/]+)$/);
@@ -634,7 +634,7 @@ async function handle(req, res) {
     try {
       const body = req.method === "POST" ? JSON.parse((await readBody(req)) || "{}") : {};
       const m = p.match(/^\/api\/projects\/([a-z0-9-]+)(?:\/(orchestrator))?$/);
-      const all = () => projects.list(jobs.resolveWorkdir(store.readConfig()));
+      const all = () => projects.withRoot(jobs.resolveWorkdir(store.readConfig()));
       let out;
       if (req.method === "GET" && p === "/api/projects") out = { projects: all() };
       else if (req.method === "POST" && p === "/api/projects") out = { project: projects.add(body) };
@@ -653,7 +653,16 @@ async function handle(req, res) {
   }
 
   // --- read-only feeds for the workspace views (GitHub PRs, Linear issues) ---
-  const src = req.method === "GET" && p.match(/^\/api\/sources\/(pulls|linear|ports)$/);
+  const note = req.method === "GET" && p.match(/^\/api\/sources\/granola\/([^/]+)$/);
+  if (note) {
+    if (!sameOrigin(req)) return sendJson(res, 403, { ok: false, error: "cross-origin request refused" });
+    try {
+      return sendJson(res, 200, { ok: true, note: await sources.granolaNote(decodeURIComponent(note[1])) });
+    } catch (e) {
+      return sendJson(res, 502, { ok: false, error: String(e.message || e) });
+    }
+  }
+  const src = req.method === "GET" && p.match(/^\/api\/sources\/(pulls|linear|ports|vercel|incidents|granola)$/);
   if (src) {
     // Private data on a GET: a page elsewhere can't read the answer, but DNS
     // rebinding could, so hold it to the same loopback rule as the writes.
@@ -681,14 +690,16 @@ async function handle(req, res) {
   // What Claude Code was told about the repo a job runs in: `MEMORY.md` and the
   // one-fact-per-file memories beside it. The workdir is resolved through the
   // same jobs.resolveWorkdir() a job would use — pass a chat's id and you get
-  // that chat's repo, pass nothing and you get the default one — so the panel
+  // that chat's repo, `project` gives that project's folder, nothing the job default — so the panel
   // can never show the memory of a repo the run wouldn't have read.
   if (p === "/api/memory" || p.startsWith("/api/memory/")) {
     try {
       const body =
         req.method === "POST" ? JSON.parse((await readBody(req)) || "{}") : Object.fromEntries(url.searchParams);
       const runId = store.safeId(String(body.runId || ""));
-      const workdir = jobs.resolveWorkdir(store.readConfig(), runId ? store.loadRun(runId) : null);
+      // ?project=<id> asks about that project's folder (Default: the root one).
+      const proj = !runId && body.project ? projects.get(String(body.project)) : null;
+      const workdir = proj ? proj.path : jobs.resolveWorkdir(store.readConfig(), runId ? store.loadRun(runId) : null);
       const verb = p.slice("/api/memory".length);
       const ok = (extra) => sendJson(res, 200, { ok: true, workdir, ...extra });
 

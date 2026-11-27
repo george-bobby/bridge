@@ -147,12 +147,14 @@ test("spawn → worker in its own worktree → report → relayed, main checkout
   const inbox = await api("GET", "/api/inbox");
   assert.ok(inbox.todos.some((x) => x.key === `review:${t.taskId}`), "review to-do");
 
-  // The orchestrator got a relay turn about it.
+  // Its project's orchestrator got a relay turn about it (Default's is `orchestrator`).
+  const project = (await api("GET", "/api/projects")).projects.find((p) => !p.root);
+  const orchId = `orchestrator-${project.id}`;
   await waitFor(async () => {
-    const o = await api("GET", "/api/runs/orchestrator");
-    return o.run.messages.some((m) => m.role === "relay" && m.text.includes(t.taskId));
+    const o = await api("GET", `/api/runs/${orchId}`);
+    return o.run && o.run.messages.some((m) => m.role === "relay" && m.text.includes(t.taskId));
   }, 10000, "relay");
-  const o = (await api("GET", "/api/runs/orchestrator")).run;
+  const o = (await api("GET", `/api/runs/${orchId}`)).run;
   assert.equal(o.kind, "orchestrator");
 });
 

@@ -1276,7 +1276,7 @@ struct ComposeSheet: View {
             text.v = model.composeText
             direct.v = model.composeDirect
             model.composeText = ""
-            project.v = model.composeProject ?? model.projectFilter ?? model.defaultProject?.id ?? ""
+            project.v = model.composeProject ?? model.projectFilter ?? AppModel.rootId
             let d = model.config["followup"]
             agent.v = d["agent"].nonEmpty ?? "claude"
             modelId.v = agent.v == "claude" ? d["model"].string : d["agentModel"].string
@@ -1351,6 +1351,14 @@ struct ComposeSheet: View {
                 }
             }
             Spacer()
+            // Carry on a chat from Claude Code, Codex, Cursor or Devin in this project.
+            Button { model.openImport(into: project.v) } label: {
+                PickerChip(text: "Import a chat", open: model.importOpen) {
+                    Image(systemName: "square.and.arrow.down.on.square").font(.system(size: 11)).foregroundStyle(T.text2)
+                }
+            }
+            .buttonStyle(Pressable(scale: 0.97))
+            .help("Import a chat from Claude Code, Codex, Cursor or Devin into \(model.project(project.v)?.name ?? "this project") (⇧⌘I)")
         }
         .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 4)
     }
@@ -1361,10 +1369,12 @@ struct ComposeSheet: View {
                 .transition(.opacity)
         } else {
             HStack(spacing: 10) {
+                let root = model.project(project.v)?.root ?? false
+                let place = root ? "in \(model.project(project.v)?.shortPath ?? "~")" : "in a fresh worktree"
                 ModeCard(icon: "point.3.connected.trianglepath.dotted", tint: T.accent, title: "Plan with the orchestrator",
-                         detail: "It writes the brief, picks the agent and starts a session in a fresh worktree.", on: !direct.v) { direct.v = false }
+                         detail: "It writes the brief, picks the agent and starts a session \(place).", on: !direct.v) { direct.v = false }
                 ModeCard(icon: "hammer", tint: T.green, title: "Start it now",
-                         detail: "A session starts on this text right away, in its own worktree.", on: direct.v) { direct.v = true }
+                         detail: root ? "A session starts on this text right away, \(place)." : "A session starts on this text right away, in its own worktree.", on: direct.v) { direct.v = true }
             }
             .transition(.opacity)
         }
@@ -1500,8 +1510,8 @@ struct ProjectPanel: View {
                 VStack(spacing: 1) {
                     ForEach(Array(hits.enumerated()), id: \.element.id) { i, p in
                         Button { pick(p.id) } label: {
-                            PickRow(title: p.name, subtitle: p.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"), checked: p.id == current, highlighted: hi.v == i) {
-                                Image(systemName: "square.stack.3d.up").font(.system(size: 12)).foregroundStyle(T.accent)
+                            PickRow(title: p.name, subtitle: p.root ? "\(p.shortPath) · not in a project" : p.shortPath, checked: p.id == current, highlighted: hi.v == i) {
+                                ProjectBadge(project: p, size: 16)
                             } trail: { EmptyView() }
                         }
                         .buttonStyle(.plain)

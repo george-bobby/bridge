@@ -41,20 +41,20 @@ const pr = (n, title, o = {}) => ({
   issueKey: (title.match(/\b([A-Z]+-\d+)\b/) || [])[1] || "",
   previews: o.preview ? [{ provider: o.preview[0], url: o.preview[1], state: o.preview[2] || "ready", env: o.preview[0] === "vercel" ? "Preview – storefront" : "deploy-preview" }] : [],
 });
-const vercel = (branch, state) => ["vercel", `https://storefront-git-${branch.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}-acme.vercel.app`, state];
+const vercelPreview = (branch, state) => ["vercel", `https://storefront-git-${branch.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}-acme.vercel.app`, state];
 const netlify = (n, state) => ["netlify", `https://deploy-preview-${n}--acme-storefront.netlify.app`, state];
 
 function pulls() {
   return {
     login: "alex-rivera",
     mine: [
-      pr(482, "feat(checkout): Apple Pay in the payment step (WEB-124)", { branch: "alex/web-124-apple-pay", preview: vercel("alex/web-124-apple-pay"), review: "REVIEW_REQUIRED", add: 612, del: 48, comments: 9, ago: 1500 }),
-      pr(479, "feat(api): rate-limit the search endpoint per API key (WEB-131)", { branch: "alex/web-131-rate-limit-search", preview: vercel("alex/web-131-rate-limit-search"), checks: "FAILURE", review: "CHANGES_REQUESTED", add: 288, del: 31, comments: 14, ago: 5400 }),
-      pr(476, "test(e2e): stabilise the checkout flow suite (WEB-133)", { branch: "alex/web-133-flaky-e2e", preview: vercel("alex/web-133-flaky-e2e", "building"), draft: true, checks: "PENDING", add: 74, del: 102, comments: 2, ago: 9000 }),
+      pr(482, "feat(checkout): Apple Pay in the payment step (WEB-124)", { branch: "alex/web-124-apple-pay", preview: vercelPreview("alex/web-124-apple-pay"), review: "REVIEW_REQUIRED", add: 612, del: 48, comments: 9, ago: 1500 }),
+      pr(479, "feat(api): rate-limit the search endpoint per API key (WEB-131)", { branch: "alex/web-131-rate-limit-search", preview: vercelPreview("alex/web-131-rate-limit-search"), checks: "FAILURE", review: "CHANGES_REQUESTED", add: 288, del: 31, comments: 14, ago: 5400 }),
+      pr(476, "test(e2e): stabilise the checkout flow suite (WEB-133)", { branch: "alex/web-133-flaky-e2e", preview: vercelPreview("alex/web-133-flaky-e2e", "building"), draft: true, checks: "PENDING", add: 74, del: 102, comments: 2, ago: 9000 }),
       pr(473, "fix(cart): show VAT-inclusive prices for EU shoppers", { branch: "alex/eu-vat-cart", preview: netlify(473), mergeable: "CONFLICTING", checks: "SUCCESS", review: "APPROVED", add: 131, del: 22, comments: 6, ago: 20000 }),
     ],
     review: [
-      pr(485, "feat(checkout): promo codes with stacking rules (WEB-123)", { author: "maya-chen", branch: "maya/web-123-promo-codes", preview: vercel("maya/web-123-promo-codes"), review: "REVIEW_REQUIRED", add: 540, del: 87, comments: 4, ago: 2600 }),
+      pr(485, "feat(checkout): promo codes with stacking rules (WEB-123)", { author: "maya-chen", branch: "maya/web-123-promo-codes", preview: vercelPreview("maya/web-123-promo-codes"), review: "REVIEW_REQUIRED", add: 540, del: 87, comments: 4, ago: 2600 }),
       pr(488, "chore(deps): bump Next.js to 15.2", { author: "sam-ortiz", branch: "sam/next-15-2", checks: "PENDING", review: "REVIEW_REQUIRED", add: 41, del: 39, comments: 1, ago: 7200 }),
     ],
     merged: [
@@ -760,4 +760,63 @@ const history = {
   },
 };
 
-module.exports = { seed, writeSessions, pulls, linear, ports, slack, usage, agents, prActivity, mcp, git, history };
+/* ------------------------------------------- Vercel, incident.io, Granola */
+
+function vercel() {
+  const d = (n, project, branch, state, ago, o = {}) => ({
+    id: `dpl_${n}`, project, url: `https://${project}-${n}-acme.vercel.app`, inspect: `https://vercel.com/acme/${project}/${n}`,
+    state, target: o.target || "preview", branch, message: o.message || "", pr: o.pr || null, repo: `acme/${project}`,
+    creator: o.creator || "alex-rivera", team: "acme", createdAt: (now() - ago) * 1000,
+  });
+  return {
+    configured: true, user: "alex-rivera", teams: ["acme"],
+    deployments: [
+      d("9fk2a", "storefront", "alex/web-133-flaky-e2e", "building", 240, { message: "test(e2e): retry the payment iframe once", pr: 476 }),
+      d("7hq1c", "storefront", "alex/web-124-apple-pay", "ready", 1500, { message: "feat(checkout): Apple Pay in the payment step", pr: 482 }),
+      d("6bb0d", "storefront", "main", "ready", 3600, { target: "production", message: "Merge #470: keep the dark-mode choice", creator: "sam-ortiz" }),
+      d("5xx8e", "storefront", "alex/web-131-rate-limit-search", "failed", 5400, { message: "feat(api): per-key limiter", pr: 479 }),
+      d("4mm2f", "docs", "maya/checkout-guide", "ready", 9000, { message: "docs: the new checkout guide", creator: "maya-chen" }),
+      d("3pp7g", "storefront", "maya/web-123-promo-codes", "ready", 2600, { message: "feat(checkout): promo codes", pr: 485, creator: "maya-chen" }),
+      d("2zz5h", "admin", "main", "ready", DAY, { target: "production", message: "chore: bump deps", creator: "priya-raman" }),
+      d("1aa3k", "storefront", "sam/next-15-2", "canceled", 7300, { message: "chore(deps): Next.js 15.2", pr: 488, creator: "sam-ortiz" }),
+    ].sort((a, b) => b.createdAt - a.createdAt),
+    at: Date.now(),
+  };
+}
+
+function incidents() {
+  const i = (n, name, category, status, severity, rank, ago, o = {}) => ({
+    id: `01H${n}`, ref: `INC-${n}`, name, summary: o.summary || "", status, category, severity, severityRank: rank,
+    lead: o.lead || "", url: `https://app.incident.io/acme/incidents/${n}`, slack: "", createdAt: iso(ago), updatedAt: iso(o.updated || ago / 2),
+  });
+  return {
+    configured: true,
+    incidents: [
+      i(214, "Checkout 502s for EU shoppers", "live", "Investigating", "Major", 3, 1900, { lead: "Sam Ortiz", summary: "The EU edge returns 502 on POST /checkout for ~4% of requests since the 14:10 deploy." }),
+      i(213, "Search latency above 2s p95", "live", "Monitoring", "Minor", 1, 7200, { lead: "Alex Rivera", summary: "Rate limiter rollout; watching p95 after the Redis fix." }),
+      i(212, "Order emails show the wrong currency for CAD", "learning", "Post-incident", "Minor", 1, 2 * DAY, { lead: "Priya Raman" }),
+      i(209, "Image CDN cache misses after the move", "closed", "Closed", "Minor", 1, 5 * DAY, { lead: "Maya Chen" }),
+      i(205, "Login loop on Safari 17", "closed", "Closed", "Major", 3, 9 * DAY, { lead: "Kai Nakamura" }),
+    ],
+    at: Date.now(),
+  };
+}
+
+const NOTES = [
+  ["not_1", "Checkout sync", 3 * 3600, ["Alex Rivera", "Maya Chen", "Sam Ortiz"], "## Decisions\n- Ship Apple Pay behind the `wallets` flag on Monday\n- Google Pay waits for the Stripe upgrade\n\n## Action items\n- **Alex**: payments sign-off on #482\n- **Sam**: fix the EU 502s before the rollout"],
+  ["not_2", "Search rate limits with the API team", 26 * 3600, ["Alex Rivera", "Priya Raman"], "## Summary\nLimit per API key, not per IP: B2B customers share NAT.\n\n## Next\n- Return `Retry-After` with 429s\n- Redis-backed window"],
+  ["not_3", "1:1 Alex / Sam", 3 * DAY, ["Alex Rivera", "Sam Ortiz"], "## Notes\n- On-call handover next week\n- Flaky e2e suite: quarantine, then fix"],
+  ["not_4", "Incident review: CAD currency", 4 * DAY, ["Priya Raman", "Alex Rivera", "Kai Nakamura"], "## What happened\nThe email template read the store's default currency.\n\n## Follow-ups\n- Template tests per currency"],
+];
+
+function granola() {
+  return { configured: true, notes: NOTES.map(([id, title, ago]) => ({ id, title, owner: "Alex Rivera", createdAt: iso(ago), updatedAt: iso(ago - 600) })), at: Date.now() };
+}
+
+function granolaNote(id) {
+  const n = NOTES.find((x) => x[0] === id);
+  if (!n) throw new Error("no such note");
+  return { id, title: n[1], url: `https://notes.granola.ai/d/${id}`, attendees: n[3], event: n[1], summary: n[4], createdAt: iso(n[2]) };
+}
+
+module.exports = { seed, writeSessions, pulls, linear, ports, slack, usage, agents, prActivity, mcp, git, history, vercel, incidents, granola, granolaNote };

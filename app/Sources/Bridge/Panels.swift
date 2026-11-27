@@ -254,8 +254,11 @@ struct TaskRow: View {
 
 // MARK: - Memory
 
+/// What Claude Code remembers about one project (`model.memoryProject`):
+/// its MEMORY.md index and the topic files beside it. Pick the project in the header.
 struct MemoryView: View {
     @Environment(AppModel.self) var model
+    @StateObject private var projectOpen = Box(false)
     @StateObject private var list = Box(JSON.null)
     @StateObject private var selected = Box("")
     @StateObject private var text = Box("")
@@ -264,7 +267,17 @@ struct MemoryView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PageHeader(title: "Memory", subtitle: list.v["project"].nonEmpty.map { "what Claude Code remembers about \($0)" } ?? "", icon: "book.closed") {
+            PageHeader(title: "Memory", subtitle: "what Claude Code remembers about \(model.project(model.memoryProject)?.name ?? "this project")", icon: "book.closed") {
+                Button { projectOpen.v.toggle() } label: {
+                    PickerChip(text: model.project(model.memoryProject)?.name ?? "Project", open: projectOpen.v) {
+                        if let p = model.project(model.memoryProject) { ProjectBadge(project: p, size: 14) }
+                    }
+                }
+                .buttonStyle(Pressable(scale: 0.97))
+                .popover(isPresented: $projectOpen.v, arrowEdge: .bottom) {
+                    ProjectPanel(current: model.memoryProject) { id in projectOpen.v = false; switchProject(id) } add: { projectOpen.v = false; model.addProject() }
+                        .environment(model)
+                }
                 if text.v != saved.v && !selected.v.isEmpty && !loading.v {
                     Button("Revert") { text.v = saved.v }.buttonStyle(LButton())
                     Button("Save") { save() }.buttonStyle(LButton(primary: true)).keyboardShortcut("s")
@@ -307,7 +320,29 @@ struct MemoryView: View {
                 }
             }
         }
-        .onAppear { Task { list.v = (try? await API.get("/api/memory")) ?? .null } }
+        .onAppear { if model.project(model.memoryProject) == nil { model.openMemory() } }
+        .task(id: model.memoryProject) { if !model.memoryProject.isEmpty { await reload() } }
+    }
+
+    var q: String { "project=\(API.q(model.memoryProject))" }
+
+    func reload() async {
+        list.v = .null
+        let out = (try? await API.get("/api/memory?\(q)")) ?? .null
+        list.v = out.isNull ? .obj(["files": .arr([])]) : out
+    }
+
+    func switchProject(_ id: String) {
+        guard id != model.memoryProject else { return }
+        if text.v != saved.v && !selected.v.isEmpty {
+            let a = NSAlert()
+            a.messageText = "Discard your changes to \(selected.v)?"
+            a.addButton(withTitle: "Discard")
+            a.addButton(withTitle: "Keep Editing")
+            if a.runModal() != .alertFirstButtonReturn { return }
+        }
+        selected.v = ""; text.v = ""; saved.v = ""
+        model.memoryProject = id
     }
 
     /// The buffer always belongs to the file it was read from: a read is
@@ -324,7 +359,7 @@ struct MemoryView: View {
         selected.v = name
         loading.v = true
         Task {
-            guard let f = try? await API.get("/api/memory/file?name=\(API.q(name))"), selected.v == name else { return }
+            guard let f = try? await API.get("/api/memory/file?name=\(API.q(name))&\(q)"), selected.v == name else { return }
             text.v = f["text"].string
             saved.v = text.v
             loading.v = false
@@ -337,7 +372,7 @@ struct MemoryView: View {
         guard !loading.v, !name.isEmpty else { return }
         Task {
             await model.act {
-                try await API.post("/api/memory/file", ["name": name, "text": body])
+                try await API.post("/api/memory/file", ["name": name, "text": body, "project": self.model.memoryProject])
                 // Only this file's baseline moves, and only if you're still on it.
                 if self.selected.v == name { self.saved.v = body }
                 self.model.say("Saved \(name)")
@@ -501,7 +536,7 @@ struct CommandPalette: View {
         func sym(_ s: String, _ c: Color = T.text2) -> AnyView { AnyView(Image(systemName: s).font(.system(size: 12, weight: .medium)).foregroundStyle(c)) }
         var all: [PaletteItem] = [
             PaletteItem(id: "new", icon: sym("square.and.pencil"), title: "New task", hint: "⌘N", group: "Suggestions") { model.composeOpen = true },
-            PaletteItem(id: "import", icon: sym("square.and.arrow.down.on.square"), title: "Import a chat from Claude Code, Codex, Cursor or Devin…", hint: "⇧⌘I", group: "Suggestions") { model.importOpen = true },
+            PaletteItem(id: "import", icon: sym("square.and.arrow.down.on.square"), title: "Import a chat from Claude Code, Codex, Cursor or Devin…", hint: "⇧⌘I", group: "Suggestions") { model.openImport() },
             PaletteItem(id: "project", icon: sym("folder.badge.plus"), title: "Add a project…") { model.addProject() },
             PaletteItem(id: "refresh", icon: sym("arrow.clockwise"), title: "Refresh GitHub and Linear", hint: "⌘R") { Task { await model.loadSources(refresh: true) } },
         ]
@@ -514,7 +549,7 @@ struct CommandPalette: View {
         }
         all.append(PaletteItem(id: "sidebar", icon: sym("sidebar.left"), title: "Toggle sidebar", hint: "⌘B") { model.toggleSidebar() })
         for (i, n) in navOrder.enumerated() {
-            all.append(PaletteItem(id: "go-\(n.label)", icon: sym(n.icon), title: n.label, hint: "⌘\(i + 1)", group: "Go to") { model.navigate(n.route) })
+            all.append(PaletteItem(id: "go-\(n.label)", icon: sym(n.icon), title: n.label, hint: i < 9 ? "⌘\(i + 1)" : "", group: "Go to") { model.navigate(n.route) })
         }
         all.append(PaletteItem(id: "go-settings", icon: sym("gearshape"), title: "Settings", hint: "⌘,", group: "Go to") { model.navigate(.settings) })
         all.append(PaletteItem(id: "board-view", icon: sym("rectangle.split.3x1"), title: "Sessions as a board", group: "Go to") { model.route = .board })

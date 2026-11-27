@@ -78,7 +78,7 @@ function markdown(sessions, { scope = "all projects", bridge = "bridge" } = {}) 
 
 /** What orchestrator `run` sees: its project, or everything for the default one. */
 function forOrchestrator(run, opts = {}) {
-  const all = !run.project || run.project === projects.defaultId();
+  const all = !run.project || run.project === projects.DEFAULT;
   const p = run.project && projects.get(run.project);
   const sessions = list({ project: run.project, all, self: run.runId, isRunning: opts.isRunning });
   return { sessions, scope: all ? "all projects" : `project ${p ? p.name || p.id : run.project}`, all };

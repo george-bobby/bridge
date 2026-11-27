@@ -42,8 +42,8 @@ const cfg = () => store.readConfig().harness;
 /* --------------------------------------------------------- orchestrator */
 
 /** A project's orchestrator chat. Created on first use; never deleted by the
- *  harness. The default project's keeps the original `orchestrator` id. */
-function ensureOrchestrator(projectId = projects.defaultId()) {
+ *  harness. Default's (the root folder) keeps the original `orchestrator` id. */
+function ensureOrchestrator(projectId = projects.DEFAULT) {
   const id = projects.orchestratorId(projectId);
   let run = store.loadRun(id);
   // It works in its project's checkout ("this repo" means the project), with
@@ -52,8 +52,10 @@ function ensureOrchestrator(projectId = projects.defaultId()) {
   const p = projects.get(projectId);
   const home = p && p.path && fs.existsSync(p.path) ? p.path : ROOT;
   if (run && run.kind === "orchestrator") {
-    if (!run.sessionId && (run.opts || {}).workdir !== home) {
-      run.opts = { ...run.opts, workdir: home };
+    const fix = run.project !== projectId || (!run.sessionId && (run.opts || {}).workdir !== home);
+    if (fix) {
+      run.project = projectId;
+      if (!run.sessionId) run.opts = { ...run.opts, workdir: home };
       store.saveRun(run);
     }
     return run;
@@ -71,7 +73,7 @@ function ensureOrchestrator(projectId = projects.defaultId()) {
 /** The orchestrator a task's outcomes go to: the one for its project. */
 function orchestratorFor(taskId) {
   const run = store.loadRun(taskId);
-  return ensureOrchestrator(run ? projects.of(run, tasks.readMeta(taskId) || {}) : projects.defaultId()).runId;
+  return ensureOrchestrator(run ? projects.of(run, tasks.readMeta(taskId) || {}) : projects.DEFAULT).runId;
 }
 
 /* ---------------------------------------------------------------- titles */
@@ -389,7 +391,10 @@ async function spawnTask({ repo, title, brief, branch, base = "", workspace = ""
   // removes a checkout it didn't create.
   let wt;
   const ws = String(workspace || "").trim();
-  if (!ws || ws === "worktree") wt = await tasks.createWorktree({ repo: repoPath, branch: br, from: base });
+  // Not a git checkout (Default's root folder): the session just runs there.
+  const plain = !fs.existsSync(path.join(repoPath, ".git"));
+  if (plain) wt = { worktree: repoPath, branch: "", base: "", from: "", copied: 0, adopted: "folder" };
+  else if (!ws || ws === "worktree") wt = await tasks.createWorktree({ repo: repoPath, branch: br, from: base });
   else {
     const info = await tasks.branches(repoPath);
     const dir = ws === "local" ? info.worktrees.find((w) => w.main) : info.worktrees.find((w) => path.resolve(w.path) === path.resolve(ws));
@@ -424,7 +429,7 @@ async function spawnTask({ repo, title, brief, branch, base = "", workspace = ""
  * same agent session on your next message. The folder is adopted, never
  * removed by cleanup. Importing the same chat again opens the first import.
  */
-function importChat({ agent, id, history = require("./history") }) {
+function importChat({ agent, id, project = "", history = require("./history") }) {
   if (!history.AGENTS.includes(agent)) throw new Error(`unknown agent: ${agent}`);
   if (!id) throw new Error("which chat?");
   const runs = store.listRunSessions();
@@ -466,9 +471,10 @@ function importChat({ agent, id, history = require("./history") }) {
   for (const m of t.messages) store.appendMessage(run, m);
   store.appendMessage(run, { role: "event", phase: "imported", text: `Imported from **${label}**: ${t.messages.length} messages${cwd ? ` in \`${cwd}\`` : ""}. Your next message continues the same ${label} session.` });
   run.createdAt = Math.min(...t.messages.map((m) => m.ts || now())) || now();
-  // The project it belongs to, set directly: store.setProject would also move
-  // a chat without a Claude session id into the project's checkout.
-  run.project = projects.of(run, tasks.readMeta(taskId) || {}) || "";
+  // The project it belongs to: the one it was imported into, else the one its
+  // folder is in. Set directly: store.setProject would also move a chat
+  // without a Claude session id into the project's checkout.
+  run.project = (project && projects.get(project) ? project : "") || projects.of(run, tasks.readMeta(taskId) || {}) || "";
   store.saveRun(run);
   tasks.appendEvent({ taskId, name: "imported", text: `${label} session ${id}${cwd ? ` in ${cwd}` : ""}` });
   bus.broadcast("runs", { runs: store.listRunSummaries() });
