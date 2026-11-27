@@ -250,10 +250,21 @@ function decisions() {
   return readJson(FILES.decisions, []);
 }
 
-function addDecision({ taskId, kind, text, key }) {
+/** The same ask, however a rewritten report spaces or capitalises it. */
+const askText = (t) => String(t || "").replace(/\s+/g, " ").trim().toLowerCase();
+const sameAsk = (d, taskId, kind, text) => d.taskId === taskId && d.kind === kind && askText(d.text) === askText(text);
+
+/**
+ * File an ask. `fromReport`: a report rewritten with the same ask must not
+ * file it again, and one you already answered or dismissed stays that way;
+ * only an ask the report had dropped (superseded) comes back as new.
+ */
+function addDecision({ taskId, kind, text, key, fromReport = false }) {
   const all = decisions();
-  const k = key || `${taskId}:${kind}:${hash(text)}`;
-  const dup = all.find((d) => d.key === k && d.state === "open");
+  const k = key || `${taskId}:${kind}:${hash(askText(text))}`;
+  const dup = fromReport
+    ? all.find((d) => sameAsk(d, taskId, kind, text) && d.state !== "superseded")
+    : all.find((d) => d.key === k && d.state === "open");
   if (dup) return { decision: dup, duplicate: true };
   const d = {
     id: `d-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`,
@@ -289,11 +300,11 @@ function openDecisions({ includeDeferred = false } = {}) {
 }
 
 /** Close every open decision of a task, e.g. once it reports again. */
-function closeTaskDecisions(taskId, kinds, state = "superseded") {
+function closeTaskDecisions(taskId, kinds, state = "superseded", keep = () => false) {
   const all = decisions();
   let n = 0;
   for (const d of all) {
-    if (d.taskId === taskId && (d.state === "open" || d.state === "deferred") && (!kinds || kinds.includes(d.kind))) {
+    if (d.taskId === taskId && (d.state === "open" || d.state === "deferred") && (!kinds || kinds.includes(d.kind)) && !keep(d)) {
       d.state = state;
       d.updatedAt = now();
       n++;
@@ -309,16 +320,26 @@ function todos() {
   return readJson(FILES.todos, []);
 }
 
-/** Refuses a second open to-do with the same key rather than stacking it. */
-function addTodo({ key, text, taskId = "", url = "" }) {
+/** Refuses a second open to-do with the same key rather than stacking it.
+ *  `once`: one you ticked off (not one a report dropped) never comes back. */
+function addTodo({ key, text, taskId = "", url = "", once = false }) {
   const k = String(key || "").trim() || `todo:${hash(text)}`;
   const all = todos();
-  const dup = all.find((t) => t.key === k && !t.done);
+  const dup = all.find((t) => t.key === k && (!t.done || (once && !t.superseded)));
   if (dup) return { todo: dup, duplicate: true };
   const t = { key: k, text: String(text).slice(0, 500), taskId, url, done: false, createdAt: now() };
   all.push(t);
   writeJson(FILES.todos, all.slice(-500));
   return { todo: t, duplicate: false };
+}
+
+/** Close every open to-do whose key starts with `prefix`. */
+function closeTodos(prefix) {
+  const all = todos();
+  const hit = all.filter((t) => !t.done && String(t.key || "").startsWith(prefix));
+  for (const t of hit) Object.assign(t, { done: true, dismissed: true, doneAt: now() });
+  if (hit.length) writeJson(FILES.todos, all);
+  return hit.length;
 }
 
 function doneTodo(key) {
@@ -331,15 +352,16 @@ function doneTodo(key) {
   return t;
 }
 
-/** Close every open to-do of a task (once its chat is deleted), or only
- *  the ones whose key starts with `prefix` (a new report's "For you"). */
-function closeTaskTodos(taskId, prefix = "") {
+/** Close every open to-do of a task (once its chat is deleted), or only the
+ *  ones whose key starts with `prefix` and isn't in `keep` (a report's "For you"). */
+function closeTaskTodos(taskId, prefix = "", keep = new Set()) {
   const all = todos();
   let n = 0;
   for (const t of all) {
-    if (t.taskId === taskId && !t.done && String(t.key || "").startsWith(prefix)) {
+    if (t.taskId === taskId && !t.done && String(t.key || "").startsWith(prefix) && !keep.has(t.key)) {
       t.done = true;
       t.dismissed = true;
+      if (prefix) t.superseded = true;
       t.doneAt = now();
       n++;
     }
@@ -646,6 +668,7 @@ module.exports = {
   readReport,
   parseReport,
   parseAsk,
+  askText,
   decisions,
   addDecision,
   updateDecision,
@@ -655,6 +678,7 @@ module.exports = {
   addTodo,
   doneTodo,
   closeTaskTodos,
+  closeTodos,
   appendEvent,
   readEvents,
   parseSince,

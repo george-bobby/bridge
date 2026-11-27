@@ -109,24 +109,25 @@ function outcome(taskId, name, info = {}) {
   tasks.writeMeta(taskId, { status, lastOutcome: name, lastOutcomeAt: now() });
   tasks.appendEvent({ taskId, name, status, text });
 
-  // The Inbox. A new report supersedes everything the old one was waiting on.
+  // The Inbox. One ask is one item: a rewritten report keeps what it still
+  // asks (answered or dismissed ones stay closed) and drops what it no longer does.
   const created = [];
   if (name === "report" && parsed) {
-    tasks.closeTaskDecisions(taskId, ["question", "action", "resume"]);
-    for (const q of parsed.questions) created.push(tasks.addDecision({ taskId, kind: "question", text: q }).decision);
-    for (const a of parsed.actions) created.push(tasks.addDecision({ taskId, kind: "action", text: a }).decision);
-    // "For you": things only the user can do. To-dos, not questions; a new report replaces them.
-    tasks.closeTaskTodos(taskId, `you:${taskId}:`);
-    for (const y of parsed.yours) tasks.addTodo({ key: `you:${taskId}:${tasks.hash(y).slice(0, 8)}`, text: y, taskId });
-    if ((status === "needs-input" || status === "blocked") && !parsed.questions.length && !parsed.actions.length && !parsed.yours.length) {
-      created.push(tasks.addDecision({ taskId, kind: "question", text: `${status}: ${parsed.tldr || "see the report"}` }).decision);
+    const mine = new Set(parsed.yours.map(tasks.askText));
+    const asks = [...parsed.questions.map((t) => ["question", t]), ...parsed.actions.map((t) => ["action", t])].filter(([, t]) => !mine.has(tasks.askText(t)));
+    if ((status === "needs-input" || status === "blocked") && !asks.length && !parsed.yours.length) asks.push(["question", `${status}: ${parsed.tldr || "see the report"}`]);
+    const still = new Set(asks.map(([k, t]) => `${k}:${tasks.askText(t)}`));
+    tasks.closeTaskDecisions(taskId, ["question", "action", "resume"], "superseded", (d) => still.has(`${d.kind}:${tasks.askText(d.text)}`));
+    for (const [kind, t] of asks) {
+      const r = tasks.addDecision({ taskId, kind, text: t, fromReport: true });
+      if (!r.duplicate) created.push(r.decision);
     }
-    if (status === "ready-for-review" || status === "pushed-follow-up") {
-      // Workers write `pr: none` too; only a URL is a PR.
-      const pr = [parsed.fields.pr, (tasks.readMeta(taskId) || {}).prUrl].find((u) => /^https?:\/\//.test(u || "")) || "";
-      tasks.addTodo({ key: `review:${taskId}`, text: `Review ${pr ? "the PR for" : ""} ${title}`.replace(/\s+/g, " ").trim(), taskId, url: pr });
-      if (pr) tasks.writeMeta(taskId, { prUrl: pr });
-    }
+    // "For you": things only the user can do, as to-dos. Ticked off stays ticked off.
+    const yours = parsed.yours.map((y) => ({ key: `you:${taskId}:${tasks.hash(tasks.askText(y)).slice(0, 8)}`, text: y }));
+    tasks.closeTaskTodos(taskId, `you:${taskId}:`, new Set(yours.map((y) => y.key)));
+    for (const y of yours) tasks.addTodo({ ...y, taskId, once: true });
+    // Workers write `pr: none` too; only a URL is a PR. The chat shows it; no review to-do.
+    if (/^https?:\/\//.test(parsed.fields.pr || "")) tasks.writeMeta(taskId, { prUrl: parsed.fields.pr });
   } else if (NEEDS_YOU.has(name)) {
     tasks.closeTaskDecisions(taskId, ["resume"]);
     created.push(tasks.addDecision({ taskId, kind: "resume", text: `${name}: ${text}` }).decision);
@@ -787,6 +788,7 @@ function brief({ since = "8h", orchestrator = "" } = {}) {
  */
 function recover() {
   ensureOrchestrator();
+  tasks.closeTodos("review:"); // "Review the PR" to-dos are no longer made; clear what's left
   for (const m of tasks.list()) {
     if (GONE.has(m.status) || m.archived) continue;
     const r = tasks.readReport(m.id);
