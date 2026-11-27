@@ -4,17 +4,16 @@ import SwiftUI
 // MARK: - Open in…
 //
 // The chat header's split button: the icon opens the session in your last
-// pick, the chevron lists every place it can go. Editors and Finder open the
-// session's folder; GitHub its PR (else its branch); Linear its issue; Slack
+// pick, the chevron lists every place it can go. VS Code and Finder open the
+// session's folder (there's no Cursor target, by choice); GitHub its PR (else its branch); Linear its issue; Slack
 // its thread, or the thread its Linear issue links.
 
 enum OpenTarget: String, CaseIterable, Identifiable {
-    case cursor, vscode, finder, github, linear, slack
+    case vscode, finder, github, linear, slack
     var id: String { rawValue }
 
     var label: String {
         switch self {
-        case .cursor: return "Cursor"
         case .vscode: return "VS Code"
         case .finder: return "Finder"
         case .github: return "GitHub"
@@ -26,7 +25,6 @@ enum OpenTarget: String, CaseIterable, Identifiable {
     /// The app a target opens in, when it's an app (editors, Finder) or has one (Linear, Slack).
     var bundleIds: [String] {
         switch self {
-        case .cursor: return ["com.todesktop.230313mzl4w4u92"]
         case .vscode: return ["com.microsoft.VSCode", "com.microsoft.VSCodeInsiders", "com.vscodium"]
         case .finder: return ["com.apple.finder"]
         case .github: return ["com.github.GitHubClient"]
@@ -37,7 +35,7 @@ enum OpenTarget: String, CaseIterable, Identifiable {
 
     var symbol: String {
         switch self {
-        case .cursor, .vscode: return "chevron.left.forwardslash.chevron.right"
+        case .vscode: return "chevron.left.forwardslash.chevron.right"
         case .finder: return "folder"
         case .github: return "arrow.triangle.pull"
         case .linear: return "circle.lefthalf.filled"
@@ -62,7 +60,7 @@ enum OpenTarget: String, CaseIterable, Identifiable {
         return i
     }
 
-    var isEditor: Bool { self == .cursor || self == .vscode }
+    var isEditor: Bool { self == .vscode }
 }
 
 /// Where one session can be opened, and the URLs/folders behind each target.
@@ -83,7 +81,7 @@ struct OpenPlaces {
 
     func available(_ t: OpenTarget) -> Bool {
         switch t {
-        case .cursor, .vscode: return !folder.isEmpty && t.appURL != nil
+        case .vscode: return !folder.isEmpty && t.appURL != nil
         case .finder: return !folder.isEmpty
         case .github: return !github.isEmpty
         case .linear: return !linear.isEmpty
@@ -95,7 +93,7 @@ struct OpenPlaces {
 
     @MainActor func open(_ t: OpenTarget, model: AppModel) {
         switch t {
-        case .cursor, .vscode:
+        case .vscode:
             guard let app = t.appURL else { return }
             NSWorkspace.shared.open([URL(fileURLWithPath: folder)], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
         case .finder:

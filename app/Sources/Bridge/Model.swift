@@ -318,6 +318,10 @@ final class AppModel {
     var usage: JSON = .null
     /// Settings: the open section, and whether saved .env edits wait on a server restart.
     var settingsPane = "general"
+    /// Settings › Customize: "mcp", "skills" or "plugins" (Customize.swift).
+    var customizeTab = "mcp"
+    /// Snapshot runs only: open the first skill in the editor.
+    var snapshotSkillEdit = false
     var envNeedsRestart = false
     var notifyAsks = UserDefaults.standard.object(forKey: "notify.asks") as? Bool ?? true {
         didSet { UserDefaults.standard.set(notifyAsks, forKey: "notify.asks") }
