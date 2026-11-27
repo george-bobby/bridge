@@ -90,7 +90,7 @@ enum Prefs {
 
     /// The connection keys: edited in Integrations. Everything else in .env is
     /// an override for something Bridge works out itself, under Advanced.
-    static let connectionKeys = ["SLACK_USER_TOKEN", "LINEAR_API_KEY", "VERCEL_TOKEN", "INCIDENT_API_KEY", "GRANOLA_API_KEY"]
+    static let connectionKeys = ["SLACK_USER_TOKEN", "LINEAR_API_KEY", "VERCEL_TOKEN", "INCIDENT_API_KEY", "GRANOLA_API_KEY", "DD_API_KEY", "DD_APP_KEY", "DD_SITE"]
     static var placed: Set<String> { Set(connectionKeys) }
 }
 
@@ -420,6 +420,7 @@ struct EnvField: View {
         "BRIDGE_PORT": "Server port", "LAUNCHD_LABEL": "launchd label", "PIPELINE_MODEL": "Pipeline model",
         "EXTRA_PATH": "Extra PATH", "MCP_READ_PREFIXES": "Read-only MCP prefixes", "WORKER_SKILL": "Opening skill",
         "VERCEL_TOKEN": "Access token", "VERCEL_TEAM_ID": "Vercel team", "INCIDENT_API_KEY": "API key", "GRANOLA_API_KEY": "API key",
+        "DD_API_KEY": "API key", "DD_APP_KEY": "Application key", "DD_SITE": "Site",
         "DEFAULT_DIR": "Default folder",
     ]
     static let details: [String: String] = [
@@ -820,6 +821,7 @@ struct IntegrationSettings: View {
             if show("vercel deployments token") { vercel }
             if show("incident.io incidents api key") { incidents }
             if show("granola meeting notes api key") { granola }
+            if show("datadog monitors errors error tracking api application key site") { datadog }
         }
         .task { await model.loadIdentity() }
     }
@@ -900,7 +902,7 @@ struct IntegrationSettings: View {
     var vercel: some View {
         keyGroup(.vercel, "Vercel", "Deployments across your account and teams; a preview opens next to the session on its branch.", ["VERCEL_TOKEN"],
                  on: model.vercel["configured"].bool, status: model.vercel["user"].nonEmpty.map { "@\($0)" } ?? "",
-                 link: ("Any account can create one under Account Settings › Tokens", "https://vercel.com/account/settings/tokens"))
+                 link: ("Account Settings › Tokens. A team that enforces SAML needs a token scoped to it: add one per team, comma-separated", "https://vercel.com/account/settings/tokens"))
     }
 
     var incidents: some View {
@@ -911,6 +913,12 @@ struct IntegrationSettings: View {
     var granola: some View {
         keyGroup(.granola, "Granola", "Your meeting notes with their summaries and attendees.", ["GRANOLA_API_KEY"],
                  on: model.granola["configured"].bool, link: ("In the Granola app: Settings › Connectors › API keys (Business and Enterprise)", "https://docs.granola.ai"))
+    }
+
+    var datadog: some View {
+        keyGroup(.datadog, "Datadog", "Monitors that are alerting, warning or without data, and the last day's open Error Tracking issues. Read-only.", ["DD_API_KEY", "DD_APP_KEY", "DD_SITE"],
+                 on: model.datadog["configured"].bool, status: model.datadog["site"].string,
+                 link: ("An API key (Organization Settings) and an application key with monitors_read and error_tracking_read (Personal Settings)", "https://app.datadoghq.com/personal-settings/application-keys"))
     }
 
     func save(_ patch: [String: Any]) { Task { await model.saveConfig(["harness": patch]); await model.loadIdentity() } }

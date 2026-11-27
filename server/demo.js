@@ -761,7 +761,7 @@ const history = {
   },
 };
 
-/* ------------------------------------------- Vercel, incident.io, Granola */
+/* ---------------------------------- Vercel, incident.io, Granola, Datadog */
 
 function vercel() {
   const d = (n, project, branch, state, ago, o = {}) => ({
@@ -820,6 +820,35 @@ function granolaNote(id) {
   return { id, title: n[1], url: `https://notes.granola.ai/d/${id}`, attendees: n[3], event: n[1], summary: n[4], createdAt: iso(n[2]) };
 }
 
+function datadog() {
+  const app = "https://app.datadoghq.com";
+  const m = (id, name, status, ago, o = {}) => ({
+    id, name, status, type: o.type || "metric alert", priority: o.priority || 0, muted: !!o.muted, tags: o.tags || [],
+    triggeredAt: (now() - ago) * 1000, url: `${app}/monitors/${id}`,
+  });
+  const e = (id, type, message, service, count, o = {}) => ({
+    id, type, message, service, where: o.where || "", state: o.state || "open", count,
+    firstSeen: (now() - (o.first || DAY)) * 1000, lastSeen: (now() - (o.last || 300)) * 1000, url: `${app}/error-tracking?issueId=${id}`,
+  });
+  return {
+    configured: true, site: "app.datadoghq.com",
+    monitors: [
+      m(4101, "[storefront] Checkout 5xx rate above 2% (eu-west)", "alert", 1900, { priority: 1, tags: ["service:checkout", "env:prod"] }),
+      m(4102, "[search] p95 latency above 2s", "warn", 7200, { priority: 2, tags: ["service:search", "env:prod"] }),
+      m(4103, "[workers] Email queue depth", "warn", 3 * 3600, { priority: 3, tags: ["service:mailer"] }),
+      m(4104, "[cdn] Image cache hit ratio", "nodata", 2 * DAY, { priority: 4, muted: true, tags: ["service:images"] }),
+    ],
+    issues: [
+      e("a1f0", "TypeError", "Cannot read properties of undefined (reading 'wallet')", "storefront-web", 1843, { where: "checkout/PaymentStep.tsx · onApplePay", first: 5400 }),
+      e("b2e1", "UpstreamTimeout", "POST /checkout timed out after 10000ms (eu-west-1)", "checkout", 612, { where: "api/checkout.go · Submit", first: 2000 }),
+      e("c3d2", "RateLimitError", "429 from the search index for key ak_live_…", "search", 288, { where: "search/limiter.ts · take", state: "acknowledged" }),
+      e("d4c3", "KeyError", "'currency'", "mailer", 37, { where: "templates/order.py · render", first: 3 * DAY, last: 4 * 3600 }),
+    ],
+    errors: {},
+    at: Date.now(),
+  };
+}
+
 /* ------------------------------------------------- skills and plugins */
 
 /** A fake home with a few skills, for Settings › Customize (server/customize.js). */
@@ -862,4 +891,4 @@ function plugins() {
   };
 }
 
-module.exports = { seed, writeSessions, seedSkills, plugins, pulls, linear, ports, slack, usage, agents, prActivity, mcp, git, history, vercel, incidents, granola, granolaNote };
+module.exports = { seed, writeSessions, seedSkills, plugins, pulls, linear, ports, slack, usage, agents, prActivity, mcp, git, history, vercel, incidents, granola, granolaNote, datadog };

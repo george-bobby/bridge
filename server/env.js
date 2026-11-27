@@ -132,6 +132,9 @@ const env = {
   vercelTeamId: str("VERCEL_TEAM_ID"),
   incidentApiKey: str("INCIDENT_API_KEY"),
   granolaApiKey: str("GRANOLA_API_KEY"),
+  datadogApiKey: str("DD_API_KEY"),
+  datadogAppKey: str("DD_APP_KEY"),
+  datadogSite: str("DD_SITE", "datadoghq.com"),
   // Slack user token (xoxp-) for the native Slack connector (server/slack.js).
   // Acts as you: no bot, nothing to add to a channel. Server-only, like the
   // Linear key.
@@ -199,6 +202,8 @@ delete process.env.LINEAR_API_KEY;
 delete process.env.VERCEL_TOKEN;
 delete process.env.INCIDENT_API_KEY;
 delete process.env.GRANOLA_API_KEY;
+delete process.env.DD_API_KEY;
+delete process.env.DD_APP_KEY;
 delete process.env.SLACK_USER_TOKEN;
 
 module.exports = env;

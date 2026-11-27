@@ -45,7 +45,7 @@ test("demo serves fixture PRs, Linear sub-issues and dev servers", async () => {
   assert.ok((await get("/api/sources/ports")).servers.length >= 1);
 });
 
-test("demo serves Vercel, incident.io and Granola fixtures", async () => {
+test("demo serves Vercel, incident.io, Granola and Datadog fixtures", async () => {
   const v = await get("/api/sources/vercel");
   assert.ok(v.configured && v.deployments.some((d) => d.state === "building") && v.deployments.some((d) => d.target === "production"));
   const inc = await get("/api/sources/incidents");
@@ -54,6 +54,8 @@ test("demo serves Vercel, incident.io and Granola fixtures", async () => {
   // The app percent-encodes everything but letters and digits (not_1 → not%5F1).
   const note = await get(`/api/sources/granola/${encodeURIComponent(g.notes[0].id).replace(/_/g, "%5F")}`);
   assert.ok(note.note.summary.length > 0 && note.note.attendees.length > 0);
+  const dd = await get("/api/sources/datadog");
+  assert.ok(dd.configured && dd.monitors.some((m) => m.status === "alert") && dd.issues.length > 0);
 });
 
 test("demo sessions cover the board, and the pending question survives boot", async () => {

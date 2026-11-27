@@ -248,7 +248,7 @@ let statusLabels: [String: String] = [
 // MARK: - Routes
 
 enum Route: Hashable {
-    case home, inbox, slack, board, sessions, pulls, linear, vercel, incidents, granola, memory, usage, settings
+    case home, inbox, slack, board, sessions, pulls, linear, vercel, incidents, granola, datadog, memory, usage, settings
     /// New task: the composer as its own page, like a fresh chat.
     case compose
     case session(String)
@@ -266,6 +266,7 @@ enum Route: Hashable {
         case .vercel: return "Vercel"
         case .incidents: return "Incidents"
         case .granola: return "Granola"
+        case .datadog: return "Datadog"
         case .memory: return "Memory"
         case .settings: return "Settings"
         case .compose: return "New task"
@@ -399,10 +400,11 @@ final class AppModel {
     @ObservationIgnored private var pullsByURL: [String: PullRequest] = [:]
     @ObservationIgnored private(set) var issuesByKey: [String: Issue] = [:]
     var ports: JSON = .null
-    /// Vercel deployments, incident.io incidents, Granola notes (Feeds.swift).
+    /// Vercel deployments, incident.io incidents, Granola notes, Datadog monitors and errors (Feeds.swift).
     var vercel: JSON = .null
     var incidents: JSON = .null
     var granola: JSON = .null
+    var datadog: JSON = .null
     /// Sources hidden from the sidebar (Settings › Integrations).
     var hiddenSources = Sources.hidden
     var loading: Set<String> = []
@@ -1007,7 +1009,8 @@ final class AppModel {
         async let d: Void = sourceShown(.vercel) ? load("vercel", refresh: refresh) : ()
         async let e: Void = sourceShown(.incidents) ? load("incidents", refresh: refresh) : ()
         async let f: Void = sourceShown(.granola) ? load("granola", refresh: refresh) : ()
-        _ = await (a, b, c, d, e, f)
+        async let g: Void = sourceShown(.datadog) ? load("datadog", refresh: refresh) : ()
+        _ = await (a, b, c, d, e, f, g)
     }
 
     func load(_ name: String, refresh: Bool = false) async {
@@ -1023,6 +1026,7 @@ final class AppModel {
             case "vercel": vercel = out
             case "incidents": incidents = out
             case "granola": granola = out
+            case "datadog": datadog = out
             default: ports = out
             }
             errors[name] = out["stale"].nonEmpty

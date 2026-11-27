@@ -268,15 +268,17 @@ async function loadPorts() {
 }
 
 
-/* ------------------------------------------- Vercel, incident.io, Granola */
+/* ---------------------------------- Vercel, incident.io, Granola, Datadog */
 
 // Each is read-only, on its own key from .env (never passed to sessions), and
 // answers { configured: false } without one so the app can say what's missing.
 
-async function getJson(url, headers, what) {
-  const res = await fetch(url, { headers: { Accept: "application/json", ...headers }, signal: AbortSignal.timeout(20_000) });
+async function getJson(url, headers, what, body) {
+  const init = body === undefined ? {} : { method: "POST", body: JSON.stringify(body), headers: { "Content-Type": "application/json" } };
+  const res = await fetch(url, { ...init, headers: { Accept: "application/json", ...init.headers, ...headers }, signal: AbortSignal.timeout(20_000) });
   const out = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error((out.error && (out.error.message || (typeof out.error === "string" && out.error))) || out.message || `${what} answered ${res.status}`);
+  const errs = Array.isArray(out.errors) ? out.errors.map((e) => (typeof e === "string" ? e : e.detail || e.title)).filter(Boolean).join("; ") : "";
+  if (!res.ok) throw new Error((out.error && (out.error.message || (typeof out.error === "string" && out.error))) || out.message || errs || `${what} answered ${res.status}`);
   return out;
 }
 
@@ -303,26 +305,50 @@ function shapeDeployment(d, team) {
 }
 
 /** Recent deployments across your personal account and every team the token
- *  can see (VERCEL_TEAM_ID pins it to one). */
+ *  can see (VERCEL_TEAM_ID pins it to one). VERCEL_TOKEN may list several
+ *  tokens, comma-separated: a team that enforces SAML only answers a token
+ *  created for that team, so each such team needs its own. A team no token
+ *  could read is reported in `blocked` instead of looking empty. */
 async function loadVercel() {
-  if (!env.vercelToken) return { configured: false, deployments: [], at: Date.now() };
-  const auth = { Authorization: `Bearer ${env.vercelToken}` };
+  const tokens = String(env.vercelToken || "").split(",").map((t) => t.trim()).filter(Boolean);
+  if (!tokens.length) return { configured: false, deployments: [], at: Date.now() };
+  const per = await Promise.all(tokens.map(vercelToken));
+  const user = per.map((p) => p.user).find(Boolean) || "";
+  const teams = [...new Set(per.flatMap((p) => p.teams))];
+  const read = new Set(per.flatMap((p) => p.read));
+  const blocked = [];
+  for (const p of per) for (const b of p.blocked) if (!read.has(b.team) && !blocked.some((x) => x.team === b.team)) blocked.push(b);
+  if (!read.size && blocked.length) throw new Error(blocked.map((b) => `${b.team}: ${b.reason}`).join("; "));
+  const seen = new Set();
+  const deployments = per.flatMap((p) => p.deployments).filter((d) => d.id && !seen.has(d.id) && seen.add(d.id)).sort((a, b) => b.createdAt - a.createdAt).slice(0, 60);
+  return { configured: true, user, teams, blocked, deployments, at: Date.now() };
+}
+
+async function vercelToken(token) {
+  const auth = { Authorization: `Bearer ${token}` };
   const api = (p, q = "") => getJson(`https://api.vercel.com${p}${q}`, auth, "Vercel");
   const user = await api("/v2/user").then((o) => o.user || {}).catch(() => ({}));
-  let teams = [];
+  let teams;
   if (env.vercelTeamId) teams = [{ id: env.vercelTeamId, slug: env.vercelTeamId }];
   else teams = ((await api("/v2/teams", "?limit=20").catch(() => ({}))).teams || []).map((t) => ({ id: t.id, slug: t.slug, name: t.name }));
   const scopes = env.vercelTeamId ? teams : [null, ...teams.slice(0, 6)];
+  const read = [], blocked = [];
   const lists = await Promise.all(
     scopes.map((t) =>
       api("/v6/deployments", `?limit=40${t ? `&teamId=${encodeURIComponent(t.id)}` : ""}`)
-        .then((o) => (o.deployments || []).map((d) => shapeDeployment(d, t)))
-        .catch(() => []),
+        .then((o) => {
+          read.push(t ? t.slug : "");
+          return (o.deployments || []).map((d) => shapeDeployment(d, t));
+        })
+        .catch((e) => {
+          const msg = String(e.message || e);
+          const saml = /scope|re-authenticate|saml/i.test(msg);
+          blocked.push({ team: t ? t.slug : user.username || "personal", saml, reason: saml ? "this team enforces SAML; add a token created for it" : msg });
+          return [];
+        }),
     ),
   );
-  const seen = new Set();
-  const deployments = lists.flat().filter((d) => d.id && !seen.has(d.id) && seen.add(d.id)).sort((a, b) => b.createdAt - a.createdAt).slice(0, 60);
-  return { configured: true, user: user.username || user.email || "", teams: teams.map((t) => t.slug), deployments, at: Date.now() };
+  return { user: user.username || user.email || "", teams: teams.map((t) => t.slug), read, blocked, deployments: lists.flat() };
 }
 
 /** Recent incidents in your incident.io workspace, live ones first. */
@@ -387,10 +413,74 @@ async function granolaNote(id) {
   });
 }
 
+/** "us5.datadoghq.com" (or "app.datadoghq.eu", a URL…) → its API and web hosts. */
+function datadogHosts(raw) {
+  const site = String(raw || "datadoghq.com").trim().replace(/^https?:\/\//, "").replace(/\/.*$/, "").replace(/^(app|api)\./, "") || "datadoghq.com";
+  // The two-label sites serve the app on app.<site>; regional ones on the site itself.
+  return { api: `https://api.${site}`, app: site.split(".").length === 2 ? `https://app.${site}` : `https://${site}` };
+}
+
+// Monitor search answers "Alert" | "Warn" | "No Data" | "OK" | …
+const DD_STATUS = { alert: "alert", warn: "warn", "no data": "nodata", ok: "ok" };
+
+/** Monitors that are alerting, warning or without data, and the last day's
+ *  open Error Tracking issues. Read-only; each half reports its own error. */
+async function loadDatadog() {
+  if (!env.datadogApiKey || !env.datadogAppKey) return { configured: false, monitors: [], issues: [], at: Date.now() };
+  const { api, app } = datadogHosts(env.datadogSite);
+  const auth = { "DD-API-KEY": env.datadogApiKey, "DD-APPLICATION-KEY": env.datadogAppKey };
+  const errors = {};
+  const query = encodeURIComponent('status:(alert OR warn OR "no data")');
+  const monitors = await getJson(`${api}/api/v1/monitor/search?query=${query}&per_page=100&sort=status,asc`, auth, "Datadog")
+    .then((o) =>
+      (o.monitors || []).map((m) => ({
+        id: m.id,
+        name: m.name || "",
+        status: DD_STATUS[String(m.status || "").toLowerCase()] || "nodata",
+        type: m.type || "",
+        priority: m.priority || 0,
+        muted: !!m.muted_until_ts || String(m.status || "").toLowerCase() === "muted",
+        tags: (m.tags || []).slice(0, 6),
+        triggeredAt: (m.last_triggered_ts || 0) * 1000,
+        url: `${app}/monitors/${m.id}`,
+      })),
+    )
+    .catch((e) => ((errors.monitors = String(e.message || e)), []));
+  const to = Date.now();
+  const issues = await getJson(`${api}/api/v2/error-tracking/issues/search?include=issue`, auth, "Datadog Error Tracking", {
+    data: { type: "search_request", attributes: { query: "*", from: to - 86_400_000, to, persona: "ALL", order_by: "TOTAL_COUNT" } },
+  })
+    .then((o) => {
+      const byId = new Map((o.included || []).filter((x) => x.type === "issue").map((x) => [x.id, x.attributes || {}]));
+      return (o.data || [])
+        .map((r) => {
+          const id = (r.relationships && r.relationships.issue && r.relationships.issue.data && r.relationships.issue.data.id) || r.id;
+          const a = byId.get(id) || {};
+          return {
+            id,
+            type: a.error_type || "",
+            message: String(a.error_message || "").split("\n")[0].slice(0, 300),
+            service: a.service || "",
+            where: [a.file_path, a.function_name].filter(Boolean).join(" · "),
+            state: String(a.state || "").toLowerCase(),
+            count: (r.attributes && r.attributes.total_count) || 0,
+            firstSeen: a.first_seen || 0,
+            lastSeen: a.last_seen || 0,
+            url: `${app}/error-tracking?issueId=${encodeURIComponent(id)}`,
+          };
+        })
+        .filter((i) => !["resolved", "ignored", "excluded"].includes(i.state))
+        .slice(0, 40);
+    })
+    .catch((e) => ((errors.issues = String(e.message || e)), []));
+  if (errors.monitors && errors.issues) throw new Error(errors.monitors);
+  return { configured: true, site: app.replace(/^https:\/\//, ""), monitors, issues, errors, at: Date.now() };
+}
+
 const demo = env.demo ? require("./demo") : null;
 
 module.exports = demo
-  ? { pulls: async () => demo.pulls(), linear: async () => demo.linear(), ports: async () => demo.ports(), vercel: async () => demo.vercel(), incidents: async () => demo.incidents(), granola: async () => demo.granola(), granolaNote }
+  ? { pulls: async () => demo.pulls(), linear: async () => demo.linear(), ports: async () => demo.ports(), vercel: async () => demo.vercel(), incidents: async () => demo.incidents(), granola: async () => demo.granola(), datadog: async () => demo.datadog(), granolaNote }
   : {
   ports: () => cached("ports", loadPorts, { refresh: true }),
   pulls: (o) => cached("pulls", loadPulls, o),
@@ -398,5 +488,6 @@ module.exports = demo
   vercel: (o) => cached("vercel", loadVercel, o),
   incidents: (o) => cached("incidents", loadIncidents, o),
   granola: (o) => cached("granola", loadGranola, o),
+  datadog: (o) => cached("datadog", loadDatadog, o),
   granolaNote,
     };

@@ -683,7 +683,7 @@ async function handle(req, res) {
       return sendJson(res, 502, { ok: false, error: String(e.message || e) });
     }
   }
-  const src = req.method === "GET" && p.match(/^\/api\/sources\/(pulls|linear|ports|vercel|incidents|granola)$/);
+  const src = req.method === "GET" && p.match(/^\/api\/sources\/(pulls|linear|ports|vercel|incidents|granola|datadog)$/);
   if (src) {
     try {
       const data = await sources[src[1]]({ refresh: url.searchParams.get("refresh") === "1" });

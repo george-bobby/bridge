@@ -25,7 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// Dev aid: render every page of the window to PNGs, for checking the UI
     /// without screen-recording permission. `BRIDGE_SNAPSHOT_DIR=/tmp/x Bridge`.
     private func snapshots(to dir: String) {
-        let routes: [(String, Route)] = [("home", .home), ("board", .board), ("sessions", .sessions), ("archived", .sessions), ("pulls", .pulls), ("linear", .linear), ("vercel", .vercel), ("incidents", .incidents), ("granola", .granola), ("inbox", .inbox), ("inbox-slack", .inbox), ("memory", .memory), ("slack", .slack), ("usage", .usage), ("settings", .settings), ("compose", .compose), ("settings-agents", .settings), ("settings-rules", .settings), ("settings-mcp", .settings), ("settings-skills", .settings), ("skill-edit", .settings), ("settings-plugins", .settings), ("mcp-tools", .settings), ("mcp-add", .settings), ("settings-integrations", .settings), ("settings-projects", .settings), ("settings-notifications", .settings), ("settings-advanced", .settings)]
+        let routes: [(String, Route)] = [("home", .home), ("board", .board), ("sessions", .sessions), ("archived", .sessions), ("pulls", .pulls), ("linear", .linear), ("vercel", .vercel), ("incidents", .incidents), ("granola", .granola), ("datadog", .datadog), ("inbox", .inbox), ("inbox-slack", .inbox), ("memory", .memory), ("slack", .slack), ("usage", .usage), ("settings", .settings), ("compose", .compose), ("settings-agents", .settings), ("settings-rules", .settings), ("settings-mcp", .settings), ("settings-skills", .settings), ("skill-edit", .settings), ("settings-plugins", .settings), ("mcp-tools", .settings), ("mcp-add", .settings), ("settings-integrations", .settings), ("settings-projects", .settings), ("settings-notifications", .settings), ("settings-advanced", .settings)]
         let browser = ProcessInfo.processInfo.environment["BRIDGE_SNAPSHOT_URL"]
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 8_000_000_000)
@@ -184,6 +184,7 @@ let navOrder: [(label: String, icon: String, route: Route)] = [
     ("Vercel", "triangle", .vercel),
     ("Incidents", "flame", .incidents),
     ("Granola", "note.text", .granola),
+    ("Datadog", "waveform.path.ecg", .datadog),
     ("Memory", "book.closed", .memory),
     ("Usage", "gauge.with.dots.needle.50percent", .usage),
 ]
@@ -333,6 +334,7 @@ struct RootView: View {
         case .vercel: VercelView()
         case .incidents: IncidentsView()
         case .granola: GranolaView()
+        case .datadog: DatadogView()
         case .memory: MemoryView()
         case .settings: SettingsView()
         case .compose: ComposeSheet()
