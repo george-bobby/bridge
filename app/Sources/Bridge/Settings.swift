@@ -141,7 +141,7 @@ struct SettingEntry {
         .init(pane: .integrations, title: "incident.io", words: "incident.io incidents api key", query: "incidents"),
         .init(pane: .integrations, title: "Granola", words: "granola meeting notes api key", query: "granola"),
         .init(pane: .integrations, title: "Models", words: "models model providers openrouter anthropic api key pricing context", query: "models"),
-        .init(pane: .projects, title: "Projects", words: "project repository default add", query: ""),
+        .init(pane: .projects, title: "Projects", words: "project repository default add automation merge review resolve rebase", query: ""),
         .init(pane: .notifications, title: "When a session needs you", words: "notify session needs you question ask", query: "notify ask"),
         .init(pane: .notifications, title: "When a worker reports", words: "notify worker outcome finished blocked stalled review", query: "notify worker"),
         .init(pane: .notifications, title: "When something new reaches you on Slack", words: "notify slack mention message", query: "notify slack"),
@@ -1134,6 +1134,7 @@ struct ProjectSettings: View {
             } trailing: {
                 Button { model.addProject() } label: { Label("Add project", systemImage: "plus") }.buttonStyle(LButton())
             }
+            ProjectAutomation(q: q)
         }
     }
 }

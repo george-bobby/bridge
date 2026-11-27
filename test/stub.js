@@ -39,7 +39,7 @@
 
 const fs = require("fs");
 
-if (process.env.STUB_LOG) fs.appendFileSync(process.env.STUB_LOG, JSON.stringify({ argv: process.argv.slice(2), env: { BRIDGE_ROLE: process.env.BRIDGE_ROLE, BRIDGE_TASK_ID: process.env.BRIDGE_TASK_ID, BRIDGE_GUARD: process.env.BRIDGE_GUARD } }) + "\n");
+if (process.env.STUB_LOG) fs.appendFileSync(process.env.STUB_LOG, JSON.stringify({ argv: process.argv.slice(2), env: { BRIDGE_ROLE: process.env.BRIDGE_ROLE, BRIDGE_TASK_ID: process.env.BRIDGE_TASK_ID, BRIDGE_GUARD: process.env.BRIDGE_GUARD, BRIDGE_PROJECT: process.env.BRIDGE_PROJECT } }) + "\n");
 
 if (process.argv.includes("--version")) {
   process.stdout.write("0.0.0 (stub)\n");

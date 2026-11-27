@@ -228,6 +228,32 @@ function fill(text, values) {
   return text.replace(/\{\{([A-Z_]+)\}\}/g, (w, k) => (values[k] != null ? String(values[k]) : w));
 }
 
+/** The project a session belongs to (its pin, else its folder). */
+function projectOf(run) {
+  try {
+    return projects.of(run, tasks.readMeta(run.runId) || {});
+  } catch {
+    return projects.DEFAULT;
+  }
+}
+
+/**
+ * A project's automation settings as a few lines for the worker prompt: only
+ * what differs from the house rules, nothing at all when everything is default.
+ */
+function automationBlock(auto) {
+  const a = projects.automation(auto);
+  const lines = [
+    a.review && "- Review: after opening the PR, run the repo's review flow (the `/review` skill where installed, else a careful self-review of the diff), fix what it finds and push.",
+    a.resolve && "- Resolve: work every review thread on your PR: fix the real ones, reply briefly to all (like the `/resolve` skill).",
+    a.merge && "- Merge: when CI on the PR's latest head is green and it is mergeable, merge it yourself with `gh pr merge <n> --merge` (this overrides the merge rail above). Never `--admin`, never with a red or pending check.",
+    a.decide && "- Small decisions: take your recommended option and list it under Open questions instead of asking; still ask for anything costly to reverse.",
+    !a.rebase && "- Rebase: optional in this project; rebase onto `origin/main` only to resolve conflicts.",
+  ].filter(Boolean);
+  if (!lines.length) return "";
+  return `## This project's automation\n\n${lines.join("\n")}\n- None of this extends to Slack, Linear or new threads anywhere: those stay drafts for {{USER}}.\n`;
+}
+
 /** The appended system prompt for a session: worker contract or orchestrator. */
 function systemPrompt(run, config) {
   const role = roleOf(run);
@@ -260,7 +286,9 @@ function systemPrompt(run, config) {
           `- When you create the worktree, record it: \`${path.join(ROOT, "scripts", "emit.sh")} ${run.runId} build "<one line>" worktree=<abs path> branch=<name>\``,
           "- The pipeline's closing JSON verdict is still required, after the report.",
         ].join("\n");
-  return `${fill(read("worker.md"), { USER, BRIDGE, TASK_ID: run.runId, REPORT: p.report, BRIEF: p.brief, WHERE: where }).trimEnd()}\n\n${house}`;
+  const project = projects.get(projectOf(run));
+  const auto = fill(automationBlock(project && project.auto), { USER });
+  return `${fill(read("worker.md"), { USER, BRIDGE, TASK_ID: run.runId, REPORT: p.report, BRIEF: p.brief, WHERE: where }).trimEnd()}\n\n${auto ? `${auto}\n` : ""}${house}`;
 }
 
 /* ------------------------------------------------------- orchestrator roster */
@@ -614,6 +642,8 @@ function sessionEnv(run, kind, role) {
     // skill that outward writes are already gated on the exact payload.
     BRIDGE_ROLE: role,
     BRIDGE_TASK_ID: run.runId,
+    // The guard reads this project's automation settings (auto-merge) per call.
+    BRIDGE_PROJECT: projectOf(run),
     BRIDGE_REPORT: role === "orchestrator" ? "" : tasks.paths(run.runId).report,
     BRIDGE_GUARD: "1",
     BRIDGE_URL: `http://127.0.0.1:${env.port}`,
@@ -2223,6 +2253,7 @@ module.exports = {
   steer,
   interrupt,
   systemPrompt,
+  automationBlock,
   startFollowup,
   startPipeline,
   answerAsk,

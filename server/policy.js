@@ -361,6 +361,9 @@ function checkGh(t, policy) {
   const [, group, verb] = t;
   const what = t.join(" ").slice(0, 140);
   if (group === "pr") {
+    // A project with auto-merge on lets its sessions merge without asking;
+    // an admin override (skips required checks) still asks.
+    if (verb === "merge" && policy.autoMerge && !t.includes("--admin")) return null;
     if (verb === "merge" || verb === "close") return gate("prMerge", what, policy);
     if (verb === "comment" || verb === "review") return gate("prComments", what, policy);
     return null; // create, edit, ready, view, checks, diff: the PR workflow
@@ -564,7 +567,19 @@ function checkMcp(name, input, policy) {
 
 /* ----------------------------------------------------------------- entry */
 
-function check(toolName, toolInput = {}, { policy = loadPolicy() } = {}) {
+/** The automation settings of the session's project (BRIDGE_PROJECT), read fresh per call. */
+function projectAuto(id = process.env.BRIDGE_PROJECT) {
+  if (!id) return {};
+  try {
+    const p = require("./projects").get(id);
+    return (p && p.auto) || {};
+  } catch {
+    return {};
+  }
+}
+
+function check(toolName, toolInput = {}, { policy = loadPolicy(), auto = projectAuto() } = {}) {
+  policy = { ...policy, autoMerge: !!(auto && auto.merge) };
   const name = String(toolName || "");
   const input = toolInput || {};
   if (name === "Bash") return checkBash(input.command, policy);
@@ -579,4 +594,4 @@ function check(toolName, toolInput = {}, { policy = loadPolicy() } = {}) {
   return null;
 }
 
-module.exports = { check, loadPolicy, DEFAULT_POLICY, segments };
+module.exports = { check, loadPolicy, projectAuto, DEFAULT_POLICY, segments };

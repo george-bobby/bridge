@@ -5,7 +5,7 @@ const path = require("path");
 
 const { check, DEFAULT_POLICY } = require("../server/policy");
 
-const P = { policy: { ...DEFAULT_POLICY } };
+const P = { policy: { ...DEFAULT_POLICY }, auto: {} };
 const bash = (command) => check("Bash", { command }, P);
 const verdict = (command) => (bash(command) || { decision: "pass" }).decision;
 
@@ -97,6 +97,35 @@ test("gh: PR workflow passes, merges and issue writes ask, review replies follow
     assert.equal(verdict(ask), "ask", ask);
   }
   assert.equal(verdict("curl -s http://127.0.0.1:4319/api/state"), "pass");
+});
+
+test("a project with auto-merge on merges without asking; admin merges and closes still ask", () => {
+  const on = { policy: { ...DEFAULT_POLICY }, auto: { merge: true } };
+  const v = (command, o) => (check("Bash", { command }, o) || { decision: "pass" }).decision;
+  for (const cmd of ["gh pr merge 12 --merge", "gh pr merge --squash --delete-branch", "cd x && gh pr merge 3 --auto --merge"]) {
+    assert.equal(v(cmd, on), "pass", cmd);
+    assert.equal(v(cmd, P), "ask", `${cmd} (auto-merge off)`);
+  }
+  for (const cmd of ["gh pr merge 12 --admin --merge", "gh pr close 12", "gh api -X PUT repos/o/r/pulls/12/merge"]) assert.equal(v(cmd, on), "ask", cmd);
+  assert.equal(v("gh pr merge 12", { ...on, auto: { merge: false, review: true } }), "ask");
+});
+
+test("the hook reads the session's project (BRIDGE_PROJECT) for auto-merge", () => {
+  const os = require("os");
+  const fs = require("fs");
+  const data = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-auto-"));
+  fs.writeFileSync(path.join(data, "projects.json"), JSON.stringify([{ id: "web", name: "web", path: data, auto: { merge: true } }, { id: "api", name: "api", path: data }]));
+  const hook = path.join(__dirname, "..", "hooks", "guard.js");
+  const input = JSON.stringify({ tool_name: "Bash", tool_input: { command: "gh pr merge 7 --merge" } });
+  const run = (project) => {
+    const r = spawnSync(process.execPath, [hook], { input, encoding: "utf8", env: { ...process.env, BRIDGE_DATA_DIR: data, BRIDGE_ENV_FILE: path.join(data, "none.env"), BRIDGE_PROJECT: project } });
+    return r.stdout ? JSON.parse(r.stdout).hookSpecificOutput.permissionDecision : "pass";
+  };
+  assert.equal(run("web"), "pass");
+  assert.equal(run("api"), "ask");
+  assert.equal(run("default"), "ask");
+  assert.equal(run(""), "ask");
+  fs.rmSync(data, { recursive: true, force: true });
 });
 
 test("policy overrides relax a category without touching the rails", () => {
