@@ -25,7 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// Dev aid: render every page of the window to PNGs, for checking the UI
     /// without screen-recording permission. `BRIDGE_SNAPSHOT_DIR=/tmp/x Bridge`.
     private func snapshots(to dir: String) {
-        let routes: [(String, Route)] = [("home", .home), ("board", .board), ("sessions", .sessions), ("archived", .sessions), ("pulls", .pulls), ("linear", .linear), ("vercel", .vercel), ("incidents", .incidents), ("granola", .granola), ("datadog", .datadog), ("inbox", .inbox), ("inbox-slack", .inbox), ("memory", .memory), ("slack", .slack), ("usage", .usage), ("settings", .settings), ("compose", .compose), ("settings-agents", .settings), ("settings-rules", .settings), ("settings-pipeline", .settings), ("settings-mcp", .settings), ("settings-skills", .settings), ("skill-edit", .settings), ("settings-plugins", .settings), ("mcp-tools", .settings), ("mcp-add", .settings), ("settings-integrations", .settings), ("settings-projects", .settings), ("settings-notifications", .settings), ("settings-advanced", .settings)]
+        let routes: [(String, Route)] = [("home", .home), ("board", .board), ("sessions", .sessions), ("archived", .sessions), ("pulls", .pulls), ("linear", .linear), ("vercel", .vercel), ("incidents", .incidents), ("granola", .granola), ("datadog", .datadog), ("inbox", .inbox), ("inbox-slack", .inbox), ("inbox-todos", .inbox), ("memory", .memory), ("slack", .slack), ("usage", .usage), ("settings", .settings), ("compose", .compose), ("settings-agents", .settings), ("settings-rules", .settings), ("settings-pipeline", .settings), ("settings-mcp", .settings), ("settings-skills", .settings), ("skill-edit", .settings), ("settings-plugins", .settings), ("mcp-tools", .settings), ("mcp-add", .settings), ("settings-integrations", .settings), ("settings-projects", .settings), ("settings-notifications", .settings), ("settings-advanced", .settings)]
         let browser = ProcessInfo.processInfo.environment["BRIDGE_SNAPSHOT_URL"]
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 8_000_000_000)
@@ -49,7 +49,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 model.importOpen = name == "import"
                 model.sidebarHidden = name == "collapsed"
                 model.showArchived = name == "archived"
-                if route == .inbox { model.inboxTab = name == "inbox-slack" ? "slack" : "decisions" }
+                if route == .inbox { model.inboxTab = name == "inbox-slack" ? "slack" : name == "inbox-todos" ? "todos" : "decisions" }
                 if route == .settings { model.settingsPane = name.hasPrefix("settings-") ? String(name.dropFirst(9)) : "general" }
                 if name == "browser", case .session(let id) = route, let browser { model.open(id); model.openBrowser(id, url: browser) }
                 // A PR's preview deployment, opened the way a click on it does.

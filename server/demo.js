@@ -490,21 +490,30 @@ function seed(dataDir) {
     path.join(tdir, "t-241125-web-124-apple-pay", "report.md"),
     "---\nstatus: ready-for-review\npr: https://github.com/acme/storefront/pull/482\n---\n\n## TL;DR\nApple Pay ships behind `wallets`; 20 checkout tests pass and it was verified in Safari with a sandbox card. PR #482 needs a reviewer from payments.\n",
   );
+  // One of each kind the Inbox shows: a question with options, an older
+  // one-line question and an approval; a "For you" to-do below.
+  const ask = (id, taskId, kind, text, ago) => ({ id, key: `${taskId}:${kind}:${id}`, taskId, kind, text, state: "open", createdAt: now() - ago });
   fs.writeFileSync(
     path.join(tdir, "decisions.json"),
     JSON.stringify([
-      {
-        id: "d-demo1",
-        key: "t-241125-web-131-rate-limit:question:1",
-        taskId: "t-241125-web-131-rate-limit",
-        kind: "question",
-        text: "Should search limits apply **per API key** or **per IP**? Per key is fairer to B2B customers behind shared NAT; per IP also covers anonymous scrapers.",
-        state: "open",
-        createdAt: now() - 4800,
-      },
+      ask(
+        "d-demo1",
+        "t-241125-web-131-rate-limit",
+        "question",
+        "Should search limits apply per API key or per IP?\nWhy: B2B customers share one office IP, so a per-IP limit throttles a whole company; anonymous scrapers have no key at all.\nA) Per API key, 600 requests a minute (recommended)\nB) Per IP, 120 requests a minute\nC) Both: per key, plus a per-IP ceiling for anonymous traffic",
+        4800,
+      ),
+      ask("d-demo2", "t-241125-web-131-rate-limit", "question", "Keep the old `/search/v1` route for one more release? Recommended: yes, two partners still call it.", 4700),
+      ask("d-demo3", "t-241125-web-131-rate-limit", "action", 'Post in #api-partners: "Search gets a rate limit next week (600 requests a minute per API key). Reply here if that is too low for you."', 1500),
     ]),
   );
-  fs.writeFileSync(path.join(tdir, "todos.json"), JSON.stringify([{ key: "merge-482", text: "Merge #482 once payments approves", taskId: "t-241125-web-124-apple-pay", url: `${GH}/482`, done: false, createdAt: now() - 1400 }]));
+  fs.writeFileSync(
+    path.join(tdir, "todos.json"),
+    JSON.stringify([
+      { key: "merge-482", text: "Merge #482 once payments approves", taskId: "t-241125-web-124-apple-pay", url: `${GH}/482`, done: false, createdAt: now() - 1400 },
+      { key: "you:t-241124-web-127-cdn:1", text: "Add `CDN_TOKEN` to `.env`: Cloudflare › My Profile › API Tokens, scope Images:Edit. The image migration can't start without it.", taskId: "t-241124-web-127-cdn", done: false, createdAt: now() - 900 },
+    ]),
+  );
   fs.writeFileSync(
     path.join(dataDir, "projects.json"),
     JSON.stringify([

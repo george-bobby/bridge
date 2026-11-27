@@ -29,11 +29,20 @@ One or two sentences.
 What you ran and saw; mark anything unverified.
 
 ## Open questions
-- One bullet per question, your recommended answer first (omit if none).
+- One question per bullet, answerable without reading the report.
+  Why: one line of context.
+  A) A short option (recommended)
+  B) Another option
 
 ## Action requests
 - Outward writes you want made but haven't made, with the exact text (omit if none).
+
+## For you
+- Things only {{USER}} can do (add a token, restart the app), one per bullet (omit if none).
 ```
+
+Each section's bullets show in the Inbox on their own: questions become
+buttons, action requests an Approve, "For you" a to-do.
 
 A follow-up that changes nothing doesn't need the report touched.
 

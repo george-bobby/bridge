@@ -173,6 +173,18 @@ test("needs-input → decision → answer goes back to the worker → ready", as
   assert.ok(!(await api("GET", "/api/inbox")).decisions.some((x) => x.id === d.id), "decision closed");
 });
 
+test("a report's options reach the Inbox; For you items are to-dos", async () => {
+  const t = await spawnTask("needs a token", "stub:report=needs-input\nstub:you=Add FOO_TOKEN to .env\nstub:question=Which region?\\nA) EU (recommended)\\nB) US");
+  await waitFor(statusIs(t.taskId, "needs-input"), 15000, "needs-input");
+  const inbox = await api("GET", "/api/inbox");
+  const mine = inbox.decisions.filter((x) => x.taskId === t.taskId);
+  assert.deepEqual(mine.map((x) => x.kind), ["question"], "no fallback question on top of the real one");
+  assert.equal(mine[0].question, "Which region?");
+  assert.deepEqual(mine[0].options.map((o) => [o.key, o.recommended]), [["A", true], ["B", false]]);
+  const todo = inbox.todos.find((x) => x.taskId === t.taskId && x.key.startsWith("you:"));
+  assert.equal(todo && todo.text, "Add FOO_TOKEN to .env");
+});
+
 test("defer hides a decision until its day; duplicate to-dos are refused", async () => {
   const t = await spawnTask("two questions", "stub:report=needs-input\nstub:question=First?\nstub:question=Second?");
   await waitFor(statusIs(t.taskId, "needs-input"), 15000);

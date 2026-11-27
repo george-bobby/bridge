@@ -30,6 +30,35 @@ Half done.
   assert.deepEqual(parseReport("## Action requests\n1. Post 'hi' in #eng\n").actions, ["Post 'hi' in #eng"]);
 });
 
+test("asks carry their options; old one-line asks still read", () => {
+  const { parseAsk } = require("../server/tasks");
+  const r = parseReport(`## Open questions
+- Per API key or per IP?
+  Why: B2B customers share an IP.
+  A) Per key (recommended)
+  B) Per IP
+- Also limit v1?
+  - A) Yes
+  - B) No [recommended]
+
+## For you
+- Add \`CDN_TOKEN\` to .env.
+`);
+  assert.equal(r.questions.length, 2);
+  assert.deepEqual(r.yours, ["Add `CDN_TOKEN` to .env."]);
+  const a = parseAsk(r.questions[0]);
+  assert.equal(a.question, "Per API key or per IP?");
+  assert.equal(a.detail, "B2B customers share an IP.");
+  assert.deepEqual(a.options, [
+    { key: "A", label: "Per key", recommended: true },
+    { key: "B", label: "Per IP", recommended: false },
+  ]);
+  assert.deepEqual(parseAsk(r.questions[1]).options.map((o) => [o.key, o.recommended]), [["A", false], ["B", true]]);
+  const old = parseAsk("Build Option A? Recommended: yes, steps 1 to 3.");
+  assert.equal(old.question, "Build Option A? Recommended: yes, steps 1 to 3.");
+  assert.deepEqual(old.options, []);
+});
+
 test("a task's title skips a pasted file path in front of the ask", () => {
   const tasks = require("../server/tasks");
   assert.strictEqual(tasks.titleFrom("/Users/me/Downloads/CleanShot 2026-11-27 at 12.54.57 AM.png\n\nLet me reorder projects"), "Let me reorder projects");

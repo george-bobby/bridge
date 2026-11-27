@@ -149,8 +149,9 @@ function readReport(id) {
  *   ---
  *   ## TL;DR
  *   ## Summary / Changes / Verification
- *   ## Open questions      one bullet per question
+ *   ## Open questions      one bullet per question (see parseAsk for options)
  *   ## Action requests     one bullet per outward write wanted
+ *   ## For you             one bullet per thing only the user can do
  *   ## Proposed commit/PR text
  *
  * Lenient on purpose: a report a worker got slightly wrong is still a report,
@@ -191,7 +192,8 @@ function parseReport(text) {
     let cur = null;
     for (const line of String(s).split("\n")) {
       const m = /^\s{0,3}(?:[-*]|\d+[.)])\s+(.*)$/.exec(line);
-      if (m) {
+      // An indented bullet under one (options written as a sub-list) belongs to it.
+      if (m && !(cur !== null && /^\s{2,}/.test(line))) {
         if (cur) out.push(cur.trim());
         cur = m[1];
       } else if (cur !== null && line.trim()) {
@@ -209,8 +211,29 @@ function parseReport(text) {
     tldr: pick("tldr", "tl;dr", "tl dr") || (sections._lead || "").trim().split("\n\n")[0] || "",
     questions: bullets(pick("open questions", "questions")),
     actions: bullets(pick("action requests", "actions")),
+    yours: bullets(pick("for you")),
     sections,
   };
+}
+
+/**
+ * One ask, split for the Inbox. The first line is the question; `A) …` lines
+ * (or `- A) …`) are options, one may end in "(recommended)"; the rest is
+ * context. A one-line ask from an older report is just a question.
+ */
+function parseAsk(text) {
+  const lines = String(text || "").split("\n").map((l) => l.trim()).filter(Boolean);
+  const question = (lines.shift() || "").trim();
+  const options = [];
+  const detail = [];
+  for (const line of lines) {
+    const o = /^(?:[-*]\s+)?\(?([A-H])[).:]\s+(.+)$/.exec(line);
+    if (o) {
+      const rec = /\s*[(\[]\s*recommended\s*[)\]]\s*|\s*[-–:]\s*recommended\s*$/i;
+      options.push({ key: o[1], label: o[2].replace(rec, " ").trim(), recommended: rec.test(o[2]) });
+    } else detail.push(line.replace(/^(why|context):\s*/i, ""));
+  }
+  return { question, detail: detail.join("\n"), options };
 }
 
 /* -------------------------------------------------------------- decisions */
@@ -308,12 +331,13 @@ function doneTodo(key) {
   return t;
 }
 
-/** Close every open to-do of a task, e.g. once its chat is deleted. */
-function closeTaskTodos(taskId) {
+/** Close every open to-do of a task (once its chat is deleted), or only
+ *  the ones whose key starts with `prefix` (a new report's "For you"). */
+function closeTaskTodos(taskId, prefix = "") {
   const all = todos();
   let n = 0;
   for (const t of all) {
-    if (t.taskId === taskId && !t.done) {
+    if (t.taskId === taskId && !t.done && String(t.key || "").startsWith(prefix)) {
       t.done = true;
       t.dismissed = true;
       t.doneAt = now();
@@ -621,6 +645,7 @@ module.exports = {
   writeBrief,
   readReport,
   parseReport,
+  parseAsk,
   decisions,
   addDecision,
   updateDecision,

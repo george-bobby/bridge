@@ -115,7 +115,10 @@ function outcome(taskId, name, info = {}) {
     tasks.closeTaskDecisions(taskId, ["question", "action", "resume"]);
     for (const q of parsed.questions) created.push(tasks.addDecision({ taskId, kind: "question", text: q }).decision);
     for (const a of parsed.actions) created.push(tasks.addDecision({ taskId, kind: "action", text: a }).decision);
-    if ((status === "needs-input" || status === "blocked") && !parsed.questions.length) {
+    // "For you": things only the user can do. To-dos, not questions; a new report replaces them.
+    tasks.closeTaskTodos(taskId, `you:${taskId}:`);
+    for (const y of parsed.yours) tasks.addTodo({ key: `you:${taskId}:${tasks.hash(y).slice(0, 8)}`, text: y, taskId });
+    if ((status === "needs-input" || status === "blocked") && !parsed.questions.length && !parsed.actions.length && !parsed.yours.length) {
       created.push(tasks.addDecision({ taskId, kind: "question", text: `${status}: ${parsed.tldr || "see the report"}` }).decision);
     }
     if (status === "ready-for-review" || status === "pushed-follow-up") {
@@ -138,7 +141,7 @@ function outcome(taskId, name, info = {}) {
     bus.broadcast("message", { runId: taskId, message: msg });
   }
 
-  const needsYou = NEEDS_YOU.has(name) || NEEDS_YOU.has(status) || (parsed && parsed.actions.length > 0);
+  const needsYou = NEEDS_YOU.has(name) || NEEDS_YOU.has(status) || (parsed && (parsed.actions.length > 0 || parsed.yours.length > 0));
   bus.broadcast("outcome", { taskId, name, status, text, title, needsYou });
   bus.broadcast("inbox", inbox());
   bus.broadcast("runs", { runs: store.listRunSummaries() });
@@ -184,6 +187,7 @@ function relayText(taskId, name, { status, text, title, parsed, decisions }) {
     if (/^https?:\/\//.test(parsed.fields.pr || "")) lines.push(`PR: ${parsed.fields.pr}`);
     if (parsed.questions.length) lines.push(`open questions: ${parsed.questions.length}`);
     if (parsed.actions.length) lines.push(`action requests: ${parsed.actions.length}`);
+    if (parsed.yours.length) lines.push(`for ${USER} to do: ${parsed.yours.length} (in To-dos)`);
   }
   if (decisions && decisions.length) lines.push(`Inbox: ${decisions.map((d) => `${d.id} (${d.kind})`).join(", ")}`);
   lines.push(`Report: ${tasks.paths(taskId).report}`);
@@ -728,7 +732,7 @@ function inbox() {
     if (!titles.has(id)) titles.set(id, titleOf(id));
     return titles.get(id);
   };
-  const decisions = tasks.openDecisions().map((d) => ({ ...d, title: t(d.taskId) }));
+  const decisions = tasks.openDecisions().map((d) => ({ ...d, ...tasks.parseAsk(d.text), title: t(d.taskId) }));
   const todos = tasks.todos().filter((x) => !x.done).map((x) => ({ ...x, title: x.taskId ? t(x.taskId) : "" }));
   // Required here, not at the top: watch.js starts pipelines through this module.
   const slack = require("./watch").open();
