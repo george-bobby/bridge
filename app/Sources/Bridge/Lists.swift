@@ -16,7 +16,7 @@ struct PortChips: View {
     }
 }
 
-/// Stops a dev server's process (every port it listens on); spins while it stops.
+/// Stops a dev server's process (every port it listens on) after a confirm; spins while it stops.
 struct StopServerButton: View {
     @Environment(AppModel.self) var model
     let server: DevServer

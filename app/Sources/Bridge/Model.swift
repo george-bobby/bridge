@@ -943,12 +943,19 @@ final class AppModel {
     /// Pids being stopped right now (their stop buttons spin).
     var stoppingServers: Set<Int> = []
 
-    /// Stop a dev server (SIGTERM, then SIGKILL on the server) and refresh the list.
+    /// Stop a dev server (SIGTERM, then SIGKILL on the server) and refresh the list. Asks first.
     func stopServer(_ sv: DevServer) async {
         guard !stoppingServers.contains(sv.id) else { return }
+        let label = sv.ports.first.map { ":\($0)" } ?? sv.command
+        let a = NSAlert()
+        a.messageText = "Stop the dev server on \(sv.ports.map { ":\($0)" }.joined(separator: ", "))?"
+        a.informativeText = "\(sv.command) (pid \(sv.id)) in \(sv.folder) gets SIGTERM, then SIGKILL if it's still running after 4 seconds."
+        a.addButton(withTitle: "Stop Server")
+        a.addButton(withTitle: "Cancel")
+        a.buttons.first?.hasDestructiveAction = true
+        guard a.runModal() == .alertFirstButtonReturn else { return }
         stoppingServers.insert(sv.id)
         defer { stoppingServers.remove(sv.id) }
-        let label = sv.ports.first.map { ":\($0)" } ?? sv.command
         do {
             try await API.post("/api/servers/\(sv.id)/stop")
             say("Stopped \(label)")
