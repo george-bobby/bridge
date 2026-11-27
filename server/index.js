@@ -864,6 +864,30 @@ async function handle(req, res) {
     return sendJson(res, 405, { ok: false, error: "method not allowed" });
   }
 
+  // --- a chat's queued messages: edit, remove, or send now (interrupting) ---
+  const queueMatch = p.match(/^\/api\/runs\/([^/]+)\/queue\/([\w-]+)(\/send)?$/);
+  if (queueMatch) {
+    const id = store.safeId(decodeURIComponent(queueMatch[1]));
+    const qid = queueMatch[2];
+    if (!id) return sendJson(res, 400, { ok: false, error: "bad run id" });
+    try {
+      if (req.method === "DELETE" && !queueMatch[3]) return sendJson(res, 200, { ok: jobs.editQueued(id, qid, null) });
+      if (req.method !== "POST") return sendJson(res, 405, { ok: false, error: "method not allowed" });
+      const body = JSON.parse((await readBody(req)) || "{}");
+      if (queueMatch[3]) {
+        const item = jobs.queueOf(id).find((m) => m.id === qid);
+        if (!item) throw new Error("that message has already gone out");
+        return sendJson(res, 200, { ok: true, ...jobs.interrupt(id, item.text, { config: store.readConfig(), id: qid }) });
+      }
+      const text = String(body.text || "").trim();
+      if (!text) throw new Error("empty message");
+      if (text.length > 20000) throw new Error("message too long");
+      return sendJson(res, 200, { ok: jobs.editQueued(id, qid, text) });
+    } catch (e) {
+      return sendJson(res, 409, { ok: false, error: String(e.message || e) });
+    }
+  }
+
   // --- one chat ------------------------------------------------------------
   const runMatch = p.match(/^\/api\/runs\/([^/]+)(?:\/(\w+))?$/);
   if (runMatch) {
@@ -896,7 +920,7 @@ async function handle(req, res) {
       // `jobs` event on the SSE stream, which is pushed the moment one starts
       // or ends rather than only when a chat happens to be fetched.
       res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
-      res.end(`{"run":${body},"seq":${seq}}`);
+      res.end(`{"run":${body},"seq":${seq},"queue":${JSON.stringify(jobs.queueOf(id))}}`);
       return;
     }
 
@@ -1021,9 +1045,15 @@ async function handle(req, res) {
           const out = jobs.compact(id, { config: store.readConfig(), instructions: c[1] || "" });
           return sendJson(res, 200, { ok: true, compacted: true, native: out.native });
         }
+        // While a turn runs: `steer` hands it to that turn, `interrupt` stops
+        // it and sends this next, `queue` (or `queue: true`) waits for it.
+        const config = store.readConfig();
+        const mode = String(body.mode || (body.queue ? "queue" : ""));
+        if (mode === "steer") return sendJson(res, 200, { ok: true, ...jobs.steer(id, text, { config }) });
+        if (mode === "interrupt") return sendJson(res, 200, { ok: true, ...jobs.interrupt(id, text, { config }) });
         if (!body.opts || !body.opts.agent) await harness.autoFailover(id);
-        const msg = jobs.startFollowup(id, text, { config: store.readConfig(), queue: !!body.queue });
-        sendJson(res, 200, { ok: true, message: msg, queued: !!(msg && msg.queued) });
+        const msg = jobs.startFollowup(id, text, { config, queue: mode === "queue" });
+        sendJson(res, 200, { ok: true, message: msg, queued: !!(msg && msg.queued), ...(msg && msg.queued ? { id: msg.id } : {}) });
       } catch (e) {
         sendJson(res, 409, { ok: false, error: String(e.message || e) });
       }

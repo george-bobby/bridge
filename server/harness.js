@@ -260,6 +260,8 @@ async function onJobEnd(e) {
     tasks.writeMeta(runId, { status: "stopped" });
     tasks.appendEvent({ taskId: runId, name: "stopped", text: "stopped from the dashboard" });
     bus.broadcast("inbox", inbox());
+    // A stop with a message behind it (interrupt and send) starts that next.
+    drain(runId);
     return;
   }
 

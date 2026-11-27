@@ -510,6 +510,74 @@ test("a follow-up sent mid-turn is queued and delivered after", async () => {
   }, 15000, "delivered");
 });
 
+const running = (id) => async () => (await api("GET", "/api/state")).jobs.running.includes(id);
+const replies = async (id) => (await api("GET", `/api/runs/${id}`)).run.messages.filter((m) => m.role === "assistant");
+
+test("a steer lands in the running turn, read at its next step", async () => {
+  const t = await spawnTask("steery", "stub:stall=2\nstub:report=ready-for-review");
+  await waitFor(running(t.taskId), 5000, "running");
+  const r = await api("POST", `/api/runs/${t.taskId}/followup`, { text: "also mind the empty case", mode: "steer" });
+  assert.equal(r.steered, true);
+  await waitFor(idle(t.taskId), 15000, "turn ends");
+  const all = await replies(t.taskId);
+  assert.equal(all.length, 1, "no extra turn");
+  const m = all[0];
+  assert.equal(m.state, "done");
+  assert.deepEqual(m.steps.find((s) => s.kind === "steer"), { kind: "steer", text: "also mind the empty case", state: "read" });
+  const said = fs.readFileSync(ENV.STUB_LOG, "utf8").trim().split("\n").map(JSON.parse).filter((l) => l.prompt === "also mind the empty case");
+  assert.equal(said.length, 1, "written to the session once");
+  const argv = fs.readFileSync(ENV.STUB_LOG, "utf8").trim().split("\n").map(JSON.parse).filter((l) => l.argv && l.env.BRIDGE_TASK_ID === t.taskId)[0].argv;
+  assert.ok(argv.includes("--replay-user-messages"));
+});
+
+test("a steer read only after the turn's result keeps the turn open for it", async () => {
+  const t = await spawnTask("late-steer", "stub:stream=120");
+  await waitFor(running(t.taskId), 5000, "running");
+  assert.equal((await api("POST", `/api/runs/${t.taskId}/followup`, { text: "one more thing", mode: "steer" })).steered, true);
+  await waitFor(idle(t.taskId), 20000, "turn ends");
+  const all = await replies(t.taskId);
+  assert.equal(all.length, 1, "the steer's turn is part of this reply");
+  assert.equal(all[0].state, "done");
+  assert.equal(all[0].turns, 2, "both results counted");
+  assert.equal(all[0].steps.find((s) => s.kind === "steer").state, "read");
+});
+
+test("queued messages: listed, edited, removed, then each runs as its own turn", async () => {
+  const t = await spawnTask("queuey", "stub:stall=3\nstub:report=ready-for-review");
+  await waitFor(running(t.taskId), 5000, "running");
+  const a = await api("POST", `/api/runs/${t.taskId}/followup`, { text: "first queued", mode: "queue" });
+  const b = await api("POST", `/api/runs/${t.taskId}/followup`, { text: "second queued", mode: "queue" });
+  const c = await api("POST", `/api/runs/${t.taskId}/followup`, { text: "third queued", mode: "queue" });
+  assert.equal(a.queued && b.queued && c.queued, true, JSON.stringify([a, b, c]));
+  assert.deepEqual((await api("GET", `/api/runs/${t.taskId}`)).queue.map((q) => q.text), ["first queued", "second queued", "third queued"]);
+  assert.equal((await api("POST", `/api/runs/${t.taskId}/queue/${b.id}`, { text: "second, edited" })).ok, true);
+  assert.equal((await api("DELETE", `/api/runs/${t.taskId}/queue/${a.id}`)).ok, true);
+  assert.equal((await api("DELETE", `/api/runs/${t.taskId}/queue/${a.id}`)).ok, false, "already gone");
+  assert.deepEqual((await api("GET", `/api/runs/${t.taskId}`)).queue.map((q) => q.text), ["second, edited", "third queued"]);
+  await waitFor(async () => {
+    const run = (await api("GET", `/api/runs/${t.taskId}`)).run;
+    return run.messages.some((m) => m.role === "user" && m.text === "third queued");
+  }, 30000, "both delivered");
+  const users = (await api("GET", `/api/runs/${t.taskId}`)).run.messages.filter((m) => m.role === "user").map((m) => m.text).slice(1);
+  assert.deepEqual(users, ["second, edited", "third queued"], "one turn each, the removed one never sent");
+  await waitFor(idle(t.taskId), 15000, "idle");
+});
+
+test("interrupt and send stops the turn, then sends in the same chat", async () => {
+  const t = await spawnTask("interrupty", "stub:stall=30");
+  await waitFor(running(t.taskId), 5000, "running");
+  const q = await api("POST", `/api/runs/${t.taskId}/followup`, { text: "keep me queued", mode: "queue" });
+  const r = await api("POST", `/api/runs/${t.taskId}/queue/${q.id}/send`);
+  assert.equal(r.interrupted, true);
+  await waitFor(async () => (await api("GET", `/api/runs/${t.taskId}`)).run.messages.some((m) => m.role === "user" && m.text === "keep me queued"), 15000, "sent after the stop");
+  const all = await replies(t.taskId);
+  assert.equal(all[0].state, "stopped");
+  assert.equal(all.length, 2, "a new turn started");
+  assert.deepEqual((await api("GET", `/api/runs/${t.taskId}`)).queue, [], "sent from the queue, not twice");
+  await api("POST", `/api/runs/${t.taskId}/stop`);
+  await waitFor(idle(t.taskId), 10000, "idle");
+});
+
 test("cleanup refuses unpushed work, removes with --force, keeps the branch", async () => {
   const t = await spawnTask("committer", "stub:report=ready-for-review");
   await waitFor(statusIs(t.taskId, "ready-for-review"), 15000);

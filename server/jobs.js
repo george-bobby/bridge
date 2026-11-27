@@ -79,7 +79,7 @@ const events = new EventEmitter();
 
 /** Follow-ups that arrived while a job was mid-turn, delivered when it ends.
  *  The harness's equivalent of "wait until the worker is idle, then type". */
-const pending = new Map(); // runId -> [{ text, label, role }]
+const pending = new Map(); // runId -> [{ id, text, label, role, at }]
 
 // One in-flight job per chat. A second send while the first is streaming would
 // resume the same session id concurrently, which is a good way to corrupt it.
@@ -514,6 +514,9 @@ function launch(run, { prompt: ask, kind, config, label }) {
     // watching a run rather than reading it afterwards. It also brings the
     // `thinking_tokens` counters, which is where the live token meter comes from.
     "--include-partial-messages",
+    // Echoes each user message once the session has read it: how a message
+    // steered into the running turn is known to have landed (see steer()).
+    "--replay-user-messages",
     fresh ? "--session-id" : "--resume",
     run.sessionId,
   ];
@@ -570,6 +573,9 @@ function launch(run, { prompt: ask, kind, config, label }) {
     openTool: "",
     asks: new Map(),
     reportHashBefore: reportBefore ? reportBefore.hash : "",
+    // Claude's stdin stays open for the turn, so a message can be steered in.
+    live: kind !== "compact",
+    steers: [],
   });
   events.emit("start", { runId: run.runId, kind, role });
   bus.broadcast("jobs", { running: runningIds(), awaiting: awaitingIds() });
@@ -716,9 +722,11 @@ function startFollowup(runId, text, { config, label = "follow-up", role = "user"
   if (running.has(runId)) {
     if (!queue) throw new Error("a job is already running in this chat");
     const q = pending.get(runId) || [];
-    q.push({ text, label, role });
+    const item = { id: crypto.randomUUID().slice(0, 8), text, label, role, at: Date.now() };
+    q.push(item);
     pending.set(runId, q);
-    return { queued: true, position: q.length };
+    queueChanged(runId);
+    return { queued: true, id: item.id, position: q.length };
   }
   const run = store.loadRun(runId);
   if (!run) throw new Error("unknown run");
@@ -810,7 +818,7 @@ function clear(runId) {
   run.agentSessions = {};
   delete run.compactBrief;
   delete run.pendingAsk;
-  pending.delete(runId);
+  if (pending.delete(runId)) queueChanged(runId);
   // A fresh session can start in the project's checkout (harness.ensureOrchestrator).
   const p = run.kind === "orchestrator" && projects.get(run.project);
   if (p && p.path && fs.existsSync(p.path)) run.opts = { ...run.opts, workdir: p.path };
@@ -819,16 +827,76 @@ function clear(runId) {
   return run;
 }
 
-/** Take the next queued follow-up for a chat, if any (server/harness.js drains). */
+/** Take the next queued follow-up for a chat, if any (server/harness.js drains).
+ *  A message you queued is a turn of its own, like Cursor's queue; the
+ *  harness's relays and answers queued together fold into one turn. */
 function takePending(runId) {
   const q = pending.get(runId);
   if (!q || !q.length) return null;
-  const all = q.splice(0);
-  pending.delete(runId);
-  // Several queued messages become one turn, in order, rather than N turns.
+  const mine = q.findIndex((m) => m.role === "user");
+  const all = q.splice(0, mine === 0 ? 1 : mine < 0 ? q.length : mine);
+  if (!q.length) pending.delete(runId);
+  queueChanged(runId);
   return { text: all.map((m) => m.text).join("\n\n---\n\n"), label: all[0].label, role: all[0].role };
 }
 const pendingCount = (runId) => (pending.get(runId) || []).length;
+
+/** What you queued in a chat, for the strip over its composer. The harness's
+ *  own relays wait in the same line but aren't yours to edit. */
+const queueOf = (runId) => (pending.get(runId) || []).filter((m) => m.role === "user").map(({ id, text, at }) => ({ id, text, at }));
+const queueChanged = (runId) => bus.broadcast("queue", { runId, queue: queueOf(runId) });
+
+/** Edit or drop a message you queued. False when it has already gone out. */
+function editQueued(runId, id, text) {
+  const q = pending.get(runId) || [];
+  const i = q.findIndex((m) => m.id === id && m.role === "user");
+  if (i < 0) return false;
+  if (text == null) q.splice(i, 1);
+  else q[i].text = text;
+  if (!q.length) pending.delete(runId);
+  queueChanged(runId);
+  return true;
+}
+
+/**
+ * Steer: hand a message to the turn that's running, without stopping it.
+ * Claude reads it at its next step (a message written to the session's live
+ * stdin mid-turn); it shows in the reply as a `steer` step, marked read when
+ * the session echoes it back. Codex, Cursor and Devin run a turn as one
+ * process with its prompt closed off, so for them, for a slash command, and
+ * once a Claude turn has already finished, it is queued instead (`steered: false`).
+ */
+function steer(runId, text, { config }) {
+  const job = running.get(runId);
+  // A slash command only runs when it opens a turn: it waits for the next one.
+  if (job && job.live && job.steer && !job.stopped && !/^\/[\w:.-]+/.test(text)) {
+    job.steer(text);
+    return { steered: true };
+  }
+  const out = startFollowup(runId, text, { config, queue: true });
+  return out && out.queued ? { steered: false, queued: true, id: out.id } : { steered: false, started: true };
+}
+
+/**
+ * Interrupt and send: stop the running turn, then send this as the next one.
+ * It goes to the front of the queue before the stop, so the stop's end
+ * starts it (server/harness.js drains on a stop); the rest of the queue waits
+ * its turn. With nothing running it is a plain send.
+ */
+function interrupt(runId, text, { config, id = "" }) {
+  const job = running.get(runId);
+  if (!job) {
+    if (id) editQueued(runId, id, null);
+    startFollowup(runId, text, { config });
+    return { interrupted: false, started: true };
+  }
+  const q = (pending.get(runId) || []).filter((m) => m.id !== id);
+  q.unshift({ id: crypto.randomUUID().slice(0, 8), text, label: "follow-up", role: "user", at: Date.now() });
+  pending.set(runId, q);
+  queueChanged(runId);
+  stop(runId, { keepQueue: true });
+  return { interrupted: true };
+}
 
 /** A worker's first turn: read the brief and begin. */
 function startTask(runId, { config, note = "" }) {
@@ -1405,6 +1473,37 @@ function wire(child, runId, msgId, kind) {
   const owner = running.get(runId);
   if (owner) owner.settle = settle;
 
+  /* -- steering -------------------------------------------------------------
+   * A message written to the live stdin mid-turn is read at the session's
+   * next step. It's a `steer` step in this reply, where it was sent, until
+   * the session echoes it back (--replay-user-messages): then it's `read`.
+   * One the session only reads after its `result` runs as a further turn in
+   * the same process, so the turn is held open until every steer is read. */
+  const steerAt = (s, state) => {
+    const step = { kind: "steer", text: s.text, state };
+    patch(() => {
+      const st = stepAt(s.i);
+      if (st) st.state = state;
+    });
+    push({ blockStart: { i: s.i, step } });
+  };
+  if (owner && owner.live) {
+    owner.steer = (text) => {
+      const i = addStep({ kind: "steer", text, state: "sent" });
+      owner.steers.push({ text, i, read: false });
+      writeLine(child, { type: "user", message: { role: "user", content: text } });
+    };
+  }
+  const onEcho = (text) => {
+    const s = owner && (owner.steers || []).find((x) => !x.read && x.text === text);
+    if (!s) return;
+    s.read = true;
+    clearTimeout(owner.linger);
+    if (s.i >= 0) steerAt(s, "read");
+  };
+  // Results of a turn held open for a steer, summed into the final one.
+  const carry = { text: "", durationMs: 0, turns: 0 };
+
   let compacted = null;
   function handle(ev) {
     if (ev.type === "control_request" && (ev.request || {}).subtype === "can_use_tool") {
@@ -1501,6 +1600,12 @@ function wire(child, runId, msgId, kind) {
       return;
     }
 
+    // A user message echoed back: the opening prompt, or a steer now read.
+    if (ev.type === "user" && ev.message && typeof ev.message.content === "string") {
+      onEcho(ev.message.content);
+      return;
+    }
+
     // What a tool actually returned. The call on its own tells you a run ran
     // `git push`; only the result tells you it was rejected.
     if (ev.type === "user" && ev.message && Array.isArray(ev.message.content)) {
@@ -1537,11 +1642,33 @@ function wire(child, runId, msgId, kind) {
     }
 
     if (ev.type === "result") {
+      // A steer the session hasn't read yet runs next, in this process: the
+      // turn goes on. If it never comes back (a CLI that doesn't echo), the
+      // turn ends as usual after a while.
+      const jr0 = running.get(runId);
+      if (jr0 && jr0 === owner && (owner.steers || []).some((x) => !x.read) && !(ev.subtype && ev.subtype !== "success")) {
+        if (ev.result) carry.text = `${carry.text}${carry.text ? "\n\n" : ""}${String(ev.result)}`;
+        carry.durationMs += Number(ev.duration_ms) || 0;
+        carry.turns += Number(ev.num_turns) || 0;
+        clearTimeout(owner.linger);
+        owner.linger = setTimeout(() => {
+          owner.live = false;
+          try {
+            child.stdin.end();
+          } catch {}
+        }, 15000);
+        owner.linger.unref();
+        return;
+      }
       // The turn is over, but the child is not: with a live stdin it waits for
       // another message forever. Closing stdin is what lets it exit — and it
       // has to happen here rather than at spawn, because until now stdin was
       // the only way to answer a permission prompt. It exits ~1s later, which
       // is what fires `close` and finish() below.
+      if (owner) {
+        owner.live = false;
+        clearTimeout(owner.linger);
+      }
       try {
         child.stdin.end();
       } catch {
@@ -1571,7 +1698,7 @@ function wire(child, runId, msgId, kind) {
       commit((m, run) => {
         // `result` is the final text. Prefer it over the accumulated stream:
         // it is the model's actual answer, not every intermediate thought.
-        if (ev.result && String(ev.result).trim()) m.text = String(ev.result);
+        if (ev.result && String(ev.result).trim()) m.text = carry.text ? `${carry.text}\n\n${ev.result}` : String(ev.result);
         // A compaction's footprint is what's left, not the summarising call.
         if (kind === "compact") {
           if (compacted) {
@@ -1582,8 +1709,8 @@ function wire(child, runId, msgId, kind) {
         m.state = failed ? "error" : "done";
         m.cost = Number(ev.total_cost_usd) || 0;
         if (ev.acu) m.acu = Number(ev.acu) || 0;
-        m.durationMs = Number(ev.duration_ms) || 0;
-        m.turns = Number(ev.num_turns) || 0;
+        m.durationMs = (Number(ev.duration_ms) || 0) + carry.durationMs;
+        m.turns = (Number(ev.num_turns) || 0) + carry.turns;
         m.usage = kind === "compact" && compacted ? { input: compacted.post, output: 0, cacheRead: 0, cacheWrite: 0, thinking: 0, context: compacted.post } : final;
         if (contextWindow) m.contextWindow = contextWindow;
         if (failed) m.error = ev.subtype;
@@ -1625,8 +1752,8 @@ function wire(child, runId, msgId, kind) {
         text: live ? live.text || "" : "",
         usage: final,
         contextWindow,
-        durationMs: Number(ev.duration_ms) || 0,
-        turns: Number(ev.num_turns) || 0,
+        durationMs: (Number(ev.duration_ms) || 0) + carry.durationMs,
+        turns: (Number(ev.num_turns) || 0) + carry.turns,
       });
       bus.broadcast("run-updated", { runId });
     }
@@ -1636,6 +1763,9 @@ function wire(child, runId, msgId, kind) {
     const job = running.get(runId);
     if (!job || job !== owner) return;
     running.delete(runId);
+    clearTimeout(job.linger);
+    // A steer the session never got to: say so rather than leave it "sent".
+    for (const s of job.steers || []) if (!s.read && s.i >= 0) steerAt(s, "unread");
     // Told after the run file is settled (below), via setImmediate, so the
     // watcher reads the final state.
     setImmediate(() =>
@@ -1827,9 +1957,10 @@ function stopTask(runId, taskId) {
   return writeLine(job.child, { type: "control_request", request_id: `stop-${taskId}-${Date.now().toString(36)}`, request: { subtype: "stop_task", task_id: taskId } });
 }
 
-function stop(runId) {
-  // Messages queued behind this turn would start the next one the moment it ends.
-  pending.delete(runId);
+function stop(runId, { keepQueue = false } = {}) {
+  // Messages queued behind this turn would start the next one the moment it
+  // ends; an interrupt keeps them, its own message first.
+  if (!keepQueue && pending.delete(runId)) queueChanged(runId);
   const job = running.get(runId);
   if (!job) return settleStopped(runId);
   job.stopped = true;
@@ -2087,6 +2218,10 @@ module.exports = {
   startTask,
   takePending,
   pendingCount,
+  queueOf,
+  editQueued,
+  steer,
+  interrupt,
   systemPrompt,
   startFollowup,
   startPipeline,

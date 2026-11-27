@@ -858,14 +858,25 @@ final class TriggerController: ObservableObject {
     var focused = false
     var monitor: Any? = nil
     var attach: (Attachment) -> Void = { _ in }
+    var onReturn: ((SendMode) -> Void)? = nil
 
     /// ↑ ↓ ↩ ⇥ esc while a menu is open; ⌘V attaches images and files;
+    /// ↩ ⌘↩ ⌥↩ send (when the editor sends), ⇧↩ is a new line;
     /// everything else goes to the text.
     func handle(_ e: NSEvent) -> NSEvent? {
         if focused, e.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command, e.charactersIgnoringModifiers == "v",
            let items = Attachment.fromPasteboard() {
             withAnimation(M.snappy) { items.forEach(attach) }
             return nil
+        }
+        if focused, active == nil, let onReturn, e.keyCode == 36 || e.keyCode == 76,
+           (e.window?.firstResponder as? NSTextView)?.hasMarkedText() != true {
+            switch e.modifierFlags.intersection([.command, .option, .shift, .control]) {
+            case []: onReturn(.steer); return nil
+            case .command: onReturn(.queue); return nil
+            case .option: onReturn(.interrupt); return nil
+            default: return e
+            }
         }
         guard focused, active != nil else { return e }
         let mods = e.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting([.numericPad, .function])
@@ -901,6 +912,8 @@ struct PromptEditor: View {
     var menuAbove = true
     var exclude = ""
     var focused: FocusState<Bool>.Binding
+    /// Set where ↩ sends (a chat's composer); unset, ↩ is a new line.
+    var onReturn: ((SendMode) -> Void)? = nil
     let attach: (Attachment) -> Void
     @StateObject private var ctl = TriggerController()
     @ObservedObject private var data = ComposerData.shared
@@ -963,6 +976,7 @@ struct PromptEditor: View {
         ctl.items = items
         ctl.choose = { item in choose(item) }
         ctl.attach = attach
+        ctl.onReturn = onReturn
         if ctl.highlight >= items.count { DispatchQueue.main.async { ctl.highlight = 0 } }
     }
 

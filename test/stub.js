@@ -21,6 +21,10 @@
  *   stub:orphan=<seconds>     leave a `sleep` holding stdout open that long
  *                             after the stub itself exits
  *
+ * A message written mid-turn steers it, like Claude: during a stall it is read
+ * at the stall's end (echoed back with --replay-user-messages, then "Steered:
+ * <text>"); otherwise it runs as a further turn once this one's result is out.
+ *
  * `/compact` compacts (a compact_boundary event); the initialize handshake
  * answers with a small command and model list; `mcp_status` lists one
  * connected stdio server and one claude.ai connector; `mcp_toggle` and
@@ -44,6 +48,9 @@ if (process.argv.includes("--version")) {
 const out = (o) => process.stdout.write(JSON.stringify(o) + "\n");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let waitingAnswer = null;
+const replay = process.argv.includes("--replay-user-messages");
+let steerBox = null; // messages steered into the stall in progress
+const echo = (content) => replay && out({ type: "user", isReplay: true, message: { role: "user", content } });
 
 function directives(text) {
   const d = {};
@@ -108,6 +115,7 @@ const done = (text, extra = {}) => out({ type: "result", subtype: "success", res
 
 async function turn(prompt) {
   out({ type: "system", subtype: "init", session_id: "stub" });
+  echo(prompt);
   if (/^\/compact\b/.test(prompt)) {
     out({ type: "system", subtype: "status", status: "compacting" });
     out({ type: "system", subtype: "compact_boundary", compact_metadata: { trigger: "manual", pre_tokens: 42000, post_tokens: 6000 } });
@@ -134,8 +142,15 @@ async function turn(prompt) {
   if (d.stall) {
     out({ type: "stream_event", event: { type: "message_start" } });
     out({ type: "stream_event", event: { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "tu1", name: "Bash" } } });
-    await sleep(Number(d.stall) * 1000);
+    steerBox = [];
+    await sleep(Number([].concat(d.stall)[0]) * 1000);
+    const steered = steerBox;
+    steerBox = null;
     out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "tu1", content: "ok" }] } });
+    for (const t of steered) {
+      echo(t);
+      say(`Steered: ${t}`);
+    }
   }
   if (d.ask) {
     out({ type: "control_request", request_id: "rq1", request: { subtype: "can_use_tool", tool_name: "Bash", input: { command: "git push --force" }, tool_use_id: "tu-ask" } });
@@ -232,7 +247,8 @@ process.stdin.on("data", (c) => {
     } else if (m.type === "user") {
       const content = typeof m.message.content === "string" ? m.message.content : JSON.stringify(m.message.content);
       if (process.env.STUB_LOG) fs.appendFileSync(process.env.STUB_LOG, JSON.stringify({ prompt: content, env: { BRIDGE_ROLE: process.env.BRIDGE_ROLE, BRIDGE_TASK_ID: process.env.BRIDGE_TASK_ID } }) + "\n");
-      busy = busy.then(() => turn(content));
+      if (steerBox) steerBox.push(content);
+      else busy = busy.then(() => turn(content));
     }
   }
 });
