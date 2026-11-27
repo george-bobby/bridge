@@ -420,7 +420,8 @@ test("workspaces: a worktree from any branch, or the main checkout, which cleanu
   git(["commit", "-q", "--allow-empty", "-m", "feature work"], REPO);
   git(["branch", "-f", "feature", "HEAD"]);
   git(["reset", "-q", "--hard", "HEAD~1"]);
-  const info = await api("GET", "/api/git");
+  const proj = (await api("GET", "/api/projects")).projects.find((p) => p.path === REPO);
+  const info = await api("GET", `/api/git?project=${proj.id}`);
   assert.equal(info.default, "main");
   assert.ok(info.branches.some((b) => b.name === "feature" && !b.remote));
   assert.ok(info.worktrees.some((w) => w.main && w.path === REPO));

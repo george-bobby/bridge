@@ -559,12 +559,12 @@ final class AppModel {
     var importOpen = false
     var importProject = AppModel.rootId
     /// Whose memory the Memory page shows ("" until first opened: then the
-    /// filtered project, the open chat's, else the first real one).
+    /// filtered project, the open chat's, else Default's).
     var memoryProject = ""
     func openMemory(_ project: String? = nil) {
         var fromChat: String? = nil
         if case .session(let id) = route { fromChat = sessions.first { $0.id == id }?.project }
-        memoryProject = project ?? projectFilter ?? fromChat ?? projects.first { !$0.root }?.id ?? AppModel.rootId
+        memoryProject = project ?? projectFilter ?? fromChat ?? AppModel.rootId
         navigate(.memory)
     }
     func openImport(into project: String? = nil) {

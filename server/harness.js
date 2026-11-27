@@ -354,7 +354,7 @@ async function spawnTask({ repo, title, brief, branch, base = "", workspace = ""
   const text = String(brief || "").trim();
   if (!text) throw new Error("a task needs a brief");
   if (text.length > 60000) throw new Error("brief too long");
-  const repoPath = path.resolve(String(repo || store.readConfig().followup.workdir || env.targetRepo || ""));
+  const repoPath = path.resolve(String(repo || projects.rootDir()));
   const t = title ? String(title).replace(/^#+\s*/, "").slice(0, 80).trim() : tasks.titleFrom(text);
   const id = tasks.newTaskId(t);
   // A short time-based suffix keeps two tasks with the same title apart.
