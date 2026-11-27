@@ -168,7 +168,7 @@ struct BridgeApp: App {
         MenuBarExtra {
             MenuBarPanel().environment(delegate.model)
         } label: {
-            Image(systemName: delegate.model.needsCount > 0 ? "circle.hexagongrid.fill" : "circle.hexagongrid")
+            Image(nsImage: delegate.model.needsCount > 0 ? MenuGlyph.badged : MenuGlyph.plain)
         }
         .menuBarExtraStyle(.window)
     }
