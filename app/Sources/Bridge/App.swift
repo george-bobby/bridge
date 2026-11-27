@@ -34,6 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             if let s = model.sessions.first(where: { $0.id == chat }) ?? model.boardSessions.first(where: { $0.worked }) ?? model.orchestrator { pages.append(("chat", .session(s.id))) }
             pages.append(("palette", .board))
             pages.append(("import", .home))
+            pages += [("archive-dialog", .sessions), ("archive-dirty", .sessions)]
             if let last = pages.first(where: { $0.0 == "chat" }) {
                 pages.append(("collapsed", last.1))
                 if browser != nil { pages.append(("browser", last.1)) }
@@ -101,6 +102,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                     model.snapshotSkillEdit = name == "skill-edit"
                 }
                 model.mcpSheet = name == "mcp-add" ? .add(.claude) : nil
+                // The archive dialog: a clean worktree (box on), then one with work that isn't pushed (box off, warning).
+                if name.hasPrefix("archive-"), let s = model.sessions.first(where: { $0.id.contains(name == "archive-dirty" ? "web-131" : "web-124") }) { model.confirmArchive(s.id) } else { model.archiveAsk = nil }
                 if name == "mcp-tools", let s = MCPStore.shared.servers(.claude).first(where: { $0.toolCount != nil }) { model.mcpSheet = .tools(s, run: nil) }
                 var wait: UInt64 = 2_500_000_000
                 // A long chat stepped back six prompts, caught mid-flash;
@@ -309,20 +312,22 @@ struct RootView: View {
             .ignoresSafeArea()
         }
         .overlay {
-            if model.paletteOpen || model.importOpen || model.mcpSheet != nil {
+            if model.paletteOpen || model.importOpen || model.mcpSheet != nil || model.archiveAsk != nil {
                 T.shade.opacity(0.32).ignoresSafeArea()
-                    .onTapGesture { model.paletteOpen = false; model.importOpen = false; model.mcpSheet = nil }
+                    .onTapGesture { model.paletteOpen = false; model.importOpen = false; model.mcpSheet = nil; model.archiveAsk = nil }
                     .transition(.opacity)
             }
         }
         .overlay { if model.paletteOpen { CommandPalette().transition(.panel) } }
         .overlay { if model.importOpen { ImportSheet().transition(.panel) } }
         .overlay { if let s = model.mcpSheet { MCPSheetHost(sheet: s).transition(.panel) } }
+        .overlay { if let a = model.archiveAsk { ArchiveSheet(ask: a).padding(.top, 120).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top).transition(.panel) } }
         .overlay(alignment: .bottom) { ToastView() }
         .overlay { if !model.connected && !model.everConnected { ConnectingView().transition(.opacity) } }
         .animation(M.pop, value: model.paletteOpen)
         .animation(M.pop, value: model.importOpen)
         .animation(M.pop, value: model.mcpSheet)
+        .animation(M.pop, value: model.archiveAsk?.id)
         .animation(M.page, value: model.everConnected)
     }
 

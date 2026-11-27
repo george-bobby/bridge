@@ -454,10 +454,25 @@ function worktreeRootFor(repo) {
 }
 
 /**
- * Validate everything, then make the worktree. Validation first so a bad
- * spawn fails before it leaves a half-made branch behind.
+ * A worktree's folder name, laid out like the gym and studio worktrees:
+ * the branch without its leading `user/`, one level deep
+ * (`george/fix-login` → `fix-login`, `a/b/c` → `b-c`).
  */
-async function createWorktree({ repo, branch, from: pick = "" }) {
+function worktreeName(branch) {
+  const parts = String(branch || "").split("/").filter(Boolean);
+  return (parts.length > 1 ? parts.slice(1) : parts).join("-");
+}
+
+const branchExists = (repo, branch) => git(["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], repo).then(() => true, () => false);
+
+/**
+ * Validate everything, then make the worktree at `<repo>-worktrees/<name>`.
+ * Validation first so a bad spawn fails before it leaves a half-made branch
+ * behind. `unique` (a branch Bridge named): a taken branch or folder moves
+ * both on to `-2`, `-3`…; a branch the caller named must be free, and only
+ * its folder gets the suffix.
+ */
+async function createWorktree({ repo, branch, from: pick = "", unique = false }) {
   if (!repo || !path.isAbsolute(repo) || !fs.existsSync(path.join(repo, ".git"))) {
     throw new Error(`not a git checkout: ${repo}`);
   }
@@ -465,12 +480,8 @@ async function createWorktree({ repo, branch, from: pick = "" }) {
     throw new Error(`bad branch name: ${branch}`);
   }
   await git(["check-ref-format", "--branch", branch], repo);
-  try {
-    await git(["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], repo);
-    throw new Error(`branch already exists: ${branch}`);
-  } catch (e) {
-    if (/already exists/.test(e.message)) throw e;
-  }
+  if (!unique && (await branchExists(repo, branch))) throw new Error(`branch already exists: ${branch}`);
+  if (!worktreeName(branch)) throw new Error(`bad branch name: ${branch}`);
   // The base: the default branch unless the task picked another, local
   // (`feature`) or remote-tracking (`upstream/feature`).
   const picked = String(pick || "").trim();
@@ -498,12 +509,20 @@ async function createWorktree({ repo, branch, from: pick = "" }) {
     });
   }
   const root = worktreeRootFor(repo);
-  const dir = path.join(root, branch.replace(/\//g, "-"));
-  if (fs.existsSync(dir)) throw new Error(`worktree path already exists: ${dir}`);
+  let dir = "";
+  let name = branch;
+  for (let n = 1; n <= 50 && !dir; n++) {
+    const tail = n > 1 ? `-${n}` : "";
+    const b = unique ? `${branch}${tail}` : branch;
+    const d = path.join(root, `${worktreeName(branch)}${tail}`);
+    if (fs.existsSync(d) || (unique && (await branchExists(repo, b)))) continue;
+    [dir, name] = [d, b];
+  }
+  if (!dir) throw new Error(`no free worktree folder for ${branch} in ${root}`);
   fs.mkdirSync(root, { recursive: true });
-  await git(["worktree", "add", "--quiet", "-b", branch, dir, from], repo, 120000);
+  await git(["worktree", "add", "--quiet", "-b", name, dir, from], repo, 120000);
   const copied = await copyIncludes(repo, dir);
-  return { worktree: dir, branch, base, from, copied };
+  return { worktree: dir, branch: name, base, from, copied };
 }
 
 /**
@@ -685,6 +704,7 @@ module.exports = {
   git,
   defaultBranch,
   createWorktree,
+  worktreeName,
   branches,
   copyIncludes,
   inspectWorktree,

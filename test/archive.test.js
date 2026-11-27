@@ -32,7 +32,7 @@ test("defaults to one day, clamps to the feed's 14-day window, 0 is off", () => 
   assert.strictEqual(store.writeConfig({ harness: { autoArchiveDays: "" } }).harness.autoArchiveDays, 0, "blank keeps the value");
 });
 
-test("archives chats whose PR merged at least N days ago, and only those", () => {
+test("archives chats whose PR merged at least N days ago, and only those", async () => {
   chat("old", `${GH}/1/`); // trailing slash: matched like the app does
   chat("fresh", `${GH}/2`);
   chat("open", `${GH}/9`);
@@ -42,18 +42,18 @@ test("archives chats whose PR merged at least N days ago, and only those", () =>
   store.setArchived("back", false); // unarchived by hand: stays
 
   store.writeConfig({ harness: { autoArchiveDays: 0 } });
-  assert.deepStrictEqual(harness.autoArchive(pulls, NOW), [], "off");
+  assert.deepStrictEqual(await harness.autoArchive(pulls, NOW), [], "off");
 
   store.writeConfig({ harness: { autoArchiveDays: 1 } });
-  assert.deepStrictEqual(harness.autoArchive(pulls, NOW), ["old"]);
+  assert.deepStrictEqual(await harness.autoArchive(pulls, NOW), ["old"]);
   assert.ok(archived("old"));
   for (const id of ["fresh", "open", "none", "back"]) assert.ok(!archived(id), `${id} kept`);
 
-  assert.deepStrictEqual(harness.autoArchive(pulls, NOW + DAY), ["fresh"], "a day later the fresh one goes too");
-  assert.deepStrictEqual(harness.autoArchive(pulls, NOW + DAY), [], "nothing twice");
+  assert.deepStrictEqual(await harness.autoArchive(pulls, NOW + DAY), ["fresh"], "a day later the fresh one goes too");
+  assert.deepStrictEqual(await harness.autoArchive(pulls, NOW + DAY), [], "nothing twice");
 
   store.writeConfig({ harness: { autoArchiveDays: 3 } });
   chat("two-days", `${GH}/1`);
-  assert.deepStrictEqual(harness.autoArchive(pulls, NOW), [], "merged 2 days ago waits for 3");
-  assert.deepStrictEqual(harness.autoArchive({}, NOW), [], "no feed, nothing");
+  assert.deepStrictEqual(await harness.autoArchive(pulls, NOW), [], "merged 2 days ago waits for 3");
+  assert.deepStrictEqual(await harness.autoArchive({}, NOW), [], "no feed, nothing");
 });
