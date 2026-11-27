@@ -1174,9 +1174,9 @@ struct TriggerMenu: View {
         }
         .frame(width: 500)
         .background(T.raised, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous).stroke(Color.white.opacity(0.09), lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous).stroke(T.rim, lineWidth: 1))
         .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
-        .shadow(color: .black.opacity(0.45), radius: 22, y: 8)
+        .shadow(color: T.shade.opacity(0.45), radius: 22, y: 8)
     }
 
     func row(_ it: TriggerItem, on: Bool) -> some View {

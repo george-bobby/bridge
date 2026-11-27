@@ -297,6 +297,7 @@ struct PRRow: View {
                 Text(pr.title).font(T.ui(13, .medium)).foregroundStyle(T.text).lineLimit(1)
                 Spacer(minLength: 8)
                 PortChips(servers: pr.open ? model.servers(forBranch: pr.branch) : [])
+                if pr.open, let p = pr.preview { PreviewChip(preview: p, run: model.session(forPR: pr)?.id, size: 11, boxed: true) }
                 if !pr.issueKey.isEmpty { Chip(text: pr.issueKey, mono: true) }
                 ReviewChip(pr: pr)
                 if pr.mergeable == "CONFLICTING" && pr.open { Chip(text: "Conflicts", icon: "exclamationmark.triangle", tint: T.orange) }
@@ -330,6 +331,9 @@ struct PRMenu: View {
         Section {
             Button { openURL(pr.url) } label: { Label("Open on GitHub", systemImage: "safari") }
             if let s = model.session(forPR: pr) { Button { model.open(s.id) } label: { Label("Open Session", systemImage: "bubble.left.and.text.bubble.right") } }
+            if pr.open, let p = pr.preview {
+                Button { model.openPreview(p.url, run: model.session(forPR: pr)?.id) } label: { Label("Open \(p.name) Preview", systemImage: "globe") }
+            }
             if pr.open, !model.servers(forBranch: pr.branch).isEmpty, let port = model.servers(forBranch: pr.branch).first?.ports.first {
                 Button { openURL("http://localhost:\(port)") } label: { Label("Open Dev Server :\(port)", systemImage: "play.circle") }
             }
@@ -688,6 +692,7 @@ struct BoardCard: View {
                     if let pr {
                         Button { openURL(session.prUrl) } label: { PRBadge(pr: pr, size: 11.5) }.buttonStyle(.plain)
                         ChecksBadge(pr: pr, size: 11.5)
+                        if pr.open, let p = pr.preview { PreviewChip(preview: p, run: session.id) }
                     } else if !session.prUrl.isEmpty {
                         Button { openURL(session.prUrl) } label: { Chip(text: "#\(session.prNumber)", icon: "arrow.triangle.pull", mono: true) }.buttonStyle(.plain)
                     }
@@ -699,7 +704,7 @@ struct BoardCard: View {
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(hover.v ? T.hover : T.raised))
         .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(model.isAwaiting(session) ? T.orange.opacity(0.45) : hover.v ? T.text3.opacity(0.5) : T.line, lineWidth: 1))
-        .shadow(color: .black.opacity(hover.v ? 0.35 : 0.18), radius: hover.v ? 10 : 2, y: hover.v ? 4 : 1)
+        .shadow(color: T.shade.opacity(hover.v ? 0.35 : 0.18), radius: hover.v ? 10 : 2, y: hover.v ? 4 : 1)
         .offset(y: hover.v ? -1 : 0)
         .contentShape(Rectangle())
         .hoverBox(hover)
