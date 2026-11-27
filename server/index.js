@@ -336,7 +336,7 @@ async function handle(req, res) {
       }
       const dm = p.match(/^\/api\/decisions\/([A-Za-z0-9-]+)$/);
       if (req.method === "POST" && dm) {
-        const out = harness.decide(dm[1], { answer: String(body.answer || "").slice(0, 8000), action: body.action || "answer" });
+        const out = await harness.decide(dm[1], { answer: String(body.answer || "").slice(0, 8000), action: body.action || "answer" });
         bus.broadcast("inbox", harness.inbox());
         return ok({ decision: out });
       }
@@ -369,7 +369,7 @@ async function handle(req, res) {
         if (req.method === "POST" && verb === "declare") return ok({ meta: harness.declare(id, String(body.state || ""), String(body.text || "").slice(0, 300)) });
         if (req.method === "POST" && verb === "plan") return ok({ plan: harness.plan(id, String(body.op || ""), Array.isArray(body.args) ? body.args : []) });
         if (req.method === "POST" && verb === "relaunch") {
-          harness.relaunch(id, String(body.note || "").slice(0, 2000));
+          await harness.relaunch(id, String(body.note || "").slice(0, 2000));
           return ok({});
         }
         if (req.method === "POST" && verb === "cleanup") return ok(await harness.cleanup(id, { force: !!body.force }));
@@ -1029,12 +1029,39 @@ async function handle(req, res) {
           const out = jobs.compact(id, { config: store.readConfig(), instructions: c[1] || "" });
           return sendJson(res, 200, { ok: true, compacted: true, native: out.native });
         }
+        if (!body.opts || !body.opts.agent) await harness.autoFailover(id);
         const msg = jobs.startFollowup(id, text, { config: store.readConfig(), queue: !!body.queue });
         sendJson(res, 200, { ok: true, message: msg, queued: !!(msg && msg.queued) });
       } catch (e) {
         sendJson(res, 409, { ok: false, error: String(e.message || e) });
       }
       return;
+    }
+
+    if (req.method === "POST" && verb === "agent") {
+      try {
+        const body = JSON.parse((await readBody(req)) || "{}");
+        const clean = store.sanitizeJobOpts({ agent: body.agent, agentModel: body.model == null ? "" : body.model });
+        if (!clean.agent) throw new Error("agent is claude, codex, cursor or devin");
+        const run = store.loadRun(id);
+        if (!run) throw new Error("unknown run");
+        const before = store.jobOpts(store.readConfig(), run).agent || "claude";
+        run.opts = { ...run.opts, agent: clean.agent };
+        if (clean.agent === "claude") {
+          delete run.opts.agentModel;
+          if (clean.agentModel) run.opts.model = clean.agentModel;
+        } else run.opts.agentModel = clean.agentModel || "";
+        const labels = { claude: "Claude", codex: "Codex", cursor: "Cursor", devin: "Devin" };
+        const label = labels[clean.agent];
+        const text = `Agent changed from ${labels[before]} to ${label}; the current turn will finish and the next turn will use ${label}`;
+        const msg = store.appendMessage(run, { role: "event", phase: "agent", text });
+        store.saveRun(run);
+        bus.broadcast("message", { runId: id, message: msg });
+        bus.broadcast("run-updated", { runId: id });
+        return sendJson(res, 200, { ok: true, agent: clean.agent, model: clean.agent === "claude" ? run.opts.model || "" : run.opts.agentModel || "", queued: jobs.isRunning(id) });
+      } catch (e) {
+        return sendJson(res, 400, { ok: false, error: String(e.message || e) });
+      }
     }
 
     // Run the pipeline on a chat that hasn't had one yet.

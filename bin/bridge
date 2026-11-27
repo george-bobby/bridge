@@ -5,7 +5,9 @@
  * here is meant for a person. Every command is a call to the local dashboard,
  * which owns the state; this script holds none.
  *
- *   bridge spawn --repo <path> --title "<t>" (--brief "<text>" | --brief-file <f>) [--branch b] [--model m] [--no-start]
+ *   bridge spawn --repo <path> --title "<t>" (--brief "<text>" | --brief-file <f>) [--branch b] [--agent a] [--agent-model m] [--no-start]
+ *   bridge usage                              compact plan usage for every agent
+ *   bridge agent <id> <agent> [--model m]     switch that chat on its next turn
  *   bridge slack <slack thread url>
  *   bridge status [--since 3h] [--json]       decisions waiting, to-dos, every task; --since adds what happened
  *   bridge sessions [--project <id> | --all] [--json]   every chat (an orchestrator sees its own scope)
@@ -106,6 +108,21 @@ function printDecisions(list) {
   }
 }
 
+const AGENTS = ["claude", "codex", "cursor", "devin"];
+
+function formatUsage(out) {
+  return (out.providers || []).map((p) => {
+    if (p.status !== "ok") return `${p.label || p.id}: ${p.reason || p.status || "unavailable"}`;
+    if (p.id === "devin") return `Devin: ${(Number(p.local && p.local.week && p.local.week.acu) || 0).toFixed(2)} ACUs (7d)`;
+    if (p.id === "cursor") {
+      const facts = (p.details || []).filter((d) => /spend|promo credit/i.test(d.label || "")).map((d) => `${String(d.label).toLowerCase()} ${d.value}`);
+      return `Cursor: ${facts.length ? facts.join(" · ") : (p.windows || []).map((w) => `${w.short || w.label} ${Math.round(w.usedPct)}%`).join(" · ") || "no published usage"}`;
+    }
+    const windows = (p.windows || []).filter((w) => p.id !== "claude" || ["session", "weekly"].includes(w.id));
+    return `${p.label || p.id}: ${windows.map((w) => `${w.short || w.label} ${Math.round(w.usedPct)}%`).join(" · ") || "no published usage"}`;
+  });
+}
+
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
   const { flags, pos } = parse(rest);
@@ -117,6 +134,14 @@ async function main() {
       if (!brief || brief === true) die("spawn needs --brief <text> or --brief-file <file>");
       const opts = {};
       if (flags.model) opts.model = flags.model;
+      if (flags.agent) {
+        if (!AGENTS.includes(String(flags.agent))) die("--agent is claude, codex, cursor or devin");
+        opts.agent = String(flags.agent);
+      }
+      if (flags["agent-model"]) {
+        if (flags.agent === "claude") opts.model = String(flags["agent-model"]);
+        else opts.agentModel = String(flags["agent-model"]);
+      }
       if (flags.mode) opts.permissionMode = flags.mode;
       const out = await call("POST", "/api/tasks", {
         repo: typeof flags.repo === "string" ? path.resolve(flags.repo) : undefined,
@@ -131,6 +156,17 @@ async function main() {
       console.log(`  branch:   ${out.branch}`);
       console.log(`  worktree: ${out.worktree}`);
       console.log(`  brief:    ${out.brief}`);
+      return;
+    }
+    case "usage": {
+      const out = await call("GET", "/api/usage");
+      for (const line of formatUsage(out)) console.log(line);
+      return;
+    }
+    case "agent": {
+      if (!pos[0] || !AGENTS.includes(pos[1])) die("agent <id> <claude|codex|cursor|devin> [--model m]");
+      const out = await call("POST", `/api/runs/${encodeURIComponent(pos[0])}/agent`, { agent: pos[1], model: typeof flags.model === "string" ? flags.model : "" });
+      console.log(`${out.queued ? "queued" : "set"}: ${out.agent}${out.model ? ` (${out.model})` : ""} for the next turn`);
       return;
     }
     case "slack": {
@@ -264,4 +300,6 @@ async function main() {
   }
 }
 
-main().catch((e) => die(e.message));
+if (require.main === module) main().catch((e) => die(e.message));
+
+module.exports = { parse, formatUsage };

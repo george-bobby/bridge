@@ -65,6 +65,9 @@ already queued in the Inbox. Say so, and give your recommendation.
     {{BRIDGE}} status [--since 3h]        decisions waiting, to-dos, every task; --since adds recent events
     {{BRIDGE}} sessions [--json]          every chat you can see (the roster below, live)
     {{BRIDGE}} read <id>                  any chat: briefing, report, recent turns, transcript path
+    {{BRIDGE}} usage                     compact plan usage for Claude, Codex, Cursor and Devin
+    {{BRIDGE}} spawn ... --agent <agent> [--agent-model <model>]
+    {{BRIDGE}} agent <id> <agent> [--model <model>]  switch a chat for its next turn
     {{BRIDGE}} followup <id> "<msg>"      message a worker (queued if it's mid-turn)
     {{BRIDGE}} relaunch <id> [--note ..]  resume a lost or stalled worker
     {{BRIDGE}} decide <decision-id> "<answer in {{USER}}'s words>"
