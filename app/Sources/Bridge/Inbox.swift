@@ -6,7 +6,6 @@ import SwiftUI
 /// Everything waiting on you, one tab per kind. Every item opens its chat.
 struct InboxView: View {
     @Environment(AppModel.self) var model
-    @StateObject private var tasks = Box(JSON.null)
     @StateObject private var activity = Box(JSON.null)
     @StateObject private var since = Box("24h")
 
@@ -20,7 +19,7 @@ struct InboxView: View {
             }
         }
         .onAppear(perform: load)
-        .onChange(of: model.inboxTab) { if model.inboxTab == "tasks" || model.inboxTab == "activity" { load() } }
+        .onChange(of: model.inboxTab) { if model.inboxTab == "activity" { load() } }
     }
 
     var header: some View {
@@ -45,7 +44,6 @@ struct InboxView: View {
                     .init(id: "decisions", label: "Needs you", count: model.decisions.count, hot: true),
                     .init(id: "slack", label: "Slack", count: model.slackOpenCount, hot: model.slackOpenCount > 0),
                     .init(id: "todos", label: "To-dos", count: model.todos.count),
-                    .init(id: "tasks", label: "Workers", count: tasks.v["tasks"].array.filter { $0["status"].string != "cleaned" }.count),
                     .init(id: "activity", label: "Activity"),
                 ], selection: $m.inboxTab)
                 Spacer()
@@ -69,7 +67,6 @@ struct InboxView: View {
         case "decisions": return "Questions and approvals your sessions are waiting on. Answer here, or click a card to open its chat."
         case "slack": return "Slack mentions and posts in channels you watch that no session has picked up yet."
         case "todos": return "Things only you can do, like merging a PR or adding a token. Tick one off when it's done; click it to open its chat."
-        case "tasks": return "Every session the orchestrator started and where it stands. Click one to open it."
         default: return "What happened across your sessions, newest first. Click a row to open its chat."
         }
     }
@@ -87,10 +84,6 @@ struct InboxView: View {
         case "todos":
             if model.todos.isEmpty { EmptyState(icon: "checklist", title: "No to-dos", detail: "Things only you can do, like merging a PR or adding a token, show up here.") }
             ForEach(model.todos, id: \.self) { TodoRow(t: $0).transition(.opacity.combined(with: .move(edge: .trailing))) }
-        case "tasks":
-            let list = tasks.v["tasks"].array
-            if list.isEmpty { EmptyState(icon: "person.2", title: "No sessions", detail: "Sessions the orchestrator starts are listed here.") }
-            ForEach(list, id: \.self) { TaskRow(t: $0) }
         default:
             let ev = Array(activity.v["events"].array.reversed())
             if ev.isEmpty { EmptyState(icon: "clock", title: "Quiet", detail: "Nothing happened in the last \(since.v).") }
@@ -100,7 +93,6 @@ struct InboxView: View {
 
     func load() {
         Task {
-            if let t = try? await API.get("/api/tasks") { tasks.v = t }
             if let a = try? await API.get("/api/catchup?since=\(since.v)") { activity.v = a }
         }
     }
@@ -330,26 +322,6 @@ struct TodoRow: View {
         }
         .onTapGesture { if let id = t["taskId"].nonEmpty { model.open(id) } }
         .help(t["taskId"].nonEmpty == nil ? "" : "Open the chat")
-    }
-}
-
-struct TaskRow: View {
-    @Environment(AppModel.self) var model
-    let t: JSON
-    var body: some View {
-        let st = t["status"].string
-        HoverRow(height: 46) {
-            HStack(spacing: 12) {
-                StatusIcon(kind: needsStatuses.contains(st) ? .attention : st == "working" ? .progress : st == "ready-for-review" ? .review : st == "cleaned" ? .done : .todo, size: 13)
-                Text(t["title"].nonEmpty ?? t["id"].string).font(T.ui(13, .medium)).lineLimit(1)
-                Text(t["branch"].string).font(T.mono(11.5)).foregroundStyle(T.text3).lineLimit(1)
-                Spacer()
-                Chip(text: statusLabels[st] ?? st)
-                if let pr = t["pr"].nonEmpty { IconButton(icon: "arrow.triangle.pull", help: pr) { openURL(pr) } }
-            }
-        }
-        .onTapGesture { model.open(t["id"].string) }
-        .help("Open the chat")
     }
 }
 
