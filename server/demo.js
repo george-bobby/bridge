@@ -836,7 +836,9 @@ const NOTES = [
 ];
 
 function granola() {
-  return { configured: true, notes: NOTES.map(([id, title, ago]) => ({ id, title, owner: "Alex Rivera", createdAt: iso(ago), updatedAt: iso(ago - 600) })), at: Date.now() };
+  // Alex is you; Priya's incident review was shared with you.
+  const owner = (id) => (id === "not_4" ? "Priya Raman" : "Alex Rivera");
+  return { configured: true, me: "alex@example.com", notes: NOTES.map(([id, title, ago]) => ({ id, title, owner: owner(id), mine: owner(id) === "Alex Rivera", createdAt: iso(ago), updatedAt: iso(ago - 600) })), at: Date.now() };
 }
 
 function granolaNote(id) {
@@ -947,6 +949,20 @@ function plugins() {
       plugins: [
         { id: "vercel@cursor-public", name: "vercel", marketplace: "cursor-public", version: "0.48.0", description: "Build and deploy web apps and agents", homepage: "https://vercel.com", mcp: true, skills: 12, dir: "" },
         { id: "datadog@cursor-public", name: "datadog", marketplace: "cursor-public", version: "1.4.1", description: "Logs, traces and monitors from Datadog", homepage: "", mcp: true, skills: 3, dir: "" },
+      ],
+    },
+    codex: {
+      ok: true,
+      plugins: [
+        { id: "browser@openai-bundled", name: "Browser", marketplace: "openai-bundled", version: "26.1120.0", description: "Open and test pages in a browser", enabled: true, dir: "" },
+        { id: "pdf@openai-primary-runtime", name: "PDF", marketplace: "openai-primary-runtime", version: "26.1123.0", description: "Read, create and verify PDFs", enabled: true, dir: "" },
+      ],
+    },
+    devin: {
+      ok: true,
+      plugins: [
+        { id: "linear@devin-marketplace", name: "linear", marketplace: "devin-marketplace", version: "", blocked: false, remove: "linear" },
+        { id: "slack", name: "slack", marketplace: "", version: "1.1.0", blocked: false, remove: "slack" },
       ],
     },
   };

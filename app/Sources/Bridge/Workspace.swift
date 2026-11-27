@@ -80,7 +80,7 @@ struct Sidebar: View {
         case .models:
             NavItem(icon: k.icon, label: k.label, route: k.route, count: model.models["providers"].array.reduce(0) { $0 + $1["models"].array.count }, hot: model.models["providers"].array.contains { $0["error"].nonEmpty != nil })
         case .granola:
-            NavItem(icon: k.icon, label: k.label, route: k.route, count: model.granola["notes"].array.filter { Calendar.current.isDateInToday(Date(timeIntervalSince1970: Fmt.iso($0["createdAt"].string))) }.count)
+            NavItem(icon: k.icon, label: k.label, route: k.route, count: model.granolaNotes.filter { Calendar.current.isDateInToday(Date(timeIntervalSince1970: Fmt.iso($0["createdAt"].string))) }.count)
         }
     }
 }

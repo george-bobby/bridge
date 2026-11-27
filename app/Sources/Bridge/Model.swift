@@ -922,13 +922,11 @@ final class AppModel {
     }
 
     var building = false
-    var buildLog = ""
 
     /// Rebuild Bridge.app from its own source, then swap it in and relaunch.
     func rebuildApp() {
         guard !bridgeRoot.isEmpty, !building else { return }
         building = true
-        buildLog = "Building…"
         let root = bridgeRoot
         Task.detached {
             let p = Process()
@@ -944,8 +942,14 @@ final class AppModel {
             let ok = p.terminationStatus == 0
             await MainActor.run {
                 self.building = false
-                self.buildLog = out.split(separator: "\n").suffix(12).joined(separator: "\n")
-                guard ok else { return self.say("The build failed: see the log in Settings", bad: true) }
+                guard ok else {
+                    let a = NSAlert()
+                    a.messageText = "The build failed"
+                    a.informativeText = out.split(separator: "\n").suffix(12).joined(separator: "\n")
+                    a.alertStyle = .warning
+                    a.runModal()
+                    return
+                }
                 let swap = Process()
                 swap.executableURL = URL(fileURLWithPath: "/bin/sh")
                 swap.arguments = ["-c", "sleep 1; rm -rf \"$HOME/Applications/Bridge.app\" && mkdir -p \"$HOME/Applications\" && cp -R \"$BRIDGE_ROOT/dist/Bridge.app\" \"$HOME/Applications/\" && open \"$HOME/Applications/Bridge.app\""]

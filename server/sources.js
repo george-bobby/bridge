@@ -399,21 +399,36 @@ async function loadIncidents() {
 const GRANOLA = "https://public-api.granola.ai/v1";
 const granolaAuth = () => ({ Authorization: `Bearer ${env.granolaApiKey}` });
 
+/**
+ * Who you are to Granola: git's user.email. The API has no "me" endpoint and
+ * no visibility flag; a note's owner is the one signal that a note is yours
+ * (Granola notes are private until shared), so `mine` is owner === you.
+ */
+function myEmail() {
+  try {
+    return require("child_process").execFileSync("git", ["config", "--global", "user.email"], { encoding: "utf8", timeout: 5000 }).trim().toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
 /** Your recent Granola notes (the list has no summary or link: see granolaNote). */
 async function loadGranola() {
   if (!env.granolaApiKey) return { configured: false, notes: [], at: Date.now() };
+  const me = myEmail();
   const notes = [];
   let cursor = "";
   for (let page = 0; page < 3; page++) {
     const out = await getJson(`${GRANOLA}/notes?page_size=30${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`, granolaAuth(), "Granola");
     for (const n of out.notes || []) {
       if (n.deleted_at) continue;
-      notes.push({ id: n.id, title: n.title || "Untitled", owner: (n.owner && (n.owner.name || n.owner.email)) || "", createdAt: n.created_at || "", updatedAt: n.updated_at || "" });
+      const email = String((n.owner && n.owner.email) || "").toLowerCase();
+      notes.push({ id: n.id, title: n.title || "Untitled", owner: (n.owner && (n.owner.name || n.owner.email)) || "", mine: !!me && email === me, createdAt: n.created_at || "", updatedAt: n.updated_at || "" });
     }
     if (!out.hasMore || !out.cursor) break;
     cursor = out.cursor;
   }
-  return { configured: true, notes, at: Date.now() };
+  return { configured: true, me, notes, at: Date.now() };
 }
 
 /** One note's summary, attendees and link to open it in Granola. */

@@ -156,6 +156,8 @@ function sanitizeHarness(patch, base) {
   // The pulls feed only lists PRs merged in the last 14 days, so a longer wait would never fire.
   if (Number.isFinite(Number(patch.autoArchiveDays)) && patch.autoArchiveDays !== "") out.autoArchiveDays = int(patch.autoArchiveDays, 0, 14);
   if (["off", "watch", "triage"].includes(patch.slackWatch)) out.slackWatch = patch.slackWatch;
+  // Granola: list only the notes you own (Settings › Integrations › Granola).
+  if (patch.granolaMine != null) out.granolaMine = Boolean(patch.granolaMine);
   // Picked in Settings instead of typed into .env (server/identity.js): the
   // project Slack threads are worked in, the Linear team tickets go to, and the
   // Slack pipeline's model. "" falls back to .env.

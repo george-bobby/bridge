@@ -45,7 +45,7 @@ function rootDir() {
 const rootProject = () => ({ id: DEFAULT, name: rootPrefs().name || "Default", path: rootDir(), root: true, auto: automation(rootPrefs().auto) });
 
 /**
- * How autonomous workers are in a project (Settings › Projects). Only
+ * How autonomous workers are in a project (Settings › Agents › Automation). Only
  * "rebase" is on by default: it is already a house rule. Hard limits (no
  * Slack, Linear or new threads; no admin merge) hold whatever these say.
  */

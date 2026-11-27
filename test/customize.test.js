@@ -72,4 +72,43 @@ test("a plugin id can't pass for a flag", async () => {
   await assert.rejects(c.claudePlugin("install", "--plugin-dir=/tmp"), /bad plugin id/);
 });
 
+test("Codex plugins come from config.toml, described by the cached manifest", () => {
+  const codex = path.join(HOME, ".codex");
+  const cached = path.join(codex, "plugins", "cache", "openai-bundled", "browser", "1.0.0", ".codex-plugin");
+  fs.mkdirSync(cached, { recursive: true });
+  fs.writeFileSync(path.join(cached, "plugin.json"), JSON.stringify({ name: "browser", version: "1.0.0", interface: { displayName: "Browser", shortDescription: "Drive a browser" } }));
+  fs.writeFileSync(
+    path.join(codex, "config.toml"),
+    ['model = "gpt-5"', "", '[plugins."browser@openai-bundled"]', "enabled = true", "", '[plugins."pdf@openai-primary-runtime"]', "enabled = false", "", "[mcp_servers.x]", 'command = "x"', ""].join("\n"),
+  );
+  const prev = process.env.CODEX_HOME;
+  delete process.env.CODEX_HOME;
+  try {
+    const out = c.codexPlugins().plugins;
+    assert.deepEqual(out.map((p) => [p.id, p.name, p.enabled, p.version]), [
+      ["browser@openai-bundled", "Browser", true, "1.0.0"],
+      ["pdf@openai-primary-runtime", "pdf", false, ""],
+    ]);
+    assert.equal(out[0].description, "Drive a browser");
+  } finally {
+    if (prev != null) process.env.CODEX_HOME = prev;
+  }
+});
+
+test("Devin's plugin list parses, same-named installs kept apart", () => {
+  const out = c.parseDevinPlugins("Installed plugins\n\n  • slack v1.1.0\n  • linear (claude-plugins-official#external_plugins/linear) unversioned\n  • linear (devin-marketplace#plugins/linear) unversioned\n  • old v0.1.0 (blocked)\n");
+  assert.deepEqual(out.map((p) => [p.id, p.name, p.version, p.blocked]), [
+    ["slack", "slack", "1.1.0", false],
+    ["linear@claude-plugins-official#external_plugins/linear", "linear", "", false],
+    ["linear@devin-marketplace#plugins/linear", "linear", "", false],
+    ["old", "old", "0.1.0", true],
+  ]);
+});
+
+test("Codex and Devin plugins only take remove, and no flags", async () => {
+  await assert.rejects(c.agentPlugin("codex", "remove", "--force"), /bad plugin id/);
+  await assert.rejects(c.agentPlugin("devin", "install", "acme/x"), /unknown action/);
+  await assert.rejects(c.agentPlugin("cursor", "remove", "x"), /can't be changed/);
+});
+
 test.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
