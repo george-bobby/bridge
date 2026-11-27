@@ -153,6 +153,12 @@ function sanitizeHarness(patch, base) {
     if (v === "" || /^[\w.-]+(?::[\w.-]+)?$/.test(v)) out.workerSkill = v.slice(0, 64);
   }
   if (["off", "watch", "triage"].includes(patch.slackWatch)) out.slackWatch = patch.slackWatch;
+  // Picked in Settings instead of typed into .env (server/identity.js): the
+  // project Slack threads are worked in, the Linear team tickets go to, and the
+  // Slack pipeline's model. "" falls back to .env.
+  if (patch.pipelineProject != null && /^[a-z0-9-]{0,40}$/.test(String(patch.pipelineProject))) out.pipelineProject = String(patch.pipelineProject);
+  if (patch.linearTeam != null && /^[A-Za-z0-9]{0,12}$/.test(String(patch.linearTeam))) out.linearTeam = String(patch.linearTeam).toUpperCase();
+  if (patch.pipelineModel != null && /^[\w.:\[\]-]{0,64}$/.test(String(patch.pipelineModel))) out.pipelineModel = String(patch.pipelineModel);
   if (Number.isFinite(Number(patch.slackPollSec)) && patch.slackPollSec !== "") out.slackPollSec = int(patch.slackPollSec, 30, 3600);
   if (Array.isArray(patch.slackChannels)) out.slackChannels = [...new Set(patch.slackChannels.map(String).filter((c) => /^[CG][A-Z0-9]{4,}$/.test(c)))].slice(0, 20);
   if (patch.policy && typeof patch.policy === "object") {

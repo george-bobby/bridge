@@ -56,7 +56,7 @@ in, and [`gh`](https://cli.github.com) signed in. A Linear API key and a
 
 ```bash
 git clone https://github.com/george-bobby/bridge.git && cd bridge
-cp .env.example .env      # or fill it in later: Settings › Advanced
+cp .env.example .env      # or leave it empty and connect things in Settings › Integrations
 npm start                 # the server, under launchd
 npm run app               # build Bridge.app, install it to ~/Applications, open it
 ```

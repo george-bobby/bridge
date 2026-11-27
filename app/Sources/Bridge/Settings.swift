@@ -12,7 +12,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
     var label: String {
         switch self {
         case .general: return "General"
-        case .agents: return "Agents & models"
+        case .agents: return "Agents"
         case .mcp: return "Customize"
         case .integrations: return "Integrations"
         case .projects: return "Projects"
@@ -34,12 +34,12 @@ enum SettingsPane: String, CaseIterable, Identifiable {
     var blurb: String {
         switch self {
         case .general: return "The server, how outcomes reach you, and what the Slack pipeline may do."
-        case .agents: return "Which agent and model new sessions start with, and how many sessions run at once."
+        case .agents: return "The agents on this Mac, what a new session starts with, and the skill it opens with."
         case .mcp: return "What each agent loads: MCP servers, skills and plugins. Changes go into the agent's own folders and config."
-        case .integrations: return "Slack, GitHub, Linear, Vercel, incident.io and Granola, and which of them the sidebar shows. Tokens are stored in .env and never shown again."
-        case .projects: return "The repositories in the sidebar, each with its own orchestrator."
+        case .integrations: return "Connect your tools. Bridge works out who you are and which repo from each connection; nothing else to type. Keys are stored in .env and never shown again."
+        case .projects: return "Default and your repositories, each with its own orchestrator. Git settings come from each project's own checkout."
         case .notifications: return "When Bridge interrupts you, on this Mac."
-        case .advanced: return "Every .env key, the server runtime, and developing Bridge with Bridge."
+        case .advanced: return "Overrides for what Bridge works out itself, the server runtime, and developing Bridge with Bridge."
         }
     }
 }
@@ -85,18 +85,10 @@ enum Prefs {
         return words.allSatisfy { hay.contains($0) }
     }
 
-    static let slackKeys = ["SLACK_USER_TOKEN", "SLACK_USER_ID", "SLACK_USER_NAME", "SLACK_PRODUCT_TEAM", "SLACK_ENGINEER_TEAM"]
-    static let githubKeys = ["GITHUB_LOGIN", "GITHUB_REPO"]
-    static let linearKeys = ["LINEAR_API_KEY", "LINEAR_WORKSPACE", "LINEAR_TEAM", "LINEAR_ISSUE_PREFIX", "LINEAR_PROJECT"]
-    static let repoKeys = ["TARGET_REPO", "TARGET_SCOPE", "WORKTREE_ROOT", "BRANCH_PREFIX"]
-    static let defaultKeys = ["DEFAULT_DIR"]
-    static let vercelKeys = ["VERCEL_TOKEN", "VERCEL_TEAM_ID"]
-    static let incidentKeys = ["INCIDENT_API_KEY"]
-    static let granolaKeys = ["GRANOLA_API_KEY"]
-    static let productKeys = ["PRODUCT_NAME", "PRODUCT_URL"]
-    static let agentKeys = ["WORKER_SKILL", "PIPELINE_MODEL", "EXTRA_PATH"]
-    /// Keys with a home in a friendlier section; Advanced lists the rest.
-    static var placed: Set<String> { Set(slackKeys + githubKeys + linearKeys + repoKeys + defaultKeys + vercelKeys + incidentKeys + granolaKeys + productKeys + agentKeys) }
+    /// The connection keys: edited in Integrations. Everything else in .env is
+    /// an override for something Bridge works out itself, under Advanced.
+    static let connectionKeys = ["SLACK_USER_TOKEN", "LINEAR_API_KEY", "VERCEL_TOKEN", "INCIDENT_API_KEY", "GRANOLA_API_KEY"]
+    static var placed: Set<String> { Set(connectionKeys) }
 }
 
 // MARK: - Page
@@ -247,6 +239,7 @@ struct SSection<Content: View, Trailing: View>: View {
         Group(subviews: content) { rows in
             if !rows.isEmpty {
                 VStack(alignment: .leading, spacing: 10) {
+                    if !title.isEmpty || !detail.isEmpty {
                     HStack(alignment: .lastTextBaseline, spacing: 8) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(prefix.isEmpty ? title : "\(prefix) · \(title)").font(T.ui(13, .semibold)).foregroundStyle(T.text)
@@ -256,6 +249,7 @@ struct SSection<Content: View, Trailing: View>: View {
                         trailing()
                     }
                     .padding(.horizontal, 2)
+                    }
                     VStack(spacing: 0) {
                         ForEach(Array(rows.enumerated()), id: \.element.id) { i, row in
                             if i > 0 { Hairline() }
@@ -408,6 +402,8 @@ struct SInput: View {
 struct EnvField: View {
     @ObservedObject var env: EnvStore
     let e: JSON
+    /// What Bridge works out when the key is empty (server/identity.js), shown as the placeholder.
+    var derived = ""
 
     static let titles: [String: String] = [
         "SLACK_USER_TOKEN": "User OAuth token", "SLACK_USER_ID": "Member ID", "SLACK_USER_NAME": "Display name",
@@ -415,10 +411,12 @@ struct EnvField: View {
         "GITHUB_LOGIN": "GitHub login", "GITHUB_REPO": "Pull request repository",
         "LINEAR_API_KEY": "Personal API key", "LINEAR_WORKSPACE": "Workspace", "LINEAR_TEAM": "Team",
         "LINEAR_ISSUE_PREFIX": "Issue prefix", "LINEAR_PROJECT": "Project",
-        "TARGET_REPO": "Default repository", "TARGET_SCOPE": "Subdirectory scope", "WORKTREE_ROOT": "Worktree folder", "BRANCH_PREFIX": "Branch prefix",
+        "TARGET_REPO": "Pipeline repository", "TARGET_SCOPE": "Subdirectory scope", "WORKTREE_ROOT": "Worktree folder", "BRANCH_PREFIX": "Branch prefix",
         "PRODUCT_NAME": "Product name", "PRODUCT_URL": "Product URL",
         "BRIDGE_PORT": "Server port", "LAUNCHD_LABEL": "launchd label", "PIPELINE_MODEL": "Pipeline model",
         "EXTRA_PATH": "Extra PATH", "MCP_READ_PREFIXES": "Read-only MCP prefixes", "WORKER_SKILL": "Opening skill",
+        "VERCEL_TOKEN": "Access token", "VERCEL_TEAM_ID": "Vercel team", "INCIDENT_API_KEY": "API key", "GRANOLA_API_KEY": "API key",
+        "DEFAULT_DIR": "Default folder",
     ]
     static let details: [String: String] = [
         "SLACK_PRODUCT_TEAM": "Ticket hints, as Name:MemberID,Name:MemberID",
@@ -437,7 +435,7 @@ struct EnvField: View {
     var body: some View {
         SRow(title: EnvField.title(key), detail: detail, key: EnvField.titles[key] == nil ? "" : key, modified: env.edits[key] != nil) {
             if e["secret"].bool { secret } else {
-                SInput(placeholder: e["example"].nonEmpty ?? "Not set", text: Binding(get: { env.edits[key] ?? e["value"].string }, set: { v in
+                SInput(placeholder: derived.isEmpty ? (e["example"].nonEmpty ?? "Not set") : derived, text: Binding(get: { env.edits[key] ?? e["value"].string }, set: { v in
                     if v == e["value"].string { env.edits.removeValue(forKey: key) } else { env.edits[key] = v }
                 }), mono: key.contains("PATH") || key.contains("REPO") || key.contains("ROOT"))
             }
@@ -582,29 +580,6 @@ struct GeneralSettings: View {
                     }
                 }
             }
-            PipelineSettings(q: q)
-        }
-    }
-}
-
-struct PipelineSettings: View {
-    @Environment(AppModel.self) var model
-    let q: String
-
-    var body: some View {
-        SSection(title: "Slack pipeline", detail: "What a run started from a Slack thread may prepare for you") {
-            toggle("Draft the reply in the thread", "reply", "Posted only after you approve it")
-            toggle("Offer a Linear ticket", "createLinearIssue", "Created only after you approve it")
-            toggle("Wait for bot review, then resolve", "botReview", "After the PR opens, wait for the review bots, then run /resolve")
-            toggle("Propose memories", "saveToMemory", "Nothing is saved without your approval")
-        }
-    }
-
-    @ViewBuilder func toggle(_ title: String, _ key: String, _ hint: String) -> some View {
-        if Prefs.hit(q, title, hint, "pipeline slack") {
-            SRow(title: title, detail: hint) {
-                SToggle(on: Binding(get: { model.config[key].bool }, set: { v in Task { await model.saveConfig([key: v]) } }))
-            }
         }
     }
 }
@@ -624,10 +599,8 @@ struct AgentSettings: View {
                 }
             }
             DefaultsSettings(q: q)
+            OpeningSkillSettings(q: q)
             WorkerSettings(q: q)
-            SSection(title: "Pipeline runtime", detail: "Stored in .env") {
-                ForEach(env.rows(Prefs.agentKeys, q), id: \.self) { EnvField(env: env, e: $0) }
-            }
         }
     }
 
@@ -670,17 +643,6 @@ struct DefaultsSettings: View {
                     SSelect(value: model.config["followup"][opt.key].string, choices: opt.choices) { save([opt.key: $0]) }
                 }
             }
-            if Prefs.hit(q, "repository workdir folder default") {
-                SRow(title: "Repository", detail: model.config["followup"]["workdir"].nonEmpty ?? "Not set") {
-                    Button("Choose…") {
-                        let p = NSOpenPanel()
-                        p.canChooseDirectories = true
-                        p.canChooseFiles = false
-                        if p.runModal() == .OK, let u = p.url { save(["workdir": u.path]) }
-                    }
-                    .buttonStyle(LButton())
-                }
-            }
         }
     }
 
@@ -691,6 +653,34 @@ struct DefaultsSettings: View {
     }
 
     func save(_ patch: [String: Any]) { Task { await model.saveConfig(["followup": patch]) } }
+}
+
+/// The skill every new session opens with, picked from the ones installed
+/// (Settings › Customize › Skills) instead of typed into .env.
+struct OpeningSkillSettings: View {
+    @Environment(AppModel.self) var model
+    let q: String
+    @StateObject private var skills = Box([String]())
+
+    var current: String { model.config["harness"]["workerSkill"].string }
+
+    var body: some View {
+        SSection(title: "Every new session", detail: "Opens with a skill, given the task's Linear or Slack link; Codex, Cursor and Devin get it inlined") {
+            if Prefs.hit(q, "opening skill worker skill fetch new session") {
+                SRow(title: "Opening skill", detail: current == "none" ? "Off: sessions get Bridge's built-in brief" : "A skill that isn't installed falls back to Bridge's built-in brief") {
+                    SSelect(value: current, choices: [("", "Default (fetch)"), ("none", "None")] + skills.v.map { ($0, "/\($0)") }) { v in
+                        Task { await model.saveConfig(["harness": ["workerSkill": v]]) }
+                    }
+                }
+            }
+        }
+        .task {
+            let out = (try? await API.get("/api/customize/skills")) ?? .null
+            // Claude's and the shared ones: the worker opens with a Claude skill.
+            let names = out["skills"].array.filter { ["claude", "shared"].contains($0["agent"].string) }.map { $0["folder"].string }
+            skills.v = Array(Set(names)).sorted()
+        }
+    }
 }
 
 struct WorkerSettings: View {
@@ -718,17 +708,109 @@ struct WorkerSettings: View {
 }
 
 // MARK: - Integrations
+//
+// One group per service: a header with its status and "In sidebar" switch,
+// then only what that service needs. Identities, teams and repos are worked
+// out by the server (server/identity.js); pickers replace typed .env values,
+// and the raw keys live under Advanced as overrides.
+
+/// A service's header: icon, name, what it powers, status, and the sidebar switch.
+struct IntegrationHeader: View {
+    @Environment(AppModel.self) var model
+    let kind: SourceKind
+    let title: String
+    let detail: String
+    let connected: Bool
+    var status = ""
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Image(systemName: kind.icon).font(.system(size: 15, weight: .medium)).foregroundStyle(connected ? T.accent : T.text2)
+                .frame(width: 34, height: 34)
+                .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(connected ? T.accentSoft : T.raised))
+                .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(T.line, lineWidth: connected ? 0 : 1))
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 8) {
+                    Text(title).font(T.ui(15, .semibold)).foregroundStyle(T.text)
+                    StatusChip(on: connected, onText: status.isEmpty ? "Connected" : status)
+                }
+                Text(detail).font(T.ui(12)).foregroundStyle(T.text3).fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 12)
+            HStack(spacing: 8) {
+                Text("In sidebar").font(T.ui(12)).foregroundStyle(T.text2)
+                SToggle(on: Binding(get: { model.sourceShown(kind) }, set: { model.setSource(kind, shown: $0) }))
+            }
+            .help("Show \(kind.label) in the sidebar's Sources. Hidden, it's still in ⌘K")
+        }
+        .padding(.bottom, 12)
+    }
+}
 
 struct IntegrationSettings: View {
     @Environment(AppModel.self) var model
     @ObservedObject var env: EnvStore
     let q: String
 
+    var id: JSON { model.identity }
+    func show(_ words: String...) -> Bool { Prefs.hit(q, words.joined(separator: " ")) }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            SSection(title: "Slack", detail: "Read as you with a user token: no bot to invite, nothing to add to channels") {
-                ForEach(env.rows(Prefs.slackKeys, q), id: \.self) { EnvField(env: env, e: $0) }
-                if Prefs.hit(q, "slack app manifest guide setup") {
+        VStack(alignment: .leading, spacing: 8) {
+            if show("github pull requests gh login checks") { github }
+            if show("linear issues api key team tickets") { linear }
+            if show("slack token watch mentions channels pipeline threads triage") { slack }
+            if show("vercel deployments token") { vercel }
+            if show("incident.io incidents api key") { incidents }
+            if show("granola meeting notes api key") { granola }
+        }
+        .task { await model.loadIdentity() }
+    }
+
+    var github: some View {
+        let login = model.pulls["login"].nonEmpty ?? id["github"]["login"].nonEmpty
+        return VStack(alignment: .leading, spacing: 0) {
+            IntegrationHeader(kind: .github, title: "GitHub", detail: "Your pull requests, checks and reviews, through the gh CLI's login. Each project's repo comes from its own git remote.", connected: login != nil, status: login.map { "@\($0)" } ?? "")
+            SSection(title: "") {
+                SRow(title: login == nil ? "Not signed in" : "Signed in with gh", detail: login == nil ? "Run gh auth login in a terminal, then refresh" : "Bridge reads and opens PRs as @\(login!); branches start with \(id["derived"]["BRANCH_PREFIX"].nonEmpty ?? login!)/") {
+                    if login == nil {
+                        Button { ConsoleStore.shared.add(NSHomeDirectory()); ConsoleStore.shared.show() } label: { Label("Open Terminal", systemImage: "terminal") }.buttonStyle(LButton())
+                    } else {
+                        IconButton(icon: "arrow.clockwise", help: "Check again", size: B.small) { Task { await model.load("pulls", refresh: true); await model.loadIdentity(refresh: true) } }
+                    }
+                }
+            }
+        }
+    }
+
+    var linear: some View {
+        let teams = id["linear"]["teams"].array
+        let on = model.linear["configured"].bool
+        return VStack(alignment: .leading, spacing: 0) {
+            IntegrationHeader(kind: .linear, title: "Linear", detail: "Issues assigned to you, cross-linked to the sessions working on them. Sessions never see the key.", connected: on, status: id["linear"]["org"].nonEmpty ?? model.linear["viewer"].nonEmpty ?? "")
+            SSection(title: "") {
+                ForEach(env.rows(["LINEAR_API_KEY"], ""), id: \.self) { EnvField(env: env, e: $0) }
+                if on && !teams.isEmpty {
+                    SRow(title: "Team", detail: "Where the Slack pipeline files tickets; their keys start with its prefix") {
+                        SSelect(value: model.config["harness"]["linearTeam"].nonEmpty ?? teams.first?["key"].string ?? "",
+                                choices: teams.map { ($0["key"].string, "\($0["name"].string) · \($0["key"].string)") }) { save(["linearTeam": $0]) }
+                    }
+                }
+            }
+        }
+    }
+
+    var slack: some View {
+        let on = model.slack["configured"].bool
+        let me = id["slack"]
+        return VStack(alignment: .leading, spacing: 0) {
+            IntegrationHeader(kind: .slack, title: "Slack", detail: "Mentions, watched channels and threads, read as you with a user token: no bot to invite.", connected: on, status: model.slack["team"].nonEmpty ?? "")
+            SSection(title: "") {
+                ForEach(env.rows(["SLACK_USER_TOKEN"], ""), id: \.self) { EnvField(env: env, e: $0) }
+                if on, let name = me["name"].nonEmpty {
+                    SRow(title: "Signed in as \(name)", detail: [me["team"].string, me["userId"].string].filter { !$0.isEmpty }.joined(separator: " · ")) { EmptyView() }
+                }
+                if !on {
                     SRow(title: "Set up the Slack app", detail: "Create it from the manifest once, install it to yourself, and paste its xoxp- token above") {
                         HStack(spacing: 8) {
                             Button { openURL("https://github.com/george-bobby/bridge/blob/main/docs/slack.md") } label: { Label("Guide", systemImage: "book") }.buttonStyle(LButton())
@@ -736,43 +818,81 @@ struct IntegrationSettings: View {
                         }
                     }
                 }
-            } trailing: {
-                StatusChip(on: model.slack["configured"].bool, onText: model.slack["team"].nonEmpty.map { "Connected · \($0)" } ?? "Connected")
             }
-            SlackWatchSettings(q: q)
-            SSection(title: "GitHub", detail: "Pull requests go through the gh CLI's own login") {
-                ForEach(env.rows(Prefs.githubKeys, q), id: \.self) { EnvField(env: env, e: $0) }
-            } trailing: {
-                StatusChip(on: !model.pulls["login"].string.isEmpty, onText: "@\(model.pulls["login"].string)", offText: "gh not signed in")
+            if on {
+                SlackWatchSettings(q: "")
+                SlackPipelineSettings()
             }
-            SSection(title: "Linear", detail: "The API key powers the Linear view; sessions never inherit it") {
-                ForEach(env.rows(Prefs.linearKeys, q), id: \.self) { EnvField(env: env, e: $0) }
-            } trailing: {
-                StatusChip(on: model.linear["configured"].bool, onText: model.linear["viewer"].nonEmpty.map { "Connected · \($0)" } ?? "Connected")
-            }
-            SSection(title: "Vercel", detail: "Deployments across your account and teams. A token from vercel.com › Account Settings › Tokens") {
-                ForEach(env.rows(Prefs.vercelKeys, q), id: \.self) { EnvField(env: env, e: $0) }
-                if Prefs.hit(q, "vercel token create") {
-                    SRow(title: "Create a token", detail: "Read access is all Bridge uses") {
-                        Button { openURL("https://vercel.com/account/settings/tokens") } label: { Label("Open Vercel", systemImage: "arrow.up.right") }.buttonStyle(LButton())
-                    }
-                }
-            } trailing: {
-                StatusChip(on: model.vercel["configured"].bool, onText: model.vercel["user"].nonEmpty.map { "Connected · @\($0)" } ?? "Connected")
-            }
-            SSection(title: "incident.io", detail: "Live and recent incidents. An admin creates the key under Settings › API keys") {
-                ForEach(env.rows(Prefs.incidentKeys, q), id: \.self) { EnvField(env: env, e: $0) }
-            } trailing: {
-                StatusChip(on: model.incidents["configured"].bool)
-            }
-            SSection(title: "Granola", detail: "Your meeting notes. Granola › Settings › Connectors › API keys (Business and Enterprise plans)") {
-                ForEach(env.rows(Prefs.granolaKeys, q), id: \.self) { EnvField(env: env, e: $0) }
-            } trailing: {
-                StatusChip(on: model.granola["configured"].bool)
-            }
-            SourceVisibility(q: q)
         }
     }
+
+    func keyGroup(_ kind: SourceKind, _ title: String, _ detail: String, _ keys: [String], on: Bool, status: String = "", link: (String, String)?) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            IntegrationHeader(kind: kind, title: title, detail: detail, connected: on, status: status)
+            SSection(title: "") {
+                ForEach(env.rows(keys, ""), id: \.self) { EnvField(env: env, e: $0) }
+                if !on, let link {
+                    SRow(title: "Get a key", detail: link.0) {
+                        Button { openURL(link.1) } label: { Label("Open", systemImage: "arrow.up.right") }.buttonStyle(LButton())
+                    }
+                }
+            }
+        }
+    }
+
+    var vercel: some View {
+        keyGroup(.vercel, "Vercel", "Deployments across your account and teams; a preview opens next to the session on its branch.", ["VERCEL_TOKEN"],
+                 on: model.vercel["configured"].bool, status: model.vercel["user"].nonEmpty.map { "@\($0)" } ?? "",
+                 link: ("Any account can create one under Account Settings › Tokens", "https://vercel.com/account/settings/tokens"))
+    }
+
+    var incidents: some View {
+        keyGroup(.incidents, "incident.io", "Live and recent incidents. An admin creates the key under Settings › API keys.", ["INCIDENT_API_KEY"],
+                 on: model.incidents["configured"].bool, link: ("Settings › API keys in incident.io (admins), read access to incidents", "https://app.incident.io/settings/api-keys"))
+    }
+
+    var granola: some View {
+        keyGroup(.granola, "Granola", "Your meeting notes with their summaries and attendees.", ["GRANOLA_API_KEY"],
+                 on: model.granola["configured"].bool, link: ("In the Granola app: Settings › Connectors › API keys (Business and Enterprise)", "https://docs.granola.ai"))
+    }
+
+    func save(_ patch: [String: Any]) { Task { await model.saveConfig(["harness": patch]); await model.loadIdentity() } }
+}
+
+/// Where a run started from a Slack thread works, with which model, and what it may prepare.
+struct SlackPipelineSettings: View {
+    @Environment(AppModel.self) var model
+
+    var h: JSON { model.config["harness"] }
+    var repo: JSON { model.identity["repo"] }
+
+    var body: some View {
+        SSection(title: "Slack pipeline", detail: "What a run started from a Slack thread works on, and may prepare for you") {
+            let real = model.projects.filter { !$0.root }
+            if !real.isEmpty {
+                SRow(title: "Works in", detail: repo["github"].nonEmpty.map { "Opens pull requests on \($0)" } ?? "The project Slack threads are worked in") {
+                    SSelect(value: h["pipelineProject"].nonEmpty ?? repo["project"].nonEmpty ?? real.first?.id ?? "", choices: real.map { ($0.id, $0.name) }) { save(["pipelineProject": $0]) }
+                }
+            }
+            SRow(title: "Model", detail: "The Claude model the pipeline runs on") {
+                let catalog = model.models(for: .claude).map { ($0["id"].string, $0["label"].nonEmpty ?? $0["id"].string) }
+                SSelect(value: h["pipelineModel"].nonEmpty ?? model.identity["derived"]["PIPELINE_MODEL"].nonEmpty ?? "opus",
+                        choices: catalog.isEmpty ? [("opus", "Opus"), ("sonnet", "Sonnet")] : catalog) { save(["pipelineModel": $0]) }
+            }
+            toggle("Draft the reply in the thread", "reply", "Posted only after you approve it")
+            toggle("Offer a Linear ticket", "createLinearIssue", "Created only after you approve it")
+            toggle("Wait for bot review, then resolve", "botReview", "After the PR opens, wait for the review bots, then run /resolve")
+            toggle("Propose memories", "saveToMemory", "Nothing is saved without your approval")
+        }
+    }
+
+    func toggle(_ title: String, _ key: String, _ hint: String) -> some View {
+        SRow(title: title, detail: hint) {
+            SToggle(on: Binding(get: { model.config[key].bool }, set: { v in Task { await model.saveConfig([key: v]) } }))
+        }
+    }
+
+    func save(_ patch: [String: Any]) { Task { await model.saveConfig(["harness": patch]); await model.loadIdentity() } }
 }
 
 /// server/watch.js: what Bridge reads from Slack on its own, and how often.
@@ -854,19 +974,13 @@ struct ProjectSettings: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            SSection(title: "Projects", detail: "Repositories in the sidebar; each gets its own orchestrator") {
+            SSection(title: "In the sidebar", detail: "Default for sessions outside any repo, then your repositories") {
                 ForEach(model.projects.filter { Prefs.hit(q, $0.name, $0.path, "project repository default") }) { p in ProjectRow(project: p) }
                 if !model.projects.contains(where: { !$0.root }) && Prefs.hit(q, "project add") {
                     SRow(title: "No projects yet", detail: "Add a git checkout to start sessions in it") { EmptyView() }
                 }
             } trailing: {
                 Button { model.addProject() } label: { Label("Add project", systemImage: "plus") }.buttonStyle(LButton())
-            }
-            SSection(title: "Pipeline repository", detail: "Where the Slack pipeline works, and the project Bridge seeds on first run. Stored in .env") {
-                ForEach(env.rows(Prefs.repoKeys, q), id: \.self) { EnvField(env: env, e: $0) }
-            }
-            SSection(title: "Product", detail: "Named in the skill the pipeline renders") {
-                ForEach(env.rows(Prefs.productKeys, q), id: \.self) { EnvField(env: env, e: $0) }
             }
         }
     }
@@ -899,24 +1013,6 @@ struct ProjectActions: View {
         if !project.root {
             Divider()
             Button(role: .destructive) { model.confirmRemoveProject(project) } label: { Label("Remove Project…", systemImage: "trash") }
-        }
-    }
-}
-
-/// Which sources the sidebar lists. Hidden ones stay reachable from ⌘K.
-struct SourceVisibility: View {
-    @Environment(AppModel.self) var model
-    let q: String
-    var body: some View {
-        SSection(title: "Sidebar sources", detail: "Show or hide each source in the sidebar; hidden ones are still in ⌘K") {
-            ForEach(SourceKind.allCases.filter { Prefs.hit(q, $0.label, $0.detail, "sidebar source show hide") }) { k in
-                SRow(title: k.label, detail: k.detail, icon: AnyView(
-                    Image(systemName: k.icon).font(.system(size: 12.5, weight: .medium)).foregroundStyle(T.text2)
-                        .frame(width: 28, height: 28).background(RoundedRectangle(cornerRadius: 7).fill(T.raised))
-                )) {
-                    SToggle(on: Binding(get: { model.sourceShown(k) }, set: { model.setSource(k, shown: $0) }))
-                }
-            }
         }
     }
 }
@@ -964,6 +1060,12 @@ struct AdvancedSettings: View {
     let q: String
 
     var rest: [JSON] { env.entries.filter { !Prefs.placed.contains($0["key"].string) } }
+    static let blurb = [
+        "Identity overrides": "Bridge reads these from gh, Slack and Linear; the grey text is what it found. Set one only to override it",
+        "Slack pipeline overrides": "Worked out from the project picked in Integrations › Slack and its git remote",
+        "Folders and runtime": "How the server runs under launchd; the PATH comes from your login shell",
+        "Other": "In your .env but no longer used by Bridge; safe to remove",
+    ]
     var sections: [String] {
         var seen: [String] = []
         for e in rest where !seen.contains(e["section"].string) { seen.append(e["section"].string) }
@@ -972,9 +1074,12 @@ struct AdvancedSettings: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            Color.clear.frame(height: 0).task { await model.loadIdentity() }
             ForEach(sections, id: \.self) { s in
-                SSection(title: s == "Runtime" ? "Runtime" : s, detail: s == "Runtime" ? "How the server runs under launchd" : "") {
-                    ForEach(env.rows(rest.filter { $0["section"].string == s }.map { $0["key"].string }, q), id: \.self) { EnvField(env: env, e: $0) }
+                SSection(title: s, detail: AdvancedSettings.blurb[s] ?? "") {
+                    ForEach(env.rows(rest.filter { $0["section"].string == s }.map { $0["key"].string }, q), id: \.self) {
+                        EnvField(env: env, e: $0, derived: model.identity["derived"][$0["key"].string].string)
+                    }
                 }
             }
             SSection(title: "Environment file") {

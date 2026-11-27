@@ -175,6 +175,23 @@ const env = {
   // Named in server/render.js's "you haven't set this yet" error, so the message
   // points at the file the reader actually has to edit.
   ENV_FILE,
+
+  // What .env itself says for the keys Bridge can also work out (server/
+  // identity.js): an explicit value here is an override and always wins.
+  raw: {
+    githubLogin: str("GITHUB_LOGIN"),
+    githubRepo: str("GITHUB_REPO"),
+    branchPrefix: str("BRANCH_PREFIX"),
+    slackUserId: str("SLACK_USER_ID"),
+    slackUserName: str("SLACK_USER_NAME"),
+    linearWorkspace: str("LINEAR_WORKSPACE"),
+    linearTeam: str("LINEAR_TEAM"),
+    linearIssuePrefix: str("LINEAR_ISSUE_PREFIX"),
+    targetRepo: str("TARGET_REPO"),
+    productName: str("PRODUCT_NAME"),
+    pipelineModel: str("PIPELINE_MODEL"),
+    extraPath: str("EXTRA_PATH"),
+  },
 };
 
 // Server-only secret: keep it out of the environment every session inherits.
@@ -185,3 +202,11 @@ delete process.env.GRANOLA_API_KEY;
 delete process.env.SLACK_USER_TOKEN;
 
 module.exports = env;
+
+// Fill in what .env left out from what Bridge last worked out (identity.js).
+try {
+  const identity = require("./identity");
+  if (typeof identity.apply === "function") identity.apply(env); // not while identity.js is itself loading env
+} catch {
+  // First run, or a scratch data dir: .env and the defaults stand.
+}
