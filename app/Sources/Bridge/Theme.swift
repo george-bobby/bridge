@@ -94,7 +94,7 @@ enum T {
 
     static let lightsInset: CGFloat = 158
     static let panelInset: CGFloat = 8
-    static let headerHeight: CGFloat = 52
+    static let headerHeight: CGFloat = 44
     static let sidebarWidth: CGFloat = 264
     static let sideHover = Color.primary.opacity(0.055)
     static let sideSelected = Color.primary.opacity(0.10)
