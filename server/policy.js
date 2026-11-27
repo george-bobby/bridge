@@ -406,6 +406,10 @@ const BRIDGE_WRITES = [
   /^\/api\/slack\/watch\/[^/]+$/,
   /^\/api\/todos(\/done)?$/,
 ];
+/** Writes only an orchestrator session makes: `bridge archive|unarchive|stop|rename`. */
+const ORCHESTRATOR_WRITES = [/^\/api\/runs\/[^/]+\/(archive|stop|title)$/];
+/** The calling session's role (`BRIDGE_ROLE`), set per check(). */
+let role = "";
 
 const LOOP_HOST = String.raw`(?:127(?:\.\d{1,3}){0,3}|localhost|[\w.-]+\.localhost|\[::1?\]|\[::ffff:127(?:\.\d{1,3}){3}\]|0\.0\.0\.0|0)`;
 const LOOP_URL = new RegExp(String.raw`^(?:(https?):\/\/)?(?:[^@\/\s]*@)?${LOOP_HOST}(?=[:/]|$)(?::(\d+))?(\/[^\s?#]*)?`, "i");
@@ -437,6 +441,7 @@ function loopTarget(a) {
 
 function loopWrite(target, what, policy) {
   if (BRIDGE_WRITES.some((re) => re.test(target.path))) return null;
+  if (role === "orchestrator" && ORCHESTRATOR_WRITES.some((re) => re.test(target.path))) return null;
   if (target.bridge) {
     return deny(`${what} writes to Bridge's own API (${target.path}). Only the app changes settings, .env, Slack replies or answers; a session's writes go through bin/bridge.`);
   }
@@ -578,7 +583,8 @@ function projectAuto(id = process.env.BRIDGE_PROJECT) {
   }
 }
 
-function check(toolName, toolInput = {}, { policy = loadPolicy(), auto = projectAuto() } = {}) {
+function check(toolName, toolInput = {}, { policy = loadPolicy(), auto = projectAuto(), role: who = process.env.BRIDGE_ROLE || "" } = {}) {
+  role = who;
   policy = { ...policy, autoMerge: !!(auto && auto.merge) };
   const name = String(toolName || "");
   const input = toolInput || {};

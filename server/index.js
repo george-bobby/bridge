@@ -1212,8 +1212,36 @@ async function handle(req, res) {
       }
     }
 
+    // Stop, archive and rename also come from an orchestrator (`bin/bridge`,
+    // body `by`: its chat id), which may only touch chats in its scope.
+    const outOfScope = (body) => (body && body.by ? require("./roster").refuse(store.safeId(String(body.by)) || "-", id) : "");
+
     if (req.method === "POST" && verb === "stop") {
+      let body = {};
+      try {
+        body = JSON.parse((await readBody(req)) || "{}");
+      } catch {}
+      const why = outOfScope(body);
+      if (why) return sendJson(res, 403, { ok: false, error: why });
       sendJson(res, 200, { ok: jobs.stop(id) });
+      return;
+    }
+
+    // A task chat's title (the sidebar's name for it).
+    if (req.method === "POST" && verb === "title") {
+      try {
+        const body = JSON.parse((await readBody(req)) || "{}");
+        const why = outOfScope(body);
+        if (why) return sendJson(res, 403, { ok: false, error: why });
+        const title = String(body.title || "").replace(/\s+/g, " ").trim().slice(0, 80);
+        if (!title) throw new Error("a title can't be empty");
+        if (!tasks.exists(id)) throw new Error(`only a task chat can be renamed: ${id}`);
+        tasks.writeMeta(id, { title });
+        bus.broadcast("runs", { runs: store.listRunSummaries() });
+        sendJson(res, 200, { ok: true, title });
+      } catch (e) {
+        sendJson(res, 400, { ok: false, error: String(e.message || e) });
+      }
       return;
     }
 
@@ -1314,6 +1342,8 @@ async function handle(req, res) {
       try {
         const body = JSON.parse((await readBody(req)) || "{}");
         const on = body.archived !== false;
+        const why = outOfScope(body);
+        if (why) return sendJson(res, 403, { ok: false, error: why });
         if (on && projects.isOrchestrator(id)) {
           sendJson(res, 409, { ok: false, error: "the orchestrator chat can't be archived" });
           return;
@@ -1322,7 +1352,7 @@ async function handle(req, res) {
           sendJson(res, 409, { ok: false, error: "stop the running job first" });
           return;
         }
-        sendJson(res, 200, { ok: true, ...(await harness.archive(id, on, { deleteWorktree: !!body.deleteWorktree, force: !!body.force })) });
+        sendJson(res, 200, { ok: true, ...(await harness.archive(id, on, { deleteWorktree: !!body.deleteWorktree, force: !!body.force && !body.by })) });
       } catch (e) {
         sendJson(res, e.refused ? 409 : 400, { ok: false, error: String(e.message || e), ...(e.refused ? { refused: true } : {}) });
       }
