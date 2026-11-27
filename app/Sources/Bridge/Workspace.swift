@@ -75,6 +75,8 @@ struct Sidebar: View {
             NavItem(icon: k.icon, label: k.label, route: k.route, count: building, hot: failed)
         case .incidents:
             NavItem(icon: k.icon, label: k.label, route: k.route, badge: model.liveIncidents.count, hot: !model.liveIncidents.isEmpty)
+        case .datadog:
+            NavItem(icon: k.icon, label: k.label, route: k.route, badge: model.alertingMonitors.count, count: model.datadog["issues"].array.count, hot: !model.alertingMonitors.isEmpty)
         case .granola:
             NavItem(icon: k.icon, label: k.label, route: k.route, count: model.granola["notes"].array.filter { Calendar.current.isDateInToday(Date(timeIntervalSince1970: Fmt.iso($0["createdAt"].string))) }.count)
         }

@@ -1,14 +1,14 @@
 import SwiftUI
 
-// MARK: - More sources: Vercel, incident.io, Granola
+// MARK: - More sources: Vercel, incident.io, Granola, Datadog
 //
-// Read-only feeds from server/sources.js (`/api/sources/vercel|incidents|granola`),
+// Read-only feeds from server/sources.js (`/api/sources/vercel|incidents|granola|datadog`),
 // each on its own key in .env. Which sources the sidebar shows is a Settings
 // choice (`SourceKind`, UserDefaults `sources.hidden`); a source that isn't
 // connected yet says which key it needs.
 
 enum SourceKind: String, CaseIterable, Identifiable {
-    case slack, github, linear, vercel, incidents, granola
+    case slack, github, linear, vercel, incidents, granola, datadog
     var id: String { rawValue }
     var label: String {
         switch self {
@@ -18,6 +18,7 @@ enum SourceKind: String, CaseIterable, Identifiable {
         case .vercel: return "Vercel"
         case .incidents: return "Incidents"
         case .granola: return "Granola"
+        case .datadog: return "Datadog"
         }
     }
     var icon: String {
@@ -28,6 +29,7 @@ enum SourceKind: String, CaseIterable, Identifiable {
         case .vercel: return "triangle"
         case .incidents: return "flame"
         case .granola: return "note.text"
+        case .datadog: return "waveform.path.ecg"
         }
     }
     var route: Route {
@@ -38,6 +40,7 @@ enum SourceKind: String, CaseIterable, Identifiable {
         case .vercel: return .vercel
         case .incidents: return .incidents
         case .granola: return .granola
+        case .datadog: return .datadog
         }
     }
     var detail: String {
@@ -48,6 +51,7 @@ enum SourceKind: String, CaseIterable, Identifiable {
         case .vercel: return "Deployments across your account and teams"
         case .incidents: return "incident.io: live and recent incidents"
         case .granola: return "Granola: your meeting notes"
+        case .datadog: return "Datadog: alerting monitors and error issues"
         }
     }
     /// The .env key that connects it, for the ones that need one.
@@ -56,6 +60,7 @@ enum SourceKind: String, CaseIterable, Identifiable {
         case .vercel: return "VERCEL_TOKEN"
         case .incidents: return "INCIDENT_API_KEY"
         case .granola: return "GRANOLA_API_KEY"
+        case .datadog: return "DD_API_KEY"
         default: return nil
         }
     }
@@ -76,6 +81,7 @@ extension AppModel {
         if shown { Task { if s == .slack { await loadSlack() } else { await load(s == .github ? "pulls" : s.rawValue) } } }
     }
     var vercelDeployments: [JSON] { vercel["deployments"].array }
+    var alertingMonitors: [JSON] { datadog["monitors"].array.filter { $0["status"].string == "alert" && !$0["muted"].bool } }
     var liveIncidents: [JSON] { incidents["incidents"].array.filter { ["live", "triage"].contains($0["category"].string) } }
 }
 
@@ -123,12 +129,13 @@ struct VercelView: View {
                 IconButton(icon: "arrow.clockwise", help: "Refresh", spinning: model.refreshing.contains("vercel")) { Task { await model.load("vercel", refresh: true) } }
             }
             if let e = model.errors["vercel"], !e.isEmpty { ErrorBar(text: e) }
+            if !blocked.isEmpty { ErrorBar(text: blockedText) }
             if model.vercel.isNull {
                 EmptyState(icon: "triangle", title: model.loading.contains("vercel") ? "Loading from Vercel…" : "Nothing loaded")
             } else if !model.vercel["configured"].bool {
-                SourceSetup(kind: .vercel, how: "Create a token at vercel.com › Account Settings › Tokens (any Vercel account can), then paste it as VERCEL_TOKEN. Bridge only reads deployments.")
+                SourceSetup(kind: .vercel, how: "Create a token at vercel.com › Account Settings › Tokens (any Vercel account can), then paste it as VERCEL_TOKEN. A team that enforces SAML needs a token scoped to it: add one per team, comma-separated. Bridge only reads deployments.")
             } else if shown.isEmpty {
-                EmptyState(icon: "checkmark.circle", title: "Nothing here", detail: "No deployments in this view.")
+                EmptyState(icon: "checkmark.circle", title: "Nothing here", detail: blocked.isEmpty || !all.isEmpty ? "No deployments in this view." : "No deployments in the teams this token can read.")
             } else {
                 ScrollView {
                     LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
@@ -145,6 +152,18 @@ struct VercelView: View {
                 }
             }
         }
+    }
+}
+
+extension VercelView {
+    /// Teams no token could read (SAML-enforced ones need a token made for them).
+    var blocked: [JSON] { model.vercel["blocked"].array }
+    var blockedText: String {
+        let names = blocked.map(\.["team"].string).joined(separator: ", ")
+        if blocked.allSatisfy({ $0["saml"].bool }) {
+            return "Can't read \(names): SAML is enforced there. Create a token with that team as its scope (Account Settings › Tokens) and add it to VERCEL_TOKEN, comma-separated."
+        }
+        return "Can't read \(names): " + blocked.map(\.["reason"].string).joined(separator: "; ")
     }
 }
 
@@ -382,5 +401,118 @@ struct GranolaView: View {
         let out: JSON
         do { out = try await API.get("/api/sources/granola/\(API.q(id))") } catch { out = .obj(["error": .str(error.localizedDescription)]) }
         if current == id { note.v = out }
+    }
+}
+
+// MARK: Datadog
+
+struct DatadogView: View {
+    @Environment(AppModel.self) var model
+    @AppStorage("datadog.tab") private var tab = "monitors"
+
+    var monitors: [JSON] { model.datadog["monitors"].array }
+    var issues: [JSON] { model.datadog["issues"].array }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            PageHeader(title: "Datadog", subtitle: model.datadog["site"].string, icon: "waveform.path.ecg") {
+                if model.datadog["configured"].bool {
+                    SlidingTabs(tabs: [
+                        .init(id: "monitors", label: "Monitors", count: model.alertingMonitors.count, hot: true),
+                        .init(id: "errors", label: "Errors", count: issues.count),
+                    ], selection: $tab)
+                }
+                IconButton(icon: "arrow.clockwise", help: "Refresh", spinning: model.refreshing.contains("datadog")) { Task { await model.load("datadog", refresh: true) } }
+            }
+            if let e = model.errors["datadog"], !e.isEmpty { ErrorBar(text: e) }
+            if let e = model.datadog["errors"][tab == "errors" ? "issues" : "monitors"].nonEmpty { ErrorBar(text: e) }
+            if model.datadog.isNull {
+                EmptyState(icon: "waveform.path.ecg", title: model.loading.contains("datadog") ? "Loading from Datadog…" : "Nothing loaded")
+            } else if !model.datadog["configured"].bool {
+                SourceSetup(kind: .datadog, how: "Paste an API key (Organization Settings › API Keys) as DD_API_KEY and an application key with monitors_read and error_tracking_read (Personal Settings › Application Keys) as DD_APP_KEY. Set DD_SITE if your org isn't on datadoghq.com (e.g. us5.datadoghq.com).")
+            } else if tab == "errors" {
+                if issues.isEmpty {
+                    EmptyState(icon: "checkmark.circle", title: "No open issues", detail: "Nothing new in Error Tracking in the last day.")
+                } else {
+                    ScrollView { LazyVStack(spacing: 0) { ForEach(issues, id: \.self) { ErrorIssueRow(i: $0) } } }
+                }
+            } else if monitors.isEmpty {
+                EmptyState(icon: "checkmark.seal", title: "All clear", detail: "No monitor is alerting, warning or missing data.")
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
+                        group("Alert", "alert", tint: T.red)
+                        group("Warn", "warn", tint: T.orange)
+                        group("No data", "nodata", tint: T.text3)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder func group(_ title: String, _ status: String, tint: Color) -> some View {
+        let items = monitors.filter { $0["status"].string == status }
+        if !items.isEmpty {
+            Section {
+                ForEach(items, id: \.self) { MonitorRow(m: $0, tint: tint) }
+            } header: {
+                GroupHeader(title: title, count: items.count, icon: AnyView(Circle().fill(tint).frame(width: 7, height: 7)))
+            }
+        }
+    }
+}
+
+struct MonitorRow: View {
+    let m: JSON
+    let tint: Color
+    var body: some View {
+        HoverRow(height: 44) {
+            HStack(spacing: 12) {
+                if m["status"].string == "alert" && !m["muted"].bool { PulseDot(color: tint) } else { Circle().fill(tint).frame(width: 7, height: 7) }
+                if m["priority"].int > 0 { Chip(text: "P\(m["priority"].int)", tint: m["priority"].int <= 2 ? T.red : nil, mono: true) }
+                Text(m["name"].string).font(T.ui(13, .medium)).foregroundStyle(T.text).lineLimit(1)
+                Spacer(minLength: 8)
+                ForEach(m["tags"].array.prefix(2), id: \.self) { Chip(text: $0.string, mono: true) }
+                if m["muted"].bool { Image(systemName: "bell.slash").font(.system(size: 11)).foregroundStyle(T.text3).help("Muted") }
+                Text(m["triggeredAt"].double > 0 ? Fmt.ago(m["triggeredAt"].double / 1000) : "").font(T.ui(11.5)).foregroundStyle(T.text3).frame(width: 34, alignment: .trailing)
+            }
+        }
+        .onTapGesture { openURL(m["url"].string) }
+        .contextMenu {
+            Button { openURL(m["url"].string) } label: { Label("Open in Datadog", systemImage: "waveform.path.ecg") }
+            Divider()
+            Button { copyToPasteboard(m["url"].string) } label: { Label("Copy Link", systemImage: "link") }
+        }
+    }
+}
+
+struct ErrorIssueRow: View {
+    let i: JSON
+    var body: some View {
+        HoverRow(height: 56) {
+            HStack(spacing: 12) {
+                Text(verbatim: i["count"].int >= 1000 ? String(format: "%.1fk", Double(i["count"].int) / 1000) : "\(i["count"].int)")
+                    .font(T.mono(11.5, .medium)).foregroundStyle(T.text2).frame(width: 44, alignment: .trailing)
+                    .help("Errors in the last day")
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text(i["type"].nonEmpty ?? "Error").font(T.ui(13, .semibold)).foregroundStyle(T.text).lineLimit(1)
+                        Text(i["message"].string).font(T.ui(13)).foregroundStyle(T.text2).lineLimit(1)
+                    }
+                    Text(i["where"].string).font(T.mono(11)).foregroundStyle(T.text3).lineLimit(1).truncationMode(.middle)
+                }
+                Spacer(minLength: 8)
+                if i["state"].string == "acknowledged" { Chip(text: "Acknowledged") }
+                if !i["service"].string.isEmpty { Chip(text: i["service"].string, mono: true) }
+                Text(Fmt.ago(i["lastSeen"].double / 1000)).font(T.ui(11.5)).foregroundStyle(T.text3).frame(width: 34, alignment: .trailing).help("Last seen")
+            }
+        }
+        .onTapGesture { openURL(i["url"].string) }
+        .contextMenu {
+            Button { openURL(i["url"].string) } label: { Label("Open in Datadog", systemImage: "waveform.path.ecg") }
+            Divider()
+            Button { copyToPasteboard(i["url"].string) } label: { Label("Copy Link", systemImage: "link") }
+            Button { copyToPasteboard([i["type"].string, i["message"].string].filter { !$0.isEmpty }.joined(separator: ": ")) } label: { Label("Copy Error", systemImage: "doc.on.doc") }
+        }
     }
 }
