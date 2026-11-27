@@ -392,7 +392,7 @@ function codexSummary(f) {
     if (prompt && cwd) break;
   }
   if (!prompt) return null;
-  return { agent: "codex", id, title: clip(oneLine(prompt), 90), prompt: clip(oneLine(prompt), 240), cwd, branch: "", createdAt: created || Math.floor(f.mtime / 1000), updatedAt: Math.floor(f.mtime / 1000), size: f.size, file: f.file };
+  return { agent: "codex", id, title: clip(oneLine(prompt), 90), prompt: clip(oneLine(prompt), 240), cwd, branch: "", createdAt: created || Math.floor(f.mtime / 1000), updatedAt: Math.floor(f.mtime / 1000), size: f.size };
 }
 
 function codexRead(id) {
@@ -639,7 +639,6 @@ function list({ agents = AGENTS, q = "", runs = [], limit = 800 } = {}) {
     }
     counts[a] = items.length;
     for (const it of items) {
-      delete it.file;
       out.push({ ...it, runId: have.get(`${a}:${it.id}`) || "", gone: !it.cwd || !stat(it.cwd) });
     }
   }

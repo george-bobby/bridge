@@ -44,19 +44,26 @@ enum OpenTarget: String, CaseIterable, Identifiable {
     }
 
     var appURL: URL? {
-        for b in bundleIds { if let u = NSWorkspace.shared.urlForApplication(withBundleIdentifier: b) { return u } }
-        return nil
+        if let hit = Self.apps[self] { return hit }
+        let u = bundleIds.lazy.compactMap { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) }.first
+        Self.apps[self] = .some(u)
+        return u
     }
+    private static var apps: [OpenTarget: URL?] = [:]
+    private static var icons: [OpenTarget: NSImage] = [:]
 
     /// The real app icon when it's installed (what Paseo and Xcode show), else a symbol.
     var icon: NSImage {
+        if let hit = Self.icons[self] { return hit }
+        let i: NSImage
         if let u = appURL {
-            let i = NSWorkspace.shared.icon(forFile: u.path)
+            i = NSWorkspace.shared.icon(forFile: u.path)
             i.size = NSSize(width: 16, height: 16)
-            return i
+        } else {
+            i = NSImage(systemSymbolName: symbol, accessibilityDescription: label) ?? NSImage()
+            i.isTemplate = true
         }
-        let i = NSImage(systemSymbolName: symbol, accessibilityDescription: label) ?? NSImage()
-        i.isTemplate = true
+        Self.icons[self] = i
         return i
     }
 
@@ -125,14 +132,16 @@ struct OpenPlaces {
             let out = Pipe()
             p.standardOutput = out
             p.standardError = FileHandle.nullDevice
-            try? p.run()
-            p.waitUntilExit()
-            let raw = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            var raw = ""
+            if (try? p.run()) != nil {
+                p.waitUntilExit()
+                raw = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            }
             base = webURL(remote: raw)
             remotes[folder] = base
         }
         guard !base.isEmpty else { return "" }
-        return branch.isEmpty ? base : "\(base)/tree/\(branch)"
+        return branch.isEmpty ? base : "\(base)/tree/\(branch.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? branch)"
     }
 
     static func webURL(remote: String) -> String {

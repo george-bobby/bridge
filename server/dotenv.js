@@ -76,7 +76,7 @@ function quote(v) {
 
 /** Set keys in `.env`. `values` maps KEY to its new value ("" clears it). */
 function save(values) {
-  const patch = {};
+  const patch = Object.create(null);
   for (const [k, v] of Object.entries(values || {})) {
     if (!KEY.test(k)) throw new Error(`bad key: ${k}`);
     const s = String(v ?? "");

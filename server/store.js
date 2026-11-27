@@ -180,7 +180,7 @@ const DEFAULT_CONFIG = {
   // for why the old always-bank behaviour had to go.
   saveToMemory: true,
   reply: true,
-  // The harness: how outcomes reach you, and how many workers run at once.
+  // The harness: how outcomes reach you.
   harness: { ...DEFAULT_HARNESS },
   // The starting point for every new chat's job options. A chat that has been
   // tuned in the composer keeps its own values; changing these only affects
@@ -222,8 +222,6 @@ function readConfig() {
     harness: sanitizeHarness(raw.harness, DEFAULT_HARNESS),
   };
   for (const key of TOGGLE_KEYS) if (key in raw) config[key] = Boolean(raw[key]);
-  // Configs written while this targeted Codex call the review gate codexReplies.
-  if (!("botReview" in raw) && "codexReplies" in raw) config.botReview = Boolean(raw.codexReplies);
   return config;
 }
 
@@ -268,6 +266,9 @@ function runIndex(f) {
     who: run ? run.who : "",
     kind: (run && run.kind) || "slack",
     updatedAt: (run && run.updatedAt) || 0,
+    sessionId: (run && run.sessionId) || "",
+    agentSessions: (run && run.agentSessions) || {},
+    imported: (run && run.imported) || null,
     costs: [],
     turns: [],
     fields: run && run.runId && run.text ? [{ text: String(run.text), lower: String(run.text).toLowerCase(), role: "thread", ts: run.createdAt }] : [],
@@ -278,7 +279,7 @@ function runIndex(f) {
     if (c) index.costs.push([Number(m.ts) || 0, c]);
     if (m.role === "assistant" && m.ts) {
       const u = m.usage || {};
-      index.turns.push({ ts: m.ts, agent: m.agent || "claude", tokens: (u.input || 0) + (u.output || 0) + (u.cacheRead || 0) + (u.cacheWrite || 0), cost: c, acu: Number(m.acu) || 0 });
+      index.turns.push({ ts: m.ts, agent: m.agent, tokens: (u.input || 0) + (u.output || 0) + (u.cacheRead || 0) + (u.cacheWrite || 0), cost: c, acu: Number(m.acu) || 0 });
     }
     if (m.text) index.fields.push({ text: String(m.text), lower: String(m.text).toLowerCase(), role: m.role, ts: m.ts || m.at });
   }
@@ -432,8 +433,6 @@ function loadRun(id) {
   const run = readJson(runPath(safe), null);
   if (!run) return null;
   run.messages = Array.isArray(run.messages) ? run.messages : [];
-  // Runs written before job options were per chat have no `opts` at all.
-  if (!run.opts || typeof run.opts !== "object") run.opts = {};
   return run;
 }
 
@@ -593,14 +592,9 @@ function runSummary(id) {
 
 /** Which agent sessions each chat holds (server/history.js: what's already imported). */
 function listRunSessions() {
-  ensureRunsDir();
-  const out = [];
-  for (const f of fs.readdirSync(RUNS_DIR)) {
-    if (!f.endsWith(".json") || f.includes(".tmp-")) continue;
-    const run = readJson(path.join(RUNS_DIR, f), null);
-    if (run && run.runId) out.push({ runId: run.runId, sessionId: run.sessionId || "", agentSessions: run.agentSessions || {}, imported: run.imported || null });
-  }
-  return out;
+  return runIndexes()
+    .filter((i) => i.runId)
+    .map(({ runId, sessionId, agentSessions, imported }) => ({ runId, sessionId, agentSessions, imported }));
 }
 
 function summariseRun(run) {

@@ -3,8 +3,7 @@
  * bridge dashboard
  *
  * A zero-dependency local control panel for the Slack -> Claude Code fetch
- * pipeline. It does NOT talk to Slack and holds no Slack credentials. You paste
- * a Slack thread link; a Claude Code session reads the thread, replies and
+ * pipeline. You paste a Slack thread link; a Claude Code session reads the thread, replies and
  * files Linear tickets through the Slack / Linear MCP connectors it already
  * has. The one timer that reads Slack (server/watch.js) files what it finds
  * in the Inbox and the chats; a job starts only when you (or, in triage mode,
@@ -42,13 +41,14 @@ const identity = require("./identity");
 const dotenv = require("./dotenv");
 const slack = env.demo ? require("./demo").slack : require("./slack");
 const watcher = require("./watch");
+const rules = require("./rules");
 
 const ROOT = path.join(__dirname, "..");
-// PORT stays supported for a one-off override; BRIDGE_PORT in .env is
-// the setting emit.sh also reads, so the two agree by default.
-const PORT = Number(process.env.PORT) || env.port;
-// The web UI, kept as the legacy client. The desktop app (app) is the main one.
+const PORT = env.port;
+// The old browser UI (legacy/web) is served only with BRIDGE_LEGACY_WEB=1;
+// otherwise the server answers the API alone and the native app is the client.
 const PUBLIC = path.join(ROOT, "legacy", "web");
+const LEGACY_WEB = process.env.BRIDGE_LEGACY_WEB === "1";
 
 /* ------------------------------------------------------------- http utils */
 
@@ -162,13 +162,10 @@ async function chatFromLink(link, { project, opts, start } = {}) {
   applyOpts(run.runId, opts);
   let started = false;
   const fresh = store.loadRun(run.runId);
-  let queued = false;
   if (start && !jobs.isRunning(run.runId) && !fresh.sessionId && fresh.action !== "running") {
-    const out = harness.startSlack(run.runId);
-    started = out.state === "started";
-    queued = out.state === "queued";
+    started = harness.startSlack(run.runId).state === "started";
   }
-  return { runId: run.runId, created, started, queued };
+  return { runId: run.runId, created, started };
 }
 
 /** Fold a composer's picks into a chat before its job launches. Silent when
@@ -224,24 +221,26 @@ function listDirs(dir) {
 
 /* ---------------------------------------------------------------- payload */
 
-function workerSkillState() {
-  const name = jobs.workerSkillName(store.readConfig());
-  const found = name ? require("./skill").find(name, [jobs.resolveWorkdir(store.readConfig()), ROOT]) : null;
+function workerSkillState(config, workdir) {
+  const name = jobs.workerSkillName(config);
+  const found = name ? require("./skill").find(name, [workdir, ROOT]) : null;
   return { name, env: env.workerSkill, installed: !!found, file: (found && found.file) || "" };
 }
 
 function snapshot() {
+  const config = store.readConfig();
+  const workdir = jobs.resolveWorkdir(config);
   return {
-    config: store.readConfig(),
+    config,
     cost: store.summariseCost(),
     jobs: { running: jobs.runningIds(), awaiting: jobs.awaitingIds() },
     inbox: harness.inbox().counts,
     // The skill new workers open with: the effective name ("" = off), what
     // .env says, and whether it's installed (else the built-in prompt runs).
-    workerSkill: workerSkillState(),
+    workerSkill: workerSkillState(config, workdir),
     // Only what the page actually draws: the repo a new chat's job would run
     // in, which the composer's picker opens on.
-    meta: { workdir: jobs.resolveWorkdir(store.readConfig()), root: ROOT, projects: projects.withRoot(jobs.resolveWorkdir(store.readConfig())) },
+    meta: { workdir, root: ROOT, projects: projects.withRoot(workdir) },
     now: Date.now(),
   };
 }
@@ -302,7 +301,6 @@ async function handle(req, res) {
   // ?orchestrator=<run id> scopes it like that orchestrator's roster;
   // ?project=<id> to one project; neither = every project.
   if (req.method === "GET" && p === "/api/sessions") {
-    if (!sameOrigin(req)) return sendJson(res, 403, { ok: false, error: "cross-origin request refused" });
     const roster = require("./roster");
     const orch = store.loadRun(store.safeId(url.searchParams.get("orchestrator") || "") || "-");
     const project = String(url.searchParams.get("project") || "");
@@ -474,7 +472,6 @@ async function handle(req, res) {
 
   // --- files in a project folder, for the `@` picker when there's no session yet ---
   if (req.method === "GET" && p === "/api/files") {
-    if (!sameOrigin(req)) return sendJson(res, 403, { ok: false, error: "cross-origin request refused" });
     try {
       const proj = projects.get(String(url.searchParams.get("project") || ""));
       const dir = proj && proj.path ? proj.path : jobs.resolveWorkdir(store.readConfig());
@@ -492,7 +489,6 @@ async function handle(req, res) {
 
   // --- plan usage for Claude, Codex, Cursor and Devin (status bar, Usage page) ---
   if (req.method === "GET" && p === "/api/usage") {
-    if (!sameOrigin(req)) return sendJson(res, 403, { ok: false, error: "cross-origin request refused" });
     try {
       return sendJson(res, 200, { ok: true, ...(await require("./usage").all({ refresh: url.searchParams.get("refresh") === "1" })) });
     } catch (e) {
@@ -504,7 +500,6 @@ async function handle(req, res) {
   // GET /api/history[?agent=&q=] lists them, GET /api/history/:agent/:id
   // previews one, POST /api/history/import {agent, id} makes it a worker.
   if (p === "/api/history" || p.startsWith("/api/history/")) {
-    if (!sameOrigin(req)) return sendJson(res, 403, { ok: false, error: "cross-origin request refused" });
     const history = env.demo ? require("./demo").history : require("./history");
     try {
       if (req.method === "GET" && p === "/api/history") {
@@ -515,7 +510,7 @@ async function handle(req, res) {
       }
       if (req.method === "POST" && p === "/api/history/import") {
         const body = JSON.parse((await readBody(req)) || "{}");
-        const out = harness.importChat({ agent: String(body.agent || ""), id: String(body.id || ""), project: String(body.project || ""), history });
+        const out = await harness.importChat({ agent: String(body.agent || ""), id: String(body.id || ""), project: String(body.project || ""), history });
         return sendJson(res, 200, { ok: true, ...out });
       }
       const m = p.match(/^\/api\/history\/([a-z]+)\/([^/]+)$/);
@@ -531,7 +526,6 @@ async function handle(req, res) {
 
   // --- a repo's branches and worktrees (New task's workspace pickers) -------
   if (req.method === "GET" && p === "/api/git") {
-    if (!sameOrigin(req)) return sendJson(res, 403, { ok: false, error: "cross-origin request refused" });
     try {
       const proj = projects.get(String(url.searchParams.get("project") || ""));
       const repo = proj && proj.path ? proj.path : jobs.resolveWorkdir(store.readConfig());
@@ -543,7 +537,6 @@ async function handle(req, res) {
 
   // --- MCP servers of each agent (Settings, the composer's MCP menu) --------
   if (p === "/api/mcp" || p.startsWith("/api/mcp/")) {
-    if (!sameOrigin(req)) return sendJson(res, 403, { ok: false, error: "cross-origin request refused" });
     try {
       const mcp = env.demo ? require("./demo").mcp : require("./mcp");
       const body = req.method === "POST" ? JSON.parse((await readBody(req)) || "{}") : {};
@@ -574,7 +567,6 @@ async function handle(req, res) {
 
   // --- .env from Settings; a restart applies it ----------------------------
   if (p === "/api/env" || p === "/api/restart") {
-    if (!sameOrigin(req)) return sendJson(res, 403, { ok: false, error: "cross-origin request refused" });
     try {
       if (req.method === "GET" && p === "/api/env") return sendJson(res, 200, { ok: true, ...dotenv.describe() });
       if (req.method === "POST" && p === "/api/env") {
@@ -598,7 +590,6 @@ async function handle(req, res) {
 
   // --- the native Slack connector (a user token; no bot, no channel installs) ---
   if (p.startsWith("/api/slack/")) {
-    if (!sameOrigin(req)) return sendJson(res, 403, { ok: false, error: "cross-origin request refused" });
     try {
       const body = req.method === "POST" ? JSON.parse((await readBody(req)) || "{}") : {};
       const link = (u) => store.parseSlackLink(u);
@@ -631,14 +622,12 @@ async function handle(req, res) {
 
   // --- what Bridge works out itself (server/identity.js) -------------------
   if (p === "/api/identity" || p === "/api/identity/refresh") {
-    if (!sameOrigin(req)) return sendJson(res, 403, { ok: false, error: "cross-origin request refused" });
     if (req.method === "POST") await refreshIdentity();
     return sendJson(res, 200, { ok: true, ...identity.summary() });
   }
 
   // --- Settings › Customize: skills and plugins (server/customize.js) ---
   if (p === "/api/customize/skills" || p.startsWith("/api/customize/")) {
-    if (!sameOrigin(req)) return sendJson(res, 403, { ok: false, error: "cross-origin request refused" });
     const customize = require("./customize");
     try {
       const body = req.method === "POST" ? JSON.parse((await readBody(req)) || "{}") : Object.fromEntries(url.searchParams);
@@ -664,7 +653,6 @@ async function handle(req, res) {
 
   // --- projects: the repos in the sidebar, each with its own orchestrator ---
   if (p === "/api/projects" || p.startsWith("/api/projects/")) {
-    if (!sameOrigin(req)) return sendJson(res, 403, { ok: false, error: "cross-origin request refused" });
     try {
       const body = req.method === "POST" ? JSON.parse((await readBody(req)) || "{}") : {};
       const m = p.match(/^\/api\/projects\/([a-z0-9-]+)(?:\/(orchestrator))?$/);
@@ -689,7 +677,6 @@ async function handle(req, res) {
   // --- read-only feeds for the workspace views (GitHub PRs, Linear issues) ---
   const note = req.method === "GET" && p.match(/^\/api\/sources\/granola\/([^/]+)$/);
   if (note) {
-    if (!sameOrigin(req)) return sendJson(res, 403, { ok: false, error: "cross-origin request refused" });
     try {
       return sendJson(res, 200, { ok: true, note: await sources.granolaNote(decodeURIComponent(note[1])) });
     } catch (e) {
@@ -698,9 +685,6 @@ async function handle(req, res) {
   }
   const src = req.method === "GET" && p.match(/^\/api\/sources\/(pulls|linear|ports|vercel|incidents|granola)$/);
   if (src) {
-    // Private data on a GET: a page elsewhere can't read the answer, but DNS
-    // rebinding could, so hold it to the same loopback rule as the writes.
-    if (!sameOrigin(req)) return sendJson(res, 403, { ok: false, error: "cross-origin request refused" });
     try {
       const data = await sources[src[1]]({ refresh: url.searchParams.get("refresh") === "1" });
       sendJson(res, 200, { ok: true, ...data });
@@ -824,7 +808,6 @@ async function handle(req, res) {
 
   // --- transcript search (the ⌘K palette) -----------------------------------
   if (req.method === "GET" && p === "/api/search") {
-    if (!sameOrigin(req)) return sendJson(res, 403, { ok: false, error: "cross-origin request refused" });
     sendJson(res, 200, { ok: true, hits: store.searchRuns(url.searchParams.get("q")) });
     return;
   }
@@ -857,7 +840,6 @@ async function handle(req, res) {
   // The output file is only ever the one Claude named for that task.
   const taskMatch = p.match(/^\/api\/runs\/([^/]+)\/tasks\/([A-Za-z0-9_-]{1,80})\/(output|stop)$/);
   if (taskMatch) {
-    if (!sameOrigin(req)) return sendJson(res, 403, { ok: false, error: "cross-origin request refused" });
     const id = store.safeId(decodeURIComponent(taskMatch[1]));
     const run = id ? store.loadRun(id) : null;
     const task = run && (run.messages || []).flatMap((m) => m.tasks || []).find((t) => t.id === taskMatch[2] || t.toolUseId === taskMatch[2]);
@@ -1016,7 +998,7 @@ async function handle(req, res) {
         const body = JSON.parse((await readBody(req)) || "{}");
         const run = store.loadRun(id);
         if (!run) throw new Error("unknown run");
-        run.opts = { ...run.opts, ...store.sanitizeJobOpts(body.opts || body) };
+        run.opts = { ...run.opts, ...store.sanitizeJobOpts(body.opts) };
         store.saveRun(run);
         bus.broadcast("run-updated", { runId: id });
         sendJson(res, 200, { ok: true, opts: run.opts, effective: store.jobOpts(store.readConfig(), run) });
@@ -1094,7 +1076,6 @@ async function handle(req, res) {
 
     // The composer's `@` picker: the files in this session's folder.
     if (req.method === "GET" && verb === "files") {
-      if (!sameOrigin(req)) return sendJson(res, 403, { ok: false, error: "cross-origin request refused" });
       try {
         const run = store.loadRun(id);
         if (!run) throw new Error("no such run");
@@ -1132,7 +1113,6 @@ async function handle(req, res) {
     // `#` in the composer: a briefing of this session, written to a file
     // another session's agent can read, plus where its transcript lives.
     if (req.method === "GET" && verb === "reference") {
-      if (!sameOrigin(req)) return sendJson(res, 403, { ok: false, error: "cross-origin request refused" });
       try {
         const run = store.loadRun(id);
         if (!run) throw new Error("no such run");
@@ -1178,7 +1158,6 @@ async function handle(req, res) {
     // The session's working folder: what changed, per-file diffs, and the
     // commit / push / PR actions you take on them from the app.
     if (verb === "changes" || verb === "diff" || verb === "commit" || verb === "push" || verb === "pr") {
-      if (!sameOrigin(req)) return sendJson(res, 403, { ok: false, error: "cross-origin request refused" });
       const changes = require("./changes");
       try {
         const run = store.loadRun(id);
@@ -1282,6 +1261,17 @@ async function handle(req, res) {
   }
 
   // --- toggles + settings --------------------------------------------------
+  if (p === "/api/rules" && (req.method === "GET" || req.method === "POST")) {
+    try {
+      if (req.method === "GET") return sendJson(res, 200, { ok: true, ...rules.get() });
+      const body = JSON.parse((await readBody(req)) || "{}");
+      sendJson(res, 200, { ok: true, ...(body.reset ? rules.reset() : rules.save(body.text)) });
+    } catch (e) {
+      sendJson(res, 400, { ok: false, error: String(e.message || e) });
+    }
+    return;
+  }
+
   if (req.method === "POST" && p === "/api/config") {
     try {
       const incoming = JSON.parse((await readBody(req)) || "{}");
@@ -1297,7 +1287,7 @@ async function handle(req, res) {
   }
 
   // --- static --------------------------------------------------------------
-  if (req.method === "GET") {
+  if (req.method === "GET" && LEGACY_WEB) {
     serveStatic(res, p);
     return;
   }
@@ -1356,9 +1346,7 @@ async function refreshIdentity() {
   const before = JSON.stringify(identity.summary().derived);
   await identity.resolve().catch(() => null);
   if (JSON.stringify(identity.summary().derived) !== before && !env.demo) {
-    try {
-      require("child_process").execFileSync(process.execPath, [path.join(ROOT, "server", "render.js")], { stdio: "ignore", timeout: 20000 });
-    } catch {}
+    await new Promise((done) => require("child_process").execFile(process.execPath, [path.join(ROOT, "server", "render.js")], { timeout: 20000 }, () => done()));
   }
   bus.broadcast("identity", identity.summary());
 }
@@ -1366,9 +1354,8 @@ async function refreshIdentity() {
 server.listen(PORT, "127.0.0.1", () => {
   setTimeout(() => refreshIdentity(), 1500);
   const config = store.readConfig();
-  console.log(`bridge dashboard  ->  http://localhost:${PORT}`);
+  console.log(`bridge server  ->  http://localhost:${PORT}/api${LEGACY_WEB ? `  (legacy web UI: http://localhost:${PORT})` : ""}`);
   console.log(`  runs:      ${store.PATHS.runs}`);
   console.log(`  config:    ${store.PATHS.config}`);
   console.log(`  follow-up: ${jobs.resolveWorkdir(config)}  (model: ${config.followup.model})`);
-  console.log(`\nPaste a Slack thread link into the dashboard to start a run.`);
 });

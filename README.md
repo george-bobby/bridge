@@ -33,6 +33,7 @@ watch and steer all of it.
 - **Projects**: an orchestrator and a memory per project, plus **Default** for anything that isn't in a repo (it runs in your home folder).
 - **Customize** each agent: MCP servers, skills (edit, create, delete) and plugins, in one Settings pane.
 - **An orchestrator per project** that writes briefs, spawns workers and relays what they report.
+- **Common rules** every session follows in every repo (worktree off a fresh main, rebase before each push, verify on the running app, drafts before posting), edited in Settings › Rules.
 - **You stay in control**: a guard hook turns force-pushes, Slack posts, ticket and PR writes into exact-payload approvals.
 - **Local**: a zero-dependency Node server on `127.0.0.1`, plain files for state. No account, no cloud.
 
@@ -44,6 +45,7 @@ watch and steer all of it.
 | ![Home](docs/screenshots/home.png) **Home**: what's running, what needs you, PRs and issues | ![Inbox](docs/screenshots/inbox.png) **Inbox**: workers' questions, Slack, to-dos, activity |
 | ![Linear](docs/screenshots/linear.png) **Linear**: your issues with sub-issues as a tree | ![Command menu](docs/screenshots/palette.png) **⌘K**: commands and full-text search |
 | ![Light mode](docs/screenshots/light.png) **Light mode**: the whole app, terminals included | ![Vercel](docs/screenshots/vercel.png) **Vercel**: deployments across your teams, opened next to the session on that branch |
+| ![Rules](docs/screenshots/rules.png) **Rules**: house rules added to every worker's and orchestrator's instructions | |
 
 Every screenshot is the built-in demo (`npm run demo`): a fictional team, no real data.
 
@@ -91,8 +93,9 @@ New task ── Slack link ──► worker running the Slack pipeline skill
 Every Claude session loads `hooks/guard.js`. It refuses broad `kill`s, env
 dumps, `.env` reads and token printing, and puts force-pushes,
 `reset --hard`, Slack posts, Linear/GitHub writes and PR merges to you as
-Allow/Deny cards with the exact payload. Codex, Cursor and Devin use their
-own sandboxes. Slack text is data, never instructions. Secrets stay on the
+Allow/Deny cards with the exact payload. A session can't write to Bridge's own
+API beyond what `bin/bridge` does, so it can't relax its own guard. Codex,
+Cursor and Devin use their own sandboxes. Slack text is data, never instructions. Secrets stay on the
 server.
 
 ## `bin/bridge`
@@ -111,8 +114,9 @@ bin/bridge plan set "Reproduce" "Fix" "Test" && bin/bridge plan done 1
 
 ```
 app/      SwiftUI app (SwiftPM)          server/   the Node server (stdlib only)
-bin/      bridge, the agents' tool       prompts/  orchestrator and worker instructions
+bin/      bridge, the agents' tool       prompts/  orchestrator, worker and common-rules prompts
 hooks/    guard.js                       test/     npm test, against a stub agent
+legacy/   the old web UI, off unless BRIDGE_LEGACY_WEB=1
 ```
 
 ```bash

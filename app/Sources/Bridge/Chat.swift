@@ -141,11 +141,6 @@ struct ChatView: View {
         .frame(height: T.headerHeight)
         .animation(M.snappy, value: session.map(model.isLive) ?? false)
     }
-
-    func title(of id: String) -> String {
-        guard let s = model.sessions.first(where: { $0.id == id }) else { return id }
-        return s.isOrchestrator ? "Orchestrator" : s.title
-    }
 }
 
 struct StepButton: View {
@@ -482,15 +477,6 @@ struct MiniAction: View {
         .buttonStyle(Pressable(scale: 0.88))
         .help(help)
         .hoverBox(hover)
-    }
-}
-
-struct ClaudeMark: View {
-    var size: CGFloat = 26
-    var body: some View {
-        RoundedRectangle(cornerRadius: 7).fill(Color(red: 0.85, green: 0.47, blue: 0.34))
-            .overlay(Image(systemName: "asterisk").font(.system(size: size * 0.5, weight: .bold)).foregroundStyle(.white))
-            .frame(width: size, height: size)
     }
 }
 
@@ -1132,7 +1118,9 @@ struct ComposerChip: View {
 // MARK: - Markdown
 
 func inline(_ s: String) -> AttributedString {
-    (try? AttributedString(markdown: s, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(s)
+    var out = (try? AttributedString(markdown: s, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(s)
+    for r in out.runs.compactMap({ $0.link.map(isWebLink) == false ? $0.range : nil }) { out[r].link = nil }
+    return out
 }
 
 /// Block-level Markdown the way a transcript needs it: paragraphs, headings,

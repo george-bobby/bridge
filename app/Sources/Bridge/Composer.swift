@@ -50,6 +50,7 @@ final class ComposerData: ObservableObject {
             let s = f.string
             return FileIndex.Entry(path: s, dir: false, bytes: Array(s.lowercased().utf8), base: Array((s.split(separator: "/").last.map(String.init) ?? s).lowercased().utf8))
         }
+        if files[key] == nil, files.count >= 8, let oldest = files.min(by: { $0.value.at < $1.value.at })?.key { files[oldest] = nil }
         files[key] = FileIndex(root: j["root"].string, entries: fs + dirs, at: Date())
     }
 
@@ -355,7 +356,7 @@ struct ModelPanel: View {
                 .sorted { $0.1 > $1.1 }.map(\.0)
             }
             if hits.isEmpty { continue }
-            if tab.v == "all" || !q.isEmpty && tab.v == "all" {
+            if tab.v == "all" {
                 entries.append(.header(a.label, a, hits.count))
                 for m in hits.prefix(q.isEmpty ? 8 : 40) { entries.append(.item(items.count, m)); items.append(m) }
             } else {
@@ -1214,7 +1215,7 @@ extension AppModel {
             if !repo.isEmpty { body["repo"] = repo }
             body.merge(workspace) { $1 }
             let out = try await API.post("/api/tasks", body)
-            self.say(out["state"].string == "queued" ? "Queued: every worker slot is busy." : "Worker started on \(out["branch"].string)")
+            self.say("Worker started on \(out["branch"].string)")
             self.open(out["taskId"].string)
             ok = true
         }

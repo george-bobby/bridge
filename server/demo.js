@@ -204,6 +204,7 @@ const claude = (ago, steps, o = {}) => ({
   kind: o.kind || "followup",
   label: o.label || "worker",
   ts: now() - ago,
+  agent: "claude",
   model: o.model || "opus",
   state: o.state || "done",
   text: steps.filter((s) => s.kind === "text").map((s) => s.text).join("\n\n"),

@@ -576,11 +576,12 @@ struct BoardView: View {
             GeometryReader { g in
                 // Columns share the width, down to 210pt each; below that the board scrolls.
                 let width = max(220, (g.size.width - 40 - 48) / 5)
+                let cols = columns
                 ScrollView(.horizontal) {
                     HStack(alignment: .top, spacing: 12) {
-                        ForEach(Column.allCases) { c in BoardColumn(column: c, sessions: sessions(in: c), ns: cards).frame(width: width) }
+                        ForEach(Column.allCases) { c in BoardColumn(column: c, sessions: cols[c] ?? [], ns: cards).frame(width: width) }
                     }
-                    .animation(M.snappy, value: layout)
+                    .animation(M.snappy, value: layout(cols))
                     .padding(20)
                     .frame(height: g.size.height, alignment: .top)
                 }
@@ -588,14 +589,14 @@ struct BoardView: View {
         }
     }
 
-    var layout: [String] { Column.allCases.flatMap { c in sessions(in: c).map { "\(c.rawValue):\($0.id)" } } }
+    func layout(_ cols: [Column: [Session]]) -> [String] { Column.allCases.flatMap { c in (cols[c] ?? []).map { "\(c.rawValue):\($0.id)" } } }
 
-    func sessions(in c: Column) -> [Session] {
+    var columns: [Column: [Session]] {
         let q = query.v.lowercased()
-        return model.boardSessions
-            .filter { model.column(of: $0) == c && model.inFilter($0) }
-            .filter { q.isEmpty || "\($0.title) \($0.text) \($0.channel) \($0.issueKey)".lowercased().contains(q) }
+        let shown = model.boardSessions
+            .filter { model.inFilter($0) && (q.isEmpty || "\($0.title) \($0.text) \($0.channel) \($0.issueKey)".lowercased().contains(q)) }
             .sorted { $0.updatedAt > $1.updatedAt }
+        return Dictionary(grouping: shown) { model.column(of: $0) }
     }
 }
 
@@ -757,7 +758,8 @@ struct SessionsView: View {
     }
 
     var liveList: some View {
-        VStack(spacing: 0) {
+        let all = filtered
+        return VStack(spacing: 0) {
             ScrollView {
                 LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
                     if let o = model.sessions.first(where: { $0.id == model.orchestratorId(model.projectFilter) }) ?? model.orchestrator {
@@ -774,7 +776,7 @@ struct SessionsView: View {
                         Hairline()
                     }
                     ForEach([Column.needs, .doing, .review, .backlog, .done]) { c in
-                        let rows = filtered.filter { model.column(of: $0) == c }
+                        let rows = all.filter { model.column(of: $0) == c }
                         if !rows.isEmpty {
                             Section {
                                 ForEach(rows) { SessionRow(session: $0).transition(.opacity.combined(with: .move(edge: .top))) }
@@ -787,7 +789,7 @@ struct SessionsView: View {
                         EmptyState(icon: "bubble.left.and.text.bubble.right", title: "No sessions yet", detail: "Press ⌘N to start a task, or paste a Slack thread link.")
                     }
                 }
-                .animation(M.snappy, value: filtered.map(\.id))
+                .animation(M.snappy, value: all.map(\.id))
             }
         }
     }
@@ -886,7 +888,7 @@ struct IssueTree: View {
             IssueRow(issue: issue, expandable: showSubs && !issue.children.isEmpty, expanded: open.v) { withAnimation(M.snappy) { open.v.toggle() } }
             if showSubs && open.v && !issue.children.isEmpty {
                 ForEach(issue.children) { child in
-                    SubIssueRow(child: child, mine: model.issues.first { $0.key == child.key })
+                    SubIssueRow(child: child, mine: model.issue(child.key))
                         .transition(.opacity.combined(with: .move(edge: .top)))
                 }
             }
@@ -919,7 +921,7 @@ struct IssueRow: View {
                 if props.contains("priority") { PriorityIcon(priority: issue.priority).help(issue.priorityLabel) }
                 if props.contains("id") { Text(issue.key).font(T.mono(11.5)).foregroundStyle(T.text3).frame(width: 74, alignment: .leading) }
                 if props.contains("status") { StatusIcon(kind: issue.status, color: hexColor(issue.stateColor, fallback: issue.status.color)).help(issue.state) }
-                if !issue.parentKey.isEmpty && !model.issues.contains(where: { $0.key == issue.parentKey }) {
+                if !issue.parentKey.isEmpty && model.issue(issue.parentKey) == nil {
                     Text(issue.parentTitle).font(T.ui(12.5)).foregroundStyle(T.text3).lineLimit(1).frame(maxWidth: 180, alignment: .leading)
                     Image(systemName: "chevron.right").font(.system(size: 8, weight: .bold)).foregroundStyle(T.text3)
                 }

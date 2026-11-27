@@ -9,6 +9,7 @@
  */
 
 const clients = new Set();
+const MAX_BUFFERED = 16e6;
 
 function subscribe(req, res) {
   res.writeHead(200, {
@@ -43,6 +44,11 @@ function broadcast(event, data) {
   if (!clients.size) return;
   const frame = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
   for (const res of clients) {
+    if (res.writableLength > MAX_BUFFERED) {
+      clients.delete(res);
+      res.destroy();
+      continue;
+    }
     try {
       res.write(frame);
     } catch {

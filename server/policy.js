@@ -245,7 +245,7 @@ function checkPs(t) {
 const ENVFILE = /(^|\/)\.env(\.(?!example$|sample$|template$)[^/\s]+)?$/;
 
 function checkBash(cmd, policy) {
-  const c = String(cmd || "");
+  const c = String(cmd || "").replace(/\\\r?\n/g, " ");
 
   // Anything piping into kill, or killing whatever a substitution printed.
   if (/\bxargs\b[^;&|\n]*\bkill\b/.test(c)) return deny("xargs kill is a kill by pattern. Look up the PID, then kill that exact PID.");
@@ -257,6 +257,7 @@ function checkBash(cmd, policy) {
     return deny("`gh auth token` on its own prints a secret. Use it only inside $(...) as GH_TOKEN=$(gh auth token --user <login>).");
   }
 
+  const httpSegs = [];
   for (const seg of segments(c)) {
     const t = tokens(seg);
     if (!t.length) continue;
@@ -296,10 +297,12 @@ function checkBash(cmd, policy) {
     if (base === "pgrep" && t.some((a) => /^-[a-zA-Z]*[al]/.test(a))) {
       return deny("pgrep -a/-l prints command lines. Use plain `pgrep` (PIDs only), then `ps -o pid=,comm= -p <pid>`.");
     }
-    if (["cat", "less", "more", "head", "tail", "grep", "rg", "sed", "awk", "bat", "strings", "xxd", "od"].includes(base)) {
+    // The one safe read: strip everything after `=` so only key names print.
+    const namesOnly = base === "sed" && t.some((a) => /^s\/=\.\*\/\/p?$/.test(a));
+    const fed = t.find((a, n) => (n > 0 && t[n - 1] === "<" && ENVFILE.test(a)) || (/^\d*<[^<]/.test(a) && ENVFILE.test(a.replace(/^\d*</, ""))));
+    if (fed && !namesOnly) return deny(`reading ${fed.replace(/^\d*</, "")} prints secret values. Check key names only: sed -n 's/=.*//p' <file>.`);
+    if (["cat", "less", "more", "head", "tail", "grep", "rg", "sed", "awk", "bat", "strings", "xxd", "od", "nl", "cut", "sort", "uniq", "tac", "base64", "jq"].includes(base)) {
       const f = t.slice(1).find((a) => !a.startsWith("-") && ENVFILE.test(a));
-      // The one safe read: strip everything after `=` so only key names print.
-      const namesOnly = base === "sed" && t.some((a) => /^s\/=\.\*\/\/p?$/.test(a));
       if (f && !namesOnly) return deny(`reading ${f} prints secret values. To check a key exists, print key names only: sed -n 's/=.*//p' ${f}.`);
     }
     if (base === "doppler" && t.includes("secrets") && !t.includes("--only-names")) {
@@ -320,13 +323,16 @@ function checkBash(cmd, policy) {
       const v = checkGh(t, policy);
       if (v) return v;
     }
-    if (base === "curl" || base === "wget" || base === "http") {
+    if (HTTP_TOOLS.includes(base)) {
+      httpSegs.push(seg);
       const v = checkHttp(t, policy);
       if (v) return v;
     }
   }
-  return null;
+  return checkLoopScript(c, httpSegs, policy);
 }
+
+const HTTP_TOOLS = ["curl", "wget", "http", "https", "xh"];
 
 function checkGit(t, policy) {
   // Skip global options: git -C <dir> push ...
@@ -380,13 +386,114 @@ function checkGh(t, policy) {
   return null;
 }
 
+/* ------------------------------------------------------- Bridge's own API */
+
+/**
+ * The writes a session may make to the dashboard: what bin/bridge and
+ * scripts/emit.sh send. Every other write is the app's (Settings, .env,
+ * restart, Slack replies, answering an ask), or a session could relax its own
+ * policy, post to Slack as you or approve its own tool calls.
+ */
+const BRIDGE_WRITES = [
+  /^\/api\/tasks$/,
+  /^\/api\/tasks\/[^/]+\/(relaunch|declare|plan|cleanup)$/,
+  /^\/api\/runs$/,
+  /^\/api\/runs\/[^/]+\/(followup|event)$/,
+  /^\/api\/decisions\/[^/]+$/,
+  /^\/api\/slack\/watch\/[^/]+$/,
+  /^\/api\/todos(\/done)?$/,
+];
+
+const LOOP_HOST = String.raw`(?:127(?:\.\d{1,3}){0,3}|localhost|[\w.-]+\.localhost|\[::1?\]|\[::ffff:127(?:\.\d{1,3}){3}\]|0\.0\.0\.0|0)`;
+const LOOP_URL = new RegExp(String.raw`^(?:(https?):\/\/)?(?:[^@\/\s]*@)?${LOOP_HOST}(?=[:/]|$)(?::(\d+))?(\/[^\s?#]*)?`, "i");
+const BRIDGE_VAR = /^\$\{?BRIDGE_URL\}?(\/[^\s?#'"]*)?/;
+// Loopback URLs inside a script (node -e, python -c, a heredoc).
+const LOOP_IN_TEXT = new RegExp(String.raw`(?:https?:\/\/(?:[^@\/\s'"]*@)?${LOOP_HOST}(?=[:/'"\s]|$)(?::\d+)?|\$\{?BRIDGE_URL\}?)(?:\/[^\s?#'"\x60)]*)?`, "gi");
+const WRITE_HINT = /\b(POST|PUT|PATCH|DELETE)\b|\bmethod\s*[:=]|\.(post|put|patch|delete)\s*\(|\bdata\s*=|\bbody\s*:|--data|\s-d\s/i;
+const INTERPRETER = /(^|[\s;&|(/])(node|nodejs|python[\d.]*|ruby|perl|php|deno|bun|osascript)(\s|$)/;
+
+/** The dashboard's port(s): its .env, and the BRIDGE_URL every session gets. */
+const PORTS = new Set([String(env.port)]);
+try {
+  const u = new URL(process.env.BRIDGE_URL);
+  PORTS.add(u.port || "80");
+} catch {}
+
+/** A URL aimed at this machine, as { path, bridge }, or null. */
+function loopTarget(a) {
+  const s = String(a || "");
+  const v = BRIDGE_VAR.exec(s);
+  const m = v ? null : LOOP_URL.exec(s);
+  if (!v && (!m || (!m[1] && !m[2] && !m[3]))) return null;
+  let p = (v ? v[1] : m[3]) || "/";
+  try {
+    p = new URL(p, "http://x").pathname; // the dot segments curl and the server both resolve
+  } catch {}
+  return { path: p.replace(/\/+$/, "") || "/", bridge: !!v || PORTS.has(m[2] || (/^https$/i.test(m[1] || "") ? "443" : "80")) };
+}
+
+function loopWrite(target, what, policy) {
+  if (BRIDGE_WRITES.some((re) => re.test(target.path))) return null;
+  if (target.bridge) {
+    return deny(`${what} writes to Bridge's own API (${target.path}). Only the app changes settings, .env, Slack replies or answers; a session's writes go through bin/bridge.`);
+  }
+  return target.path.startsWith("/api/") ? gate("otherWrites", what, policy) : null;
+}
+
 function checkHttp(t, policy) {
-  const url = t.find((a) => /^https?:\/\//.test(a)) || "";
-  if (!url || /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?\//.test(url + "/")) return null;
-  const method = (t.find((a, n) => t[n - 1] === "-X" || t[n - 1] === "--request") || "").toUpperCase();
-  const sendsBody = t.some((a) => /^(-d|--data.*|-F|--form|--json|-T|--upload-file)$/.test(a));
-  if ((method && method !== "GET" && method !== "HEAD") || sendsBody) {
-    return gate("otherWrites", `${t[0]} ${method || "POST"} ${url}`.slice(0, 140), policy);
+  const base = path.basename(t[0]);
+  const args = t.slice(1);
+  let method = "";
+  let body = false;
+  const urls = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    const m = /^(?:-X|--request=|--method=)(.+)$/.exec(a);
+    if (a === "-X" || a === "--request" || a === "--method") method = args[++i] || "";
+    else if (m) method = m[1];
+    else if (/^(-d|--data[\w-]*|-F|--form[\w-]*|--json|-T|--upload-file|--post-data|--post-file|--body-data|--body-file)$/.test(a)) {
+      body = true;
+      i++;
+    } else if (/^(-d|-F|-T)./.test(a) || /^--(data[\w-]*|form[\w-]*|json|upload-file|post-data|post-file|body-data|body-file)=/.test(a)) body = true;
+    else if (a === "--url") urls.push(args[++i] || "");
+    else if (!a.startsWith("-")) urls.push(a);
+  }
+  if (["http", "https", "xh"].includes(base)) {
+    // HTTPie: `http [METHOD] URL [items]`; `:4319/x` is localhost; a data item means POST.
+    if (/^[A-Z]+$/.test(urls[0] || "")) method = urls.shift();
+    if (/^:\d*\//.test(urls[0] || "")) urls[0] = `localhost${urls[0]}`;
+    if (urls.slice(1).some((a) => /^[^=:\s]+(:?=|==|@)/.test(a) && !/==/.test(a))) body = true;
+  }
+  if (!((method && !/^(GET|HEAD|OPTIONS)$/i.test(method)) || body)) return null;
+  const what = `${t[0]} ${method.toUpperCase() || "POST"} ${urls[0] || ""}`.slice(0, 140);
+  for (const u of urls) {
+    const target = loopTarget(u);
+    if (target) return loopWrite(target, what, policy);
+  }
+  // Somewhere else, or a URL held in a variable: an outward write.
+  if (urls.some((u) => /^(https?:\/\/|\$)/.test(u))) return gate("otherWrites", what, policy);
+  return null;
+}
+
+/** A script or raw socket writing to the dashboard, where no curl shows the method. */
+function checkLoopScript(c, httpSegs, policy) {
+  for (const s of segments(c)) {
+    const t = tokens(s);
+    const base = t.length ? path.basename(t[0]) : "";
+    if (!["nc", "ncat", "netcat", "socat", "telnet"].includes(base) || t.includes("-z")) continue;
+    const rest = ` ${t.slice(1).join(" ")} `;
+    if (new RegExp(String.raw`[\s:]${LOOP_HOST}[\s:]`, "i").test(rest) && [...PORTS].some((p) => new RegExp(String.raw`[\s:]${p}[\s,]`).test(rest))) {
+      return deny(`${base} to Bridge's own port can make any request to its API. A session's writes go through bin/bridge.`);
+    }
+  }
+  const dev = new RegExp(String.raw`/dev/(?:tcp|udp)/${LOOP_HOST}/(\d+)`, "gi");
+  for (const m of c.matchAll(dev)) if (PORTS.has(m[1])) return deny("a /dev/tcp connection to Bridge's own port can make any request to its API. A session's writes go through bin/bridge.");
+  if (!INTERPRETER.test(c) || !WRITE_HINT.test(c)) return null;
+  for (const m of c.matchAll(LOOP_IN_TEXT)) {
+    if (httpSegs.some((s) => s.includes(m[0]))) continue;
+    const target = loopTarget(m[0]);
+    const v = target && loopWrite(target, `a script writing to ${m[0]}`.slice(0, 140), policy);
+    if (v) return v;
   }
   return null;
 }
@@ -399,7 +506,13 @@ const READ_VERB = new RegExp(
   "^(" +
     [
       "get|list|search|read|fetch|find|lookup|query|describe|inspect|view|check|analy[sz]e|aggregate|explain|estimate|summari[sz]e|rank|recommend|whoami|download|extract|validate|preview|export|discover|load|guide|ask|forecast|diff|explore|filter|pull|batch_get|retrieve|render|detect|my_|can_",
-      ...env.mcpReadPrefixes,
+      ...env.mcpReadPrefixes.filter((s) => {
+        try {
+          return !!new RegExp(s);
+        } catch {
+          return false;
+        }
+      }),
     ].join("|") +
     ")"
 );
@@ -458,6 +571,8 @@ function check(toolName, toolInput = {}, { policy = loadPolicy() } = {}) {
   if (name === "Read" || name === "Grep" || name === "NotebookRead") {
     const p = String(input.file_path || input.path || "");
     if (ENVFILE.test(p)) return deny(`reading ${path.basename(p)} prints secret values. Check key names only, never values.`);
+    const glob = String(input.glob || "");
+    if (name === "Grep" && /(^|[/{,])\.env/.test(glob) && !/\.env\.(example|sample|template)$/.test(glob)) return deny(`grepping ${glob} prints secret values. Check key names only, never values.`);
     return null;
   }
   if (name.startsWith("mcp__")) return checkMcp(name, input, policy);

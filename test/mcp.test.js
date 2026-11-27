@@ -70,6 +70,10 @@ test("a form keeps secret values it leaves blank and validates what it needs", (
   assert.deepEqual(cfg, { type: "stdio", command: "y", args: ["a"], env: { API_KEY: "secret", NEW: "2" } });
   assert.throws(() => mcp.fromForm({ type: "stdio" }), /command/);
   assert.throws(() => mcp.fromForm({ type: "http", url: "ftp://x" }), /http/);
+  const web = mcp.normalize({ url: "https://a.example/mcp", headers: { Authorization: "Bearer s" } });
+  const blank = [{ key: "Authorization", value: "" }];
+  assert.equal(mcp.fromForm({ type: "http", url: "https://a.example/v2", headers: blank }, web).headers.Authorization, "Bearer s");
+  assert.equal(mcp.fromForm({ type: "http", url: "https://b.example/mcp", headers: blank }, web).headers.Authorization, "", "a header's value never follows the server to another host");
   assert.equal(mcp.keyOf(mcp.normalize({ command: "a", env: { A: "1", B: "2" } })), mcp.keyOf(mcp.normalize({ command: "a", env: { B: "2", A: "1" } })), "env order doesn't change the cache key");
 });
 
@@ -146,6 +150,16 @@ test("writes keep a config's permissions, refuse a file that won't parse, and ne
   await mcp.save("cursor", { name: "keep", form: { type: "http", url: "https://example.invalid/mcp" } }, { dir: REPO });
   assert.equal(fs.statSync(file).mode & 0o777, 0o600, "still private");
 
+  // A config symlinked from a dotfiles folder stays a link; its target changes.
+  const real = path.join(tmp, "dotfiles-mcp.json");
+  fs.renameSync(file, real);
+  fs.symlinkSync(real, file);
+  await mcp.save("cursor", { name: "linked", form: { type: "http", url: "https://example.invalid/mcp" } }, { dir: REPO });
+  assert.ok(fs.lstatSync(file).isSymbolicLink(), "still a link");
+  assert.ok(JSON.parse(fs.readFileSync(real, "utf8")).mcpServers.linked);
+  fs.unlinkSync(file);
+  fs.renameSync(real, file);
+
   fs.writeFileSync(file, "{ not json");
   await assert.rejects(mcp.save("cursor", { name: "x", form: { type: "http", url: "https://example.invalid/mcp" } }, { dir: REPO }), /isn't valid JSON/);
   assert.equal(fs.readFileSync(file, "utf8"), "{ not json", "left as it was");
@@ -164,4 +178,8 @@ test("writes keep a config's permissions, refuse a file that won't parse, and ne
   await new Promise((r) => setTimeout(r, 300));
   assert.equal(fs.existsSync(marker), false, "the repo's command never ran");
   fs.rmSync(path.join(REPO, ".cursor"), { recursive: true, force: true });
+
+  // Run from home (Default's folder), ~/.cursor/mcp.json is yours, not a repo's.
+  const fromHome = await mcp.list("cursor", { dir: HOME });
+  assert.deepEqual(fromHome.servers.map((s) => [s.name, s.scope, s.editable]), [["docs", "user", true]]);
 });

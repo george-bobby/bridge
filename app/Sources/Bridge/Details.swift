@@ -11,8 +11,9 @@ import SwiftUI
 extension AppModel {
     /// The Linear issue this session is about, when the feed has it: its
     /// link, branch, title or brief names the key.
-    func linkedIssue(_ s: Session) -> Issue? {
-        let key = s.issueKey
+    func linkedIssue(_ s: Session) -> Issue? { issue(s.issueKey) }
+
+    func issue(_ key: String) -> Issue? {
         _ = linear // observe the feed: the index itself isn't tracked
         return key.isEmpty ? nil : issuesByKey[key]
     }

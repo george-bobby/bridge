@@ -28,7 +28,6 @@ struct AgentTask: Identifiable, Hashable {
     var summary: String { j["summary"].string }
     var command: String { j["command"].string }
     var steps: [JSON] { j["steps"].array }
-    var hasOutput: Bool { !j["outputFile"].string.isEmpty }
 
     var kindLabel: String {
         if !isAgent { return background ? "Background command" : "Command" }
@@ -149,14 +148,16 @@ struct TaskMetrics: View {
     var font: Font = T.ui(11.5)
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { ctx in
-            let parts = [
-                task.isAgent && task.toolUses > 0 ? (task.toolUses == 1 ? "1 tool" : "\(task.toolUses) tools") : "",
-                task.tokens > 0 ? "\(Fmt.tokens(task.tokens)) tokens" : "",
-                task.elapsed(ctx.date) > 0 ? AgentTask.clock(task.elapsed(ctx.date)) : "",
-            ].filter { !$0.isEmpty }
-            Text(parts.joined(separator: " · ")).font(font).foregroundStyle(T.text3).monospacedDigit().lineLimit(1)
-        }
+        if task.running { TimelineView(.periodic(from: .now, by: 1)) { line($0.date) } } else { line(Date()) }
+    }
+
+    func line(_ now: Date) -> some View {
+        let parts = [
+            task.isAgent && task.toolUses > 0 ? (task.toolUses == 1 ? "1 tool" : "\(task.toolUses) tools") : "",
+            task.tokens > 0 ? "\(Fmt.tokens(task.tokens)) tokens" : "",
+            task.elapsed(now) > 0 ? AgentTask.clock(task.elapsed(now)) : "",
+        ].filter { !$0.isEmpty }
+        return Text(parts.joined(separator: " · ")).font(font).foregroundStyle(T.text3).monospacedDigit().lineLimit(1)
     }
 }
 
@@ -443,19 +444,21 @@ struct TaskHeader: View {
         }
     }
 
-    var stats: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { ctx in
-            let t = task
-            HStack(spacing: 0) {
-                stat("Elapsed", t.elapsed(ctx.date) > 0 ? AgentTask.clock(t.elapsed(ctx.date)) : "–")
-                if t.isAgent {
-                    stat("Tool calls", t.toolUses > 0 ? "\(t.toolUses)" : "–")
-                    stat("Tokens", t.tokens > 0 ? Fmt.tokens(t.tokens) : "–")
-                    stat("Last tool", t.lastTool.isEmpty ? "–" : ToolView.display(t.lastTool))
-                } else {
-                    stat("Started", t.startedAt > 0 ? Fmt.clock(t.startedAt) : "–")
-                    stat("Finished", t.endedAt > 0 ? Fmt.clock(t.endedAt) : t.running ? "Still running" : "–")
-                }
+    @ViewBuilder var stats: some View {
+        if task.running { TimelineView(.periodic(from: .now, by: 1)) { statRow($0.date) } } else { statRow(Date()) }
+    }
+
+    func statRow(_ now: Date) -> some View {
+        let t = task
+        return HStack(spacing: 0) {
+            stat("Elapsed", t.elapsed(now) > 0 ? AgentTask.clock(t.elapsed(now)) : "–")
+            if t.isAgent {
+                stat("Tool calls", t.toolUses > 0 ? "\(t.toolUses)" : "–")
+                stat("Tokens", t.tokens > 0 ? Fmt.tokens(t.tokens) : "–")
+                stat("Last tool", t.lastTool.isEmpty ? "–" : ToolView.display(t.lastTool))
+            } else {
+                stat("Started", t.startedAt > 0 ? Fmt.clock(t.startedAt) : "–")
+                stat("Finished", t.endedAt > 0 ? Fmt.clock(t.endedAt) : t.running ? "Still running" : "–")
             }
         }
     }

@@ -57,7 +57,7 @@ printf '%s\\n' '{"type":"turn.completed","usage":{"input_tokens":100,"cached_inp
       who: "Priya",
       text: "CSV export drops the last row",
       action: "pending",
-      messages: [{ role: "assistant", text: "The off-by-one is in paginateRows." }],
+      messages: [{ role: "assistant", agent: "claude", text: "The off-by-one is in paginateRows." }],
     }),
   );
   server = spawn(process.execPath, [path.join(ROOT, "server")], { env: ENV, stdio: "ignore" });

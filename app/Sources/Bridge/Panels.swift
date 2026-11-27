@@ -66,7 +66,7 @@ struct InboxView: View {
                         ForEach(Array(ev.enumerated()), id: \.offset) { _, e in
                             HoverRow(height: 34) {
                                 HStack(spacing: 10) {
-                                    Text(Fmt.clock(e["at"].double > 0 ? e["at"].double : e["ts"].double)).font(T.ui(11.5)).foregroundStyle(T.text3).frame(width: 90, alignment: .leading)
+                                    Text(Fmt.clock(e["at"].double)).font(T.ui(11.5)).foregroundStyle(T.text3).frame(width: 90, alignment: .leading)
                                     Chip(text: e["name"].string)
                                     Text(e["text"].string).font(T.ui(12.5)).foregroundStyle(T.text2).lineLimit(1)
                                     Spacer()

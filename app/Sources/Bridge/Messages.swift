@@ -82,8 +82,6 @@ import SwiftUI
         if bottom { following = true } else if userScrolling { following = false }
     }
 
-    func canStep(_ delta: Int) -> Bool { target(delta) != nil }
-
     func step(_ delta: Int, all: Bool = false) {
         guard proxy != nil, let t = target(delta, all: all) else { NSSound.beep(); return }
         go(t)

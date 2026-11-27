@@ -21,7 +21,7 @@
  *
  * Fails open on a malformed hook payload (prints nothing, exits 0): a guard
  * that crashes on input it didn't expect would block every tool call in
- * every session. Its own tests live in test/guard.test.js.
+ * every session. Its own tests live in test/policy.test.js.
  */
 
 const policy = require("../server/policy");
@@ -32,11 +32,11 @@ process.stdin.on("data", (c) => (raw += c));
 process.stdin.on("end", () => {
   let input;
   try {
-    input = JSON.parse(raw || "{}");
+    input = JSON.parse(raw || "{}") || {};
   } catch {
     process.exit(0);
   }
-  const verdict = policy.check(input.tool_name, input.tool_input || {}, { role: process.env.BRIDGE_ROLE || "" });
+  const verdict = policy.check(input.tool_name, input.tool_input || {});
   if (!verdict) process.exit(0);
   process.stdout.write(
     JSON.stringify({

@@ -8,9 +8,9 @@ import UserNotifications
 struct Session: Identifiable, Hashable {
     let j: JSON
     var id: String { j["runId"].string }
-    var kind: String { j["kind"].nonEmpty ?? "slack" }
+    var kind: String { j["kind"].string }
     var isTask: Bool { kind == "task" }
-    var isOrchestrator: Bool { kind == "orchestrator" || id == "orchestrator" || id.hasPrefix("orchestrator-") }
+    var isOrchestrator: Bool { kind == "orchestrator" }
     var task: JSON { j["task"] }
     var taskStatus: String { task["status"].string }
     var branch: String { task["branch"].string }
@@ -28,8 +28,7 @@ struct Session: Identifiable, Hashable {
     var archived: Bool { j["archived"].bool }
     var archivedAt: Double { j["archivedAt"].double }
     var project: String { j["project"].string }
-    var cost: Double { j["cost"].double }
-    var updatedAt: Double { j["updatedAt"].double > 0 ? j["updatedAt"].double : j["createdAt"].double }
+    var updatedAt: Double { j["updatedAt"].double }
     var createdAt: Double { j["createdAt"].double }
     var worked: Bool { j["worked"].bool }
     var unread: Bool { j["unread"].bool }
@@ -243,7 +242,7 @@ let needsStatuses: Set<String> = ["needs-input", "blocked", "worker-stalled", "w
 let statusLabels: [String: String] = [
     "ready-for-review": "Ready", "needs-input": "Needs input", "blocked": "Blocked", "pushed-follow-up": "Pushed",
     "idle-without-report": "No report", "worker-stalled": "Stalled", "worker-gone": "Lost", "usage-limit": "Usage limit",
-    "queued": "Queued", "working": "Working", "cleaned": "Cleaned up", "stopped": "Stopped", "idle": "Replied",
+    "working": "Working", "cleaned": "Cleaned up", "stopped": "Stopped", "idle": "Replied",
 ]
 
 // MARK: - Routes
@@ -303,7 +302,6 @@ final class AppModel {
     var everConnected = false
 
     var config: JSON = .null
-    var cost: JSON = .null
     var running: Set<String> = []
     var awaiting: Set<String> = []
     var defaultWorkdir = ""
@@ -604,7 +602,7 @@ final class AppModel {
         let p = pr(for: s.prUrl)
         if let p, !p.open { return .done }
         if isAwaiting(s) || needsStatuses.contains(st) { return .needs }
-        if isLive(s) || st == "working" || st == "queued" { return .doing }
+        if isLive(s) || st == "working" { return .doing }
         // A linked Linear issue is the source of truth for where the work
         // stands, once nothing live says otherwise (a manual move still wins).
         if let issue = linkedIssue(s) { return Column(linear: issue.status) }
@@ -642,7 +640,7 @@ final class AppModel {
         if sessions.contains(where: { $0.id == id }) || pid.isEmpty { return open(id) }
         Task {
             await act {
-                let out = try await API.post("/api/projects/\(pid)/orchestrator")
+                let out = try await API.post("/api/projects/\(API.q(pid))/orchestrator")
                 self.open(out["runId"].string)
             }
         }
@@ -671,7 +669,7 @@ final class AppModel {
         return id
     }
 
-    func updateProject(_ id: String, _ patch: [String: Any]) async { await act { try await API.post("/api/projects/\(id)", patch) } }
+    func updateProject(_ id: String, _ patch: [String: Any]) async { await act { try await API.post("/api/projects/\(API.q(id))", patch) } }
     /// Move a project to `index` in the sidebar; shown at once, then saved.
     /// Default stays first: indexes here count it, the server's don't.
     func moveProject(_ id: String, to index: Int) async {
@@ -720,7 +718,7 @@ final class AppModel {
     }
 
     func removeProject(_ id: String) async {
-        await act { try await API.delete("/api/projects/\(id)") }
+        await act { try await API.delete("/api/projects/\(API.q(id))") }
         if projectFilter == id { projectFilter = nil }
     }
 
@@ -787,7 +785,7 @@ final class AppModel {
         await act {
             let out = try await API.post("/api/slack/watch/\(API.q(id))", extra.merging(["action": action]) { a, _ in a })
             if action == "start", let run = out["runId"].nonEmpty {
-                self.say(out["queued"].bool ? "Queued: starts when a worker slot frees" : "Started the pipeline")
+                self.say("Started the pipeline")
                 self.open(run)
             }
         }
@@ -1035,12 +1033,11 @@ final class AppModel {
 
     private func applyState(_ s: JSON) {
         config = s["config"]
-        cost = s["cost"]
         running = Set(s["jobs"]["running"].array.map(\.string))
         awaiting = Set(s["jobs"]["awaiting"].array.map(\.string))
         defaultWorkdir = s["meta"]["workdir"].string
         bridgeRoot = s["meta"]["root"].string
-        if !s["meta"]["projects"].isNull { projects = s["meta"]["projects"].array.map(Project.init) }
+        projects = s["meta"]["projects"].array.map(Project.init)
     }
 
     private func handle(_ name: String, _ d: JSON) {
@@ -1059,7 +1056,7 @@ final class AppModel {
         case "inbox": withAnimation(M.snappy) { inbox = d }
         case "slack": slackFound(d)
         case "projects": projects = d["projects"].array.map(Project.init)
-        case "mcp": MCPStore.shared.changed(d["agent"].string)
+        case "mcp": MCPStore.shared.changed(d["agent"].string, live: paneRuns.union([openId]))
         case "identity": identity = d
         case "delta":
             // Tokens stream at dozens a second: patched into the chat held
@@ -1137,6 +1134,8 @@ final class AppModel {
             deltaLog[id] = log.isEmpty ? nil : log
         }
         setRun(id, run)
+        runOrder.removeAll { $0 == id }
+        runOrder.append(id)
         trimRunCache()
     }
 
@@ -1145,11 +1144,14 @@ final class AppModel {
     private func trimRunCache() {
         guard runs.count > 40 else { return }
         let keep = paneRuns.union([openId])
-        for k in runs.keys where !keep.contains(k) && runs.count > 30 {
+        for k in runOrder where !keep.contains(k) && runs.count > 30 {
             runs[k] = nil
             deltaLog[k] = nil
+            taskCache[k] = nil
         }
+        runOrder.removeAll { runs[$0] == nil }
     }
+    @ObservationIgnored private var runOrder: [String] = []
 
     private func scheduleRefresh(_ id: String, task: Bool) {
         staleRuns[id] = (staleRuns[id] ?? false) || task
@@ -1285,10 +1287,6 @@ final class AppModel {
         }
     }
 
-    /// Start an orchestrator over: its transcript and agent session go, the
-    /// chat stays. Asks first; there's no undo. A Terminal tab resuming the
-    /// old session closes with it.
-    @discardableResult
     /// The server gathers the catch-up and hands it to the orchestrator in one turn.
     func brief(_ orchestrator: String = "orchestrator", since: String = "8h") async {
         await act {
@@ -1299,6 +1297,10 @@ final class AppModel {
         }
     }
 
+    /// Start an orchestrator over: its transcript and agent session go, the
+    /// chat stays. Asks first; there's no undo. A Terminal tab resuming the
+    /// old session closes with it.
+    @discardableResult
     func clearChat(_ id: String) async -> Bool {
         let a = NSAlert()
         a.messageText = "Clear the orchestrator's chat?"
@@ -1338,12 +1340,12 @@ final class AppModel {
                 var body: [String: Any] = ["brief": t]
                 if !repo.isEmpty { body["repo"] = repo }
                 let out = try await API.post("/api/tasks", body)
-                self.say(out["state"].string == "queued" ? "Queued: every worker slot is busy." : "Worker started on \(out["branch"].string)")
+                self.say("Worker started on \(out["branch"].string)")
                 self.open(out["taskId"].string)
             } else {
                 var orch = self.orchestratorId(project)
                 if !self.sessions.contains(where: { $0.id == orch }), let pid = project {
-                    orch = try await API.post("/api/projects/\(pid)/orchestrator")["runId"].string
+                    orch = try await API.post("/api/projects/\(API.q(pid))/orchestrator")["runId"].string
                 }
                 try await API.post("/api/runs/\(API.q(orch))/followup", ["text": t, "queue": true])
                 self.open(orch)
@@ -1372,7 +1374,7 @@ final class AppModel {
         if let agent, agent != .claude { body["opts"] = ["agent": agent.rawValue] }
         do {
             let out = try await API.post("/api/tasks", body)
-            say(out["state"].string == "queued" ? "Queued: every worker slot is busy." : "Worker started on \(out["branch"].string)")
+            say("Worker started on \(out["branch"].string)")
             open(out["taskId"].string)
         } catch {
             // Linear's branch already exists here: let the server name one.
@@ -1387,7 +1389,7 @@ final class AppModel {
     // MARK: inbox + settings
 
     func decide(_ id: String, action: String, answer: String = "") async {
-        await act { try await API.post("/api/decisions/\(id)", ["action": action, "answer": answer]) }
+        await act { try await API.post("/api/decisions/\(API.q(id))", ["action": action, "answer": answer]) }
     }
 
     func todoDone(_ key: String) async { await act { try await API.post("/api/todos/done", ["key": key]) } }

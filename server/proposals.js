@@ -124,14 +124,15 @@ function all() {
   for (const f of fs.readdirSync(DIR)) {
     if (!f.endsWith(".json") || f.includes(".tmp-")) continue;
     const rec = readJson(path.join(DIR, f));
-    if (rec) out.push(rec);
+    if (rec) out.push({ ...rec, runId: f.slice(0, -5) });
   }
   return out.sort((a, b) => b.proposedAt - a.proposedAt);
 }
 
 function get(runId) {
   const id = safe(runId);
-  return id ? readJson(file(id)) : null;
+  const rec = id && readJson(file(id));
+  return rec ? { ...rec, runId: id } : null;
 }
 
 function setStatus(runId, status) {

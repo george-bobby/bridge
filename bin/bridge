@@ -119,7 +119,7 @@ async function main() {
       if (flags.model) opts.model = flags.model;
       if (flags.mode) opts.permissionMode = flags.mode;
       const out = await call("POST", "/api/tasks", {
-        repo: flags.repo,
+        repo: typeof flags.repo === "string" ? path.resolve(flags.repo) : undefined,
         title: flags.title,
         brief,
         branch: flags.branch,
@@ -136,7 +136,7 @@ async function main() {
     case "slack": {
       if (!pos[0]) die("slack <thread url>");
       const out = await call("POST", "/api/runs", { url: pos[0], start: true, by: BY });
-      console.log(`${out.runId}  ${out.started ? "started" : out.queued ? "queued" : out.created ? "created" : "already had a chat"}`);
+      console.log(`${out.runId}  ${out.started ? "started" : out.created ? "created" : "already had a chat"}`);
       return;
     }
     case "status": {

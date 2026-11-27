@@ -28,6 +28,7 @@ const HOME = os.homedir();
 const TTL = 4 * 60_000; // Claude's endpoint 429s if polled hard
 const cache = new Map();
 const blockedUntil = new Map();
+const inflight = new Map();
 
 const run = (bin, args, timeout = 4000) =>
   new Promise((resolve) => execFile(bin, args, { timeout, maxBuffer: 4e6 }, (err, out) => resolve(err ? "" : String(out).trim())));
@@ -153,6 +154,7 @@ async function codex() {
   const t = auth && auth.tokens;
   const claims = t ? { ...jwtClaims(t.id_token), ...jwtClaims(t.access_token) } : {};
   const account = (claims["https://api.openai.com/profile"] || {}).email || claims.email || "";
+  let loginRejected = false;
   if (t && t.access_token) {
     const id = t.account_id || (claims["https://api.openai.com/auth"] || {}).chatgpt_account_id;
     const r = await getJson("https://chatgpt.com/backend-api/wham/usage", {
@@ -173,13 +175,10 @@ async function codex() {
       const details = j.credits && j.credits.balance != null ? [{ label: "Credits", value: String(j.credits.balance) }] : [];
       return { status: "ok", plan: j.plan_type ? `${j.plan_type[0].toUpperCase()}${j.plan_type.slice(1)}` : "", account: j.email || account, windows, details };
     }
-    if (r.rejected) {
-      const local = codexFromLogs();
-      if (!local) return rejected("Codex");
-    }
+    loginRejected = !!r.rejected;
   }
   const local = codexFromLogs();
-  if (!local) return unavailable("Not signed in to Codex");
+  if (!local) return loginRejected ? rejected("Codex") : unavailable("Not signed in to Codex");
   const { rl, at } = local;
   const windows = [];
   for (const [key, w] of [["primary", rl.primary], ["secondary", rl.secondary]]) {
@@ -289,10 +288,15 @@ const local = () => require("./store").summariseUsage();
 
 const PROVIDERS = { claude: ["Claude", claude], codex: ["Codex", codex], cursor: ["Cursor", cursor], devin: ["Devin", devin] };
 
-async function one(id, refresh) {
+function one(id, refresh) {
   const c = cache.get(id);
   const blocked = blockedUntil.get(id) || 0;
-  if (c && (!refresh || Date.now() < blocked) && Date.now() - c.at < (Date.now() < blocked ? Infinity : TTL)) return c.data;
+  if (c && (!refresh || Date.now() < blocked) && Date.now() - c.at < (Date.now() < blocked ? Infinity : TTL)) return Promise.resolve(c.data);
+  if (!inflight.has(id)) inflight.set(id, fetchOne(id, c).finally(() => inflight.delete(id)));
+  return inflight.get(id);
+}
+
+async function fetchOne(id, c) {
   let data;
   try {
     data = await PROVIDERS[id][1]();

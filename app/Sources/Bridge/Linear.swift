@@ -356,7 +356,7 @@ struct IssueCard: View {
         VStack(alignment: .leading, spacing: 9) {
             HStack(spacing: 6) {
                 if props.contains("id") { Text(issue.key).font(T.mono(11)).foregroundStyle(T.text3).fixedSize() }
-                if !issue.parentKey.isEmpty && !model.issues.contains(where: { $0.key == issue.parentKey }) {
+                if !issue.parentKey.isEmpty && model.issue(issue.parentKey) == nil {
                     HStack(spacing: 3) {
                         Image(systemName: "arrow.turn.down.right").font(.system(size: 8.5, weight: .semibold))
                         Text(issue.parentTitle).lineLimit(1)

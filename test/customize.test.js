@@ -68,4 +68,8 @@ test("refuses anything outside a skills folder", () => {
   assert.throws(() => c.deleteSkill(HOME), /not a skill folder/);
 });
 
+test("a plugin id can't pass for a flag", async () => {
+  await assert.rejects(c.claudePlugin("install", "--plugin-dir=/tmp"), /bad plugin id/);
+});
+
 test.after(() => fs.rmSync(tmp, { recursive: true, force: true }));

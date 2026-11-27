@@ -13,7 +13,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
-const NAME = /^[\w.-]+(?::[\w.-]+)?$/;
+const NAME = /^\w[\w.-]*(?::[\w.-]+)?$/;
 const OFF = /^(none|off|false|no|0)$/i;
 
 /** Claude Code's user folder (skills, commands): $CLAUDE_CONFIG_DIR or ~/.claude. */
@@ -68,7 +68,7 @@ function prompt({ skill, agent = "claude", arg, rules = "" }) {
   const a = String(arg || "").trim();
   if ((agent || "claude") === "claude") return [`/${skill.name} ${a}`.trim(), rules].filter(Boolean).join("\n\n");
   if (!skill.text) return null;
-  const content = body(skill.text).replace(/\$ARGUMENTS/g, a);
+  const content = body(skill.text).replace(/\$ARGUMENTS/g, () => a);
   return [
     `Run the \`${skill.name}\` skill below on: ${a}`,
     `Skills can't be invoked as slash commands here, so its SKILL.md is inlined: follow it exactly as if you had been started with \`/${skill.name} ${a.split("\n")[0]}\`. Where it names tools you don't have (the Skill tool, plan mode, AskUserQuestion, a Linear or Slack connector), use the closest equivalent you do have, and say in your report what you couldn't do.`,

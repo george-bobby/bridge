@@ -116,6 +116,7 @@ final class RichTextView: NSTextView {
         let used = lm.usedRect(for: tc)
         tc.size = old
         let out = CGSize(width: natural ? ceil(used.width) : width, height: ceil(used.height))
+        if heights.count > 32 { heights.removeAll() }
         heights[width] = out
         return out
     }
@@ -361,7 +362,7 @@ enum RichMarkdown {
                 attrs[.foregroundColor] = NT.text
             }
             if intent.contains(.strikethrough) { attrs[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
-            if let link = run.link { attrs[.link] = link }
+            if let link = run.link, isWebLink(link) { attrs[.link] = link }
             attrs[.font] = f
             out.append(NSAttributedString(string: piece, attributes: attrs))
         }

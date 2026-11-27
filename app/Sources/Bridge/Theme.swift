@@ -254,7 +254,7 @@ struct Avatar: View {
         ZStack {
             Circle().fill(Avatar.color(for: name))
             Text(Avatar.initials(name)).font(.system(size: size * 0.42, weight: .semibold)).foregroundStyle(.white)
-            if let u = URL(string: url), !url.isEmpty {
+            if let u = URL(string: url), isWebLink(u) {
                 AsyncImage(url: u) { img in img.resizable().scaledToFill() } placeholder: { Color.clear }
                     .clipShape(Circle())
             }

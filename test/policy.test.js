@@ -40,6 +40,14 @@ test("secrets: env dumps, process argv and .env reads are denied", () => {
   }
   assert.equal(check("Read", { file_path: "/x/repo/.env" }, P).decision, "deny");
   assert.equal(check("Read", { file_path: "/x/repo/.env.example" }, P), null);
+  for (const bad of ["while read l; do echo $l; done <.env", "cat < .env.local", "base64 .env"]) assert.equal(verdict(bad), "deny", bad);
+  assert.equal(verdict("sed -n 's/=.*//p' < .env"), "pass");
+  assert.equal(check("Grep", { pattern: "TOKEN", glob: "**/.env*" }, P).decision, "deny");
+  assert.equal(check("Grep", { pattern: "TOKEN", glob: ".env.example" }, P), null);
+});
+
+test("a backslash-newline doesn't split a command", () => {
+  assert.equal(verdict("git push \\\n  --force origin main"), "ask");
 });
 
 test("destructive git asks; ordinary git passes", () => {
@@ -58,6 +66,27 @@ test("destructive git inside substitutions, shells, eval and wrappers still asks
   assert.equal(check("Bash", { command: "env FOO=1" }, P).decision, "deny", "assignments only still dump the environment");
   assert.equal(check("Bash", { command: 'bash -c "cat .env"' }, P).decision, "deny");
   for (const ok of ['git commit -m "fix (scope): $(date)"', 'echo "a; b"', "env FOO=1 node test.js"]) assert.equal(verdict(ok), "pass", ok);
+});
+
+test("Bridge's own API: a session writes only what bin/bridge sends; reads pass", () => {
+  const port = require("../server/env").port;
+  const at = (p) => `http://127.0.0.1:${port}${p}`;
+  for (const p of ["/api/config", "/api/env", "/api/restart", "/api/slack/reply", "/api/runs/x/answer", "/api/tasks/../config"]) {
+    for (const c of [`curl -X POST ${at(p)} -d '{}'`, `curl --json '{}' "$BRIDGE_URL${p}"`, `wget --post-data=x localhost:${port}${p}`, `http POST :${port}${p} a=b`, `node -e "fetch('${at(p)}', { method: 'POST' })"`, `python3 -c "urlopen('${at(p)}', data=b'x')"`, `bash -c "curl -XPOST [::1]:${port}${p}"`]) {
+      assert.equal(verdict(c), "deny", c);
+    }
+  }
+  assert.equal(verdict(`printf 'POST /api/config' | nc 127.0.0.1 ${port}`), "deny");
+  assert.equal(verdict(`exec 3<>/dev/tcp/127.0.0.1/${port}`), "deny");
+  // Every route bin/bridge writes to (bin/bridge `call("POST", …)`), plus emit.sh's event.
+  for (const p of ["/api/tasks", "/api/runs", "/api/runs/t-1/followup", "/api/runs/t-1/event", "/api/tasks/t-1/relaunch", "/api/tasks/t-1/declare", "/api/tasks/t-1/plan", "/api/tasks/t-1/cleanup", "/api/decisions/d-1", "/api/slack/watch/s-1", "/api/todos", "/api/todos/done"]) {
+    assert.equal(verdict(`curl -X POST ${at(p)} -d '{}'`), "pass", p);
+  }
+  for (const p of ["/api/config", "/api/env", "/api/state"]) assert.equal(verdict(`curl -s ${at(p)}`), "pass", `GET ${p}`);
+  assert.equal(verdict(`${path.join(__dirname, "..", "bin", "bridge")} spawn --repo . --title x --brief "POST the form"`), "pass");
+  assert.equal(verdict(`nc -z localhost ${port}`), "pass");
+  assert.equal(verdict("curl -X POST http://localhost:39999/login -d x"), "pass", "another local server's non-API route");
+  assert.equal(verdict("curl -X POST http://localhost:39999/api/login -d x"), "ask", "another local server's API asks");
 });
 
 test("gh: PR workflow passes, merges and issue writes ask, review replies follow policy", () => {
@@ -104,4 +133,8 @@ test("the hook script speaks the PreToolUse protocol and fails open", () => {
   const garbage = run("not json");
   assert.equal(garbage.status, 0);
   assert.equal(garbage.stdout, "");
+  assert.equal(run("null").status, 0);
+
+  const broken = spawnSync(process.execPath, [hook], { input: JSON.stringify({ tool_name: "Bash", tool_input: { command: "pkill node" } }), encoding: "utf8", env: { ...process.env, MCP_READ_PREFIXES: "docs_,(" } });
+  assert.equal(JSON.parse(broken.stdout).hookSpecificOutput.permissionDecision, "deny");
 });

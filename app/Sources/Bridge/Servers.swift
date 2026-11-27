@@ -135,11 +135,13 @@ final class MCPStore: ObservableObject {
         }
     }
 
-    /// The server's `mcp` event: a check finished or a config changed.
-    func changed(_ agent: String) {
+    /// The server's `mcp` event: a check finished or a config changed. Lists
+    /// for chats no longer on screen are dropped; their composer reloads one.
+    func changed(_ agent: String, live: Set<String>) {
         let a = AgentKind.of(agent)
         for k in lists.keys where k == a.rawValue || k.hasPrefix("\(a.rawValue)|") {
             let run = k.contains("|") ? String(k.split(separator: "|", maxSplits: 1)[1]) : nil
+            if let run, !live.contains(run) { lists[k] = nil; continue }
             Task { await load(a, run: run) }
         }
     }
@@ -1168,7 +1170,7 @@ struct MCPPanelRow: View {
     var toolChips: some View {
         let names = server.toolNames
         return VStack(alignment: .leading, spacing: 6) {
-            FlowLayout(spacing: 4) {
+            FlowRows(spacing: 4) {
                 ForEach(names.prefix(24), id: \.self) { n in
                     Text(n).font(T.mono(10.5)).foregroundStyle(T.text2)
                         .padding(.horizontal, 6).frame(height: 18)
@@ -1183,33 +1185,5 @@ struct MCPPanelRow: View {
             .buttonStyle(.plain)
         }
         .padding(.leading, 34)
-    }
-}
-
-/// Wraps its children onto as many lines as they need.
-struct FlowLayout: Layout {
-    var spacing: CGFloat = 4
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let width = proposal.width ?? 320
-        var x: CGFloat = 0, y: CGFloat = 0, line: CGFloat = 0
-        for v in subviews {
-            let s = v.sizeThatFits(.unspecified)
-            if x + s.width > width, x > 0 { x = 0; y += line + spacing; line = 0 }
-            x += s.width + spacing
-            line = max(line, s.height)
-        }
-        return CGSize(width: width, height: y + line)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        var x = bounds.minX, y = bounds.minY, line: CGFloat = 0
-        for v in subviews {
-            let s = v.sizeThatFits(.unspecified)
-            if x + s.width > bounds.maxX, x > bounds.minX { x = bounds.minX; y += line + spacing; line = 0 }
-            v.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(s))
-            x += s.width + spacing
-            line = max(line, s.height)
-        }
     }
 }

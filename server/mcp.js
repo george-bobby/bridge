@@ -81,6 +81,9 @@ function readJsonStrict(f) {
 /** Replace a file in one step, keeping its permissions (these hold tokens):
  *  a new file is private to you. */
 function writeTextAtomic(file, text) {
+  try {
+    file = fs.realpathSync(file);
+  } catch {}
   fs.mkdirSync(path.dirname(file), { recursive: true });
   let mode = 0o600;
   try {
@@ -214,6 +217,7 @@ function handshakeStdio(cfg, timeout) {
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (c) => {
       buf += c;
+      if (buf.length > 16e6) return finish({ status: "failed", error: "answered with more than 16 MB on one line" });
       let i;
       while ((i = buf.indexOf("\n")) >= 0) {
         const line = buf.slice(0, i).trim();
@@ -715,22 +719,28 @@ async function codexList(dir, { refresh = false } = {}) {
 async function codexEntries(dir) {
   const list = await codexList(dir, { refresh: true });
   const text = fs.existsSync(codexFile()) ? fs.readFileSync(codexFile(), "utf8") : "";
+  let repoText = "";
+  const repoFile = path.join(dir, ".codex", "config.toml");
+  try {
+    if (realDir(repoFile) !== realDir(codexFile())) repoText = fs.readFileSync(repoFile, "utf8");
+  } catch {}
   return list.map((s) => {
     const t = s.transport || {};
     const raw = t.type === "stdio" ? { command: t.command, args: t.args, env: t.env, cwd: t.cwd } : { url: t.url, type: "http", http_headers: t.http_headers, bearer_token_env_var: t.bearer_token_env_var };
-    const own = codexHas(text, s.name);
+    const repo = codexHas(repoText, s.name);
+    const own = !repo && codexHas(text, s.name);
     return {
       name: s.name,
       raw,
       cfg: normalize(raw),
-      scope: own ? "user" : "plugin",
-      source: own ? tilde(codexFile()) : "A Codex plugin",
+      scope: own ? "user" : repo ? "project" : "plugin",
+      source: own ? tilde(codexFile()) : repo ? ".codex/config.toml" : "A Codex plugin",
       enabled: s.enabled !== false,
       editable: own,
       removable: own,
       toggleable: own,
       authStatus: s.auth_status || "",
-      note: own ? "" : "Provided by a Codex plugin; manage it from Codex's plugins",
+      note: own ? "" : repo ? "Checked into the repo's .codex/config.toml" : "Provided by a Codex plugin; manage it from Codex's plugins",
     };
   });
 }
@@ -743,7 +753,8 @@ function cursorEntries(dir) {
   const out = [];
   const j = readJson(cursorFile(), {}) || {};
   for (const [n, raw] of Object.entries(j.mcpServers || {})) out.push({ name: n, raw, cfg: normalize(raw), scope: "user", source: tilde(cursorFile()), enabled: true, editable: true, removable: true, toggleable: true, sharedWith: ["devin"] });
-  const pj = dir ? readJson(path.join(dir, ".cursor", "mcp.json"), {}) || {} : {};
+  const repoFile = dir ? path.join(dir, ".cursor", "mcp.json") : "";
+  const pj = repoFile && realDir(repoFile) !== realDir(cursorFile()) ? readJson(repoFile, {}) || {} : {};
   for (const [n, raw] of Object.entries(pj.mcpServers || {})) {
     // Cursor takes the project's entry over a global one of the same name.
     const shadowed = out.findIndex((e) => e.name === n);
@@ -783,7 +794,10 @@ async function devinEntries() {
     list = JSON.parse(r.out);
   } catch {}
   if (!list) throw new Error(`Couldn't read Devin's servers: ${r.err.split("\n").filter(Boolean).pop() || "devin mcp list failed"}`);
-  const overrides = (readStash().devin || {});
+  const stash = readStash();
+  const overrides = stash.devin || {};
+  const cursorServers = (readJson(cursorFile(), {}) || {}).mcpServers || {};
+  const devinServers = (readJson(devinFile(), {}) || {}).mcpServers || {};
   const out = list.map((s) => {
     const raw = s.transport === "stdio" ? { command: s.command, args: s.args } : { url: s.url, type: s.transport };
     const src = String(s.source || "");
@@ -791,8 +805,8 @@ async function devinEntries() {
     const plugin = /^plugin /.test(src) || !!overrides[s.name];
     const project = /^\.devin|project/.test(src) && !fromCursor;
     const scope = fromCursor ? "shared" : plugin ? "plugin" : project ? "project" : "user";
-    const cursorRaw = fromCursor ? ((readJson(cursorFile(), {}) || {}).mcpServers || {})[s.name] : null;
-    const userRaw = scope === "user" ? ((readJson(devinFile(), {}) || {}).mcpServers || {})[s.name] : null;
+    const cursorRaw = fromCursor ? cursorServers[s.name] : null;
+    const userRaw = scope === "user" ? devinServers[s.name] : null;
     const full = cursorRaw || userRaw || raw;
     return {
       name: s.name,
@@ -809,7 +823,7 @@ async function devinEntries() {
       note: fromCursor ? "Devin loads this from Cursor's ~/.cursor/mcp.json: changes apply to Cursor too" : plugin ? "From a Devin plugin. Disabling adds an override to ~/.config/devin/mcp_config.json" : project ? "From this project's .devin config" : "",
     };
   });
-  for (const [n, s] of Object.entries(readStash().cursor || {})) {
+  for (const [n, s] of Object.entries(stash.cursor || {})) {
     if (out.some((e) => e.name === n)) continue;
     out.push({ name: n, raw: s.raw, cfg: normalize(s.raw), scope: "shared", source: "Disabled by Bridge (Cursor's file)", enabled: false, editable: true, removable: true, toggleable: true, sharedWith: ["cursor"], note: "Devin loads this from Cursor's ~/.cursor/mcp.json: changes apply to Cursor too" });
   }
@@ -983,8 +997,8 @@ const NAME = /^[A-Za-z0-9][A-Za-z0-9 _.@:-]{0,63}$/;
 /** The form's fields → a config, keeping secret values the form left blank. */
 function fromForm(form, prev) {
   const type = form.type === "http" || form.type === "sse" ? form.type : "stdio";
-  const keep = (kind, list) => {
-    const old = (prev && prev[kind]) || {};
+  const keep = (kind, list, carry = true) => {
+    const old = (carry && prev && prev[kind]) || {};
     const out = {};
     for (const { key, value } of list || []) {
       const k = String(key || "").trim();
@@ -1006,7 +1020,7 @@ function fromForm(form, prev) {
   }
   const url = String(form.url || "").trim();
   if (!/^https?:\/\/\S+$/.test(url)) throw new Error("a remote server needs an http(s) URL");
-  const cfg = { type, url, headers: keep("headers", form.headers) };
+  const cfg = { type, url, headers: keep("headers", form.headers, !!prev && !!prev.url && hostOf(expand(prev.url)) === hostOf(expand(url))) };
   if (form.bearerEnv) cfg.bearerEnv = String(form.bearerEnv).trim();
   return cfg;
 }

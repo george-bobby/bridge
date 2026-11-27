@@ -214,9 +214,6 @@ function unwrapShell(cmd) {
 
 /* ------------------------------------------------------------- handoff */
 
-/** Which agent ran each assistant turn (older turns predate agents: Claude). */
-const agentOf = (m) => (m && m.agent) || "claude";
-
 /**
  * The briefing an agent gets when it picks a session up from another agent:
  * everything since it last worked here (or all of it, if it never has).
@@ -226,11 +223,11 @@ function handoff(run, agent, { meta = {}, report = null } = {}) {
   const msgs = run.messages || [];
   const assistants = msgs.filter(worked);
   if (!assistants.length) return "";
-  const prev = agentOf(assistants[assistants.length - 1]);
+  const prev = assistants[assistants.length - 1].agent;
   if (prev === agent) return "";
   let since = 0;
   for (let i = msgs.length - 1; i >= 0; i--) {
-    if (worked(msgs[i]) && agentOf(msgs[i]) === agent) {
+    if (worked(msgs[i]) && msgs[i].agent === agent) {
       since = i + 1;
       break;
     }
@@ -263,7 +260,7 @@ function briefing(run, { meta = {}, report = null, since = 0, title = "", intro 
     if (m.role === "assistant") {
       if (m.kind === "compact") continue;
       const tools = (m.steps || []).filter((s) => s.kind === "tool").map((s) => `${s.name}${s.detail ? ` ${clip(s.detail, 80)}` : ""}`);
-      lines.push(`- ${(AGENTS[agentOf(m)] || AGENTS.claude).label}${tools.length ? ` (used: ${tools.slice(-8).join("; ")})` : ""}: ${clip(m.text, 1200) || "(no reply)"}`);
+      lines.push(`- ${(AGENTS[m.agent] || { label: m.agent }).label}${tools.length ? ` (used: ${tools.slice(-8).join("; ")})` : ""}: ${clip(m.text, 1200) || "(no reply)"}`);
     } else if (m.role === "user" || m.role === "slack" || m.role === "thread") {
       lines.push(`- ${m.role === "user" ? "User" : m.who || "Slack"}: ${clip(m.text, 1500)}`);
     } else if (m.role === "event" || m.role === "outcome") {
@@ -490,4 +487,4 @@ async function catalog({ refresh = false } = {}) {
   return catalogCache.data;
 }
 
-module.exports = { AGENTS, NAMES, command, adapter, handoff, briefing, agentOf, unwrapShell, catalog, claudeProbe };
+module.exports = { AGENTS, NAMES, command, adapter, handoff, briefing, unwrapShell, catalog, claudeProbe };

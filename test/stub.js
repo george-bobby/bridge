@@ -18,6 +18,8 @@
  *                             a tool call and its result, a second call's text
  *   stub:tasks                run a subagent (its own tool call) and a background
  *                             command, with the task_* events Claude sends
+ *   stub:orphan=<seconds>     leave a `sleep` holding stdout open that long
+ *                             after the stub itself exits
  *
  * `/compact` compacts (a compact_boundary event); the initialize handshake
  * answers with a small command and model list; `mcp_status` lists one
@@ -124,6 +126,7 @@ async function turn(prompt) {
     return done("ok");
   }
   if (d.exit) process.exit(1);
+  if (d.orphan) require("child_process").spawn("sleep", [String([].concat(d.orphan)[0])], { stdio: ["ignore", "inherit", "ignore"], detached: true }).unref();
   if (d.limit) {
     say("You've hit your usage limit. Resets at 5pm.");
     return done("You've hit your usage limit", { subtype: "error_during_execution" });
