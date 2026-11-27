@@ -16,6 +16,21 @@ struct PortChips: View {
     }
 }
 
+/// Stops a dev server's process (every port it listens on); spins while it stops.
+struct StopServerButton: View {
+    @Environment(AppModel.self) var model
+    let server: DevServer
+    var size: CGFloat = B.small
+
+    var body: some View {
+        let busy = model.stoppingServers.contains(server.id)
+        IconButton(icon: busy ? "arrow.triangle.2.circlepath" : "stop.circle", help: "Stop \(server.command) (pid \(server.id))", spinning: busy, size: size) {
+            Task { await model.stopServer(server) }
+        }
+        .disabled(busy)
+    }
+}
+
 struct ChecksIcon: View {
     let pr: PullRequest
     var body: some View {
@@ -420,6 +435,7 @@ struct HomeView: View {
                                         Text(sv.folder).font(T.ui(12.5)).foregroundStyle(T.text2).lineLimit(1).truncationMode(.head)
                                         Spacer()
                                         Text(sv.command).font(T.mono(11)).foregroundStyle(T.text3)
+                                        StopServerButton(server: sv)
                                     }
                                 }
                             }

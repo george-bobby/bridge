@@ -675,6 +675,13 @@ async function handle(req, res) {
       return sendJson(res, 502, { ok: false, error: String(e.message || e) });
     }
   }
+  // Stop a listed dev server. The app's own action: deliberately not in policy.js
+  // BRIDGE_WRITES, so a session can't call it.
+  const stop = req.method === "POST" && p.match(/^\/api\/servers\/(\d+)\/stop$/);
+  if (stop) {
+    const r = await sources.stopServer(Number(stop[1]));
+    return sendJson(res, r.ok ? 200 : r.status || 500, r.ok ? { ok: true, signal: r.signal } : { ok: false, error: r.error });
+  }
   const src = req.method === "GET" && p.match(/^\/api\/sources\/(pulls|linear|ports|vercel|incidents|granola|datadog)$/);
   if (src) {
     try {

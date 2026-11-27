@@ -940,6 +940,24 @@ final class AppModel {
         return servers.filter { $0.cwd.contains("/" + flat) || $0.cwd.contains("/" + tail + "/") || $0.cwd.hasSuffix("/" + tail) }
     }
 
+    /// Pids being stopped right now (their stop buttons spin).
+    var stoppingServers: Set<Int> = []
+
+    /// Stop a dev server (SIGTERM, then SIGKILL on the server) and refresh the list.
+    func stopServer(_ sv: DevServer) async {
+        guard !stoppingServers.contains(sv.id) else { return }
+        stoppingServers.insert(sv.id)
+        defer { stoppingServers.remove(sv.id) }
+        let label = sv.ports.first.map { ":\($0)" } ?? sv.command
+        do {
+            try await API.post("/api/servers/\(sv.id)/stop")
+            say("Stopped \(label)")
+        } catch {
+            say("Couldn't stop \(label): \(error.localizedDescription)", bad: true)
+        }
+        await load("ports")
+    }
+
     // MARK: lifecycle
 
     func boot() {

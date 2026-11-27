@@ -288,7 +288,9 @@ struct LinkRows: View {
             }
             ForEach(model.servers(for: s)) { sv in
                 ForEach(sv.ports, id: \.self) { p in
-                    LinkRow(icon: "play.circle", tint: T.green, title: "localhost:\(p)", detail: sv.command, url: "http://localhost:\(p)")
+                    LinkRow(icon: "play.circle", tint: T.green, title: "localhost:\(p)", detail: sv.command, url: "http://localhost:\(p)") {
+                        StopServerButton(server: sv)
+                    }
                 }
             }
             if s.prUrl.isEmpty && linearURL == nil && s.permalink.isEmpty {
