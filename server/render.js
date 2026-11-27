@@ -41,9 +41,20 @@ function rosterLine(people, ifEmpty) {
   return people.map((p) => `${p.name} \`${p.id}\``).join(", ");
 }
 
+/** Ask git and gh directly when identity.js hasn't run yet (a fresh install). */
+function quick(cmd, args) {
+  try {
+    return require("child_process").execFileSync(cmd, args, { encoding: "utf8", timeout: 8000, stdio: ["ignore", "pipe", "ignore"], env: { ...process.env, PATH: `${env.extraPath}:${process.env.PATH || ""}` } }).trim();
+  } catch {
+    return "";
+  }
+}
+
 function table() {
   const scope = env.targetScope || "the whole repo";
-  const repo = env.targetRepo.replace(/\/+$/, "");
+  const repo = String(env.targetRepo || "").replace(/\/+$/, "");
+  if (!env.githubRepo && repo) env.githubRepo = require("./identity").slugOf(quick("git", ["-C", repo, "remote", "get-url", "origin"]));
+  if (!env.githubLogin) env.githubLogin = quick("gh", ["api", "user", "--jq", ".login"]);
   return {
     PROJECT_DIR: ROOT,
     SLACK_USER_ID: env.slackUserId,
@@ -92,6 +103,11 @@ function render(text, values, file) {
   return out;
 }
 
+/**
+ * A skill whose values aren't known yet (nothing connected, no project) is
+ * skipped with a warning rather than failing the install: the Slack pipeline
+ * just isn't available until Settings has what it needs.
+ */
 function main() {
   const values = table();
   const written = [];
@@ -99,8 +115,15 @@ function main() {
     const local = path.join(LOCAL, rel);
     const src = fs.existsSync(local) ? local : path.join(TEMPLATES, rel);
     const text = fs.readFileSync(src, "utf8");
+    let out;
+    try {
+      out = render(text, values, rel);
+    } catch (e) {
+      console.warn(`  skipped ${e.message.replace(/ — set .*$/, "")}. Connect Linear and GitHub and pick the pipeline's project in Settings › Integrations, or set them in .env.`);
+      continue;
+    }
     fs.mkdirSync(path.dirname(dest), { recursive: true });
-    fs.writeFileSync(dest, render(text, values, rel));
+    fs.writeFileSync(dest, out);
     written.push(dest);
   }
   return written;
