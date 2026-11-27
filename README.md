@@ -27,7 +27,7 @@ watch and steer all of it.
 - **Import chats** you had in Claude Code, Codex, Cursor or Devin into a project, from New task; each becomes a worker that resumes the same session.
 - **Open anywhere**: one click to VS Code, Finder, GitHub, Linear, or the Slack thread its Linear issue links.
 - **Archive, don't delete**: done chats leave the sidebar and board and come back from Sessions › Archived.
-- **Sources**: GitHub, Linear, Slack, Vercel deployments, incident.io incidents, Granola meeting notes and Datadog monitors and errors, cross-linked to the sessions working on them; pick which ones the sidebar shows.
+- **Sources**: GitHub, Linear, Slack, Vercel deployments, incident.io incidents, Granola meeting notes, Datadog monitors and errors, and model providers (OpenRouter, Anthropic: models, context, prices, spend), cross-linked to the sessions working on them; pick which ones the sidebar shows.
 - **Preview deployments**: each PR's Vercel or Netlify preview in the sidebar, the PR list and the details panel; a click opens it in a browser tab next to the chat.
 - **Light and dark**: follows macOS, or pick one in Settings › General.
 - **Projects**: an orchestrator and a memory per project, plus **Default** for anything that isn't in a repo (it runs in your home folder).

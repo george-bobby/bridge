@@ -500,10 +500,96 @@ async function loadDatadog() {
   return { configured: true, site: app.replace(/^https:\/\//, ""), monitors, issues, errors, at: Date.now() };
 }
 
+/* ------------------------------------------------- model providers */
+
+// OpenRouter: the whole catalog with context and per-token prices, plus the
+// key's spend and credits. Anthropic: the models an API key can call, with
+// their context window and output cap (its API lists no prices).
+
+const perMillion = (x) => {
+  const n = Number(x);
+  return Number.isFinite(n) && n >= 0 ? Math.round(n * 1e6 * 1000) / 1000 : null;
+};
+
+async function openrouter(key) {
+  const auth = { Authorization: `Bearer ${key}` };
+  const base = "https://openrouter.ai/api/v1";
+  const [k, credits, list] = await Promise.all([
+    getJson(`${base}/key`, auth, "OpenRouter"),
+    getJson(`${base}/credits`, auth, "OpenRouter").catch(() => null), // some keys can't read credits
+    getJson(`${base}/models`, auth, "OpenRouter"),
+  ]);
+  const d = k.data || {};
+  const c = (credits && credits.data) || null;
+  const models = (list.data || [])
+    .map((m) => ({
+      id: m.id,
+      name: m.name || m.id,
+      context: m.context_length || (m.top_provider && m.top_provider.context_length) || 0,
+      maxOutput: (m.top_provider && m.top_provider.max_completion_tokens) || 0,
+      input: perMillion(m.pricing && m.pricing.prompt),
+      output: perMillion(m.pricing && m.pricing.completion),
+      modality: (m.architecture && m.architecture.modality) || "",
+      created: (m.created || 0) * 1000,
+      url: `https://openrouter.ai/${m.id}`,
+    }))
+    .sort((a, b) => b.created - a.created);
+  return {
+    id: "openrouter",
+    name: "OpenRouter",
+    account: {
+      label: d.label || "",
+      spent: d.usage ?? null,
+      spentDay: d.usage_daily ?? null,
+      spentWeek: d.usage_weekly ?? null,
+      spentMonth: d.usage_monthly ?? null,
+      limit: d.limit ?? null,
+      remaining: d.limit_remaining ?? null,
+      balance: c ? Math.round((Number(c.total_credits || 0) - Number(c.total_usage || 0)) * 100) / 100 : null,
+      freeTier: !!d.is_free_tier,
+    },
+    models,
+  };
+}
+
+async function anthropic(key) {
+  const list = await getJson("https://api.anthropic.com/v1/models?limit=1000", { "x-api-key": key, "anthropic-version": "2023-06-01" }, "Anthropic");
+  const caps = (c) => (c && typeof c === "object" ? Object.entries(c).filter(([, v]) => v === true || (v && v.supported === true)).map(([k]) => k) : []);
+  return {
+    id: "anthropic",
+    name: "Anthropic",
+    account: null,
+    models: (list.data || []).map((m) => ({
+      id: m.id,
+      name: m.display_name || m.id,
+      context: m.max_input_tokens || 0,
+      maxOutput: m.max_tokens || 0,
+      input: null,
+      output: null,
+      capabilities: caps(m.capabilities),
+      created: Date.parse(m.created_at || "") || 0,
+      url: "https://docs.claude.com/en/docs/about-claude/models",
+    })),
+  };
+}
+
+/** Every provider with a key; each reports its own error. */
+async function loadModels() {
+  const want = [
+    ["openrouter", "OpenRouter", env.openrouterKey, openrouter],
+    ["anthropic", "Anthropic", env.anthropicKey, anthropic],
+  ].filter(([, , key]) => key);
+  if (!want.length) return { configured: false, providers: [], at: Date.now() };
+  const providers = await Promise.all(
+    want.map(([id, name, key, load]) => load(key).catch((e) => ({ id, name, account: null, models: [], error: String(e.message || e) }))),
+  );
+  return { configured: true, providers, at: Date.now() };
+}
+
 const demo = env.demo ? require("./demo") : null;
 
 module.exports = demo
-  ? { pulls: async () => demo.pulls(), linear: async () => demo.linear(), ports: async () => demo.ports(), vercel: async () => demo.vercel(), incidents: async () => demo.incidents(), granola: async () => demo.granola(), datadog: async () => demo.datadog(), granolaNote, stopServer: async (pid) => demo.stopServer(pid), stopListed }
+  ? { pulls: async () => demo.pulls(), linear: async () => demo.linear(), ports: async () => demo.ports(), vercel: async () => demo.vercel(), incidents: async () => demo.incidents(), granola: async () => demo.granola(), datadog: async () => demo.datadog(), models: async () => demo.models(), granolaNote, stopServer: async (pid) => demo.stopServer(pid), stopListed }
   : {
   ports: () => cached("ports", loadPorts, { refresh: true }),
   stopServer,
@@ -514,5 +600,6 @@ module.exports = demo
   incidents: (o) => cached("incidents", loadIncidents, o),
   granola: (o) => cached("granola", loadGranola, o),
   datadog: (o) => cached("datadog", loadDatadog, o),
+  models: (o) => cached("models", loadModels, o),
   granolaNote,
     };

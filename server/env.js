@@ -130,6 +130,10 @@ const env = {
   datadogApiKey: str("DD_API_KEY"),
   datadogAppKey: str("DD_APP_KEY"),
   datadogSite: str("DD_SITE", "datadoghq.com"),
+  // Model providers (Settings › Integrations › Models). Bridge's own names, so
+  // no agent CLI picks them up as its API key.
+  openrouterKey: str("OPENROUTER_KEY"),
+  anthropicKey: str("ANTHROPIC_KEY"),
   // Slack user token (xoxp-) for the native Slack connector (server/slack.js).
   // Acts as you: no bot, nothing to add to a channel. Server-only, like the
   // Linear key.
@@ -199,6 +203,8 @@ delete process.env.INCIDENT_API_KEY;
 delete process.env.GRANOLA_API_KEY;
 delete process.env.DD_API_KEY;
 delete process.env.DD_APP_KEY;
+delete process.env.OPENROUTER_KEY;
+delete process.env.ANTHROPIC_KEY;
 delete process.env.SLACK_USER_TOKEN;
 
 module.exports = env;

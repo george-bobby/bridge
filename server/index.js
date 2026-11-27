@@ -700,7 +700,7 @@ async function handle(req, res) {
     const r = await sources.stopServer(Number(stop[1]));
     return sendJson(res, r.ok ? 200 : r.status || 500, r.ok ? { ok: true, signal: r.signal } : { ok: false, error: r.error });
   }
-  const src = req.method === "GET" && p.match(/^\/api\/sources\/(pulls|linear|ports|vercel|incidents|granola|datadog)$/);
+  const src = req.method === "GET" && p.match(/^\/api\/sources\/(pulls|linear|ports|vercel|incidents|granola|datadog|models)$/);
   if (src) {
     try {
       const data = await sources[src[1]]({ refresh: url.searchParams.get("refresh") === "1" });

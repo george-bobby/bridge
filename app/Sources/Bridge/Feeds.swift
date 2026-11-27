@@ -1,14 +1,14 @@
 import SwiftUI
 
-// MARK: - More sources: Vercel, incident.io, Granola, Datadog
+// MARK: - More sources: Vercel, incident.io, Granola, Datadog, Models
 //
-// Read-only feeds from server/sources.js (`/api/sources/vercel|incidents|granola|datadog`),
+// Read-only feeds from server/sources.js (`/api/sources/vercel|incidents|granola|datadog|models`),
 // each on its own key in .env. Which sources the sidebar shows is a Settings
 // choice (`SourceKind`, UserDefaults `sources.hidden`); a source that isn't
 // connected yet says which key it needs.
 
 enum SourceKind: String, CaseIterable, Identifiable {
-    case slack, github, linear, vercel, incidents, granola, datadog
+    case slack, github, linear, vercel, incidents, granola, datadog, models
     var id: String { rawValue }
     var label: String {
         switch self {
@@ -19,6 +19,7 @@ enum SourceKind: String, CaseIterable, Identifiable {
         case .incidents: return "Incidents"
         case .granola: return "Granola"
         case .datadog: return "Datadog"
+        case .models: return "Models"
         }
     }
     var icon: String {
@@ -30,6 +31,7 @@ enum SourceKind: String, CaseIterable, Identifiable {
         case .incidents: return "flame"
         case .granola: return "note.text"
         case .datadog: return "waveform.path.ecg"
+        case .models: return "cpu"
         }
     }
     var route: Route {
@@ -41,6 +43,7 @@ enum SourceKind: String, CaseIterable, Identifiable {
         case .incidents: return .incidents
         case .granola: return .granola
         case .datadog: return .datadog
+        case .models: return .models
         }
     }
     var detail: String {
@@ -52,6 +55,7 @@ enum SourceKind: String, CaseIterable, Identifiable {
         case .incidents: return "incident.io: live and recent incidents"
         case .granola: return "Granola: your meeting notes"
         case .datadog: return "Datadog: alerting monitors and error issues"
+        case .models: return "OpenRouter and Anthropic: models, context, prices and spend"
         }
     }
     /// The .env key that connects it, for the ones that need one.
@@ -61,6 +65,7 @@ enum SourceKind: String, CaseIterable, Identifiable {
         case .incidents: return "INCIDENT_API_KEY"
         case .granola: return "GRANOLA_API_KEY"
         case .datadog: return "DD_API_KEY"
+        case .models: return "OPENROUTER_KEY"
         default: return nil
         }
     }
@@ -84,6 +89,7 @@ extension AppModel {
         case .incidents: feed = incidents
         case .granola: feed = granola
         case .datadog: feed = datadog
+        case .models: feed = models
         case .github: return true
         }
         return feed["configured"].isNull || feed["configured"].bool
@@ -533,6 +539,121 @@ struct ErrorIssueRow: View {
             Divider()
             Button { copyToPasteboard(i["url"].string) } label: { Label("Copy Link", systemImage: "link") }
             Button { copyToPasteboard([i["type"].string, i["message"].string].filter { !$0.isEmpty }.joined(separator: ": ")) } label: { Label("Copy Error", systemImage: "doc.on.doc") }
+        }
+    }
+}
+
+// MARK: Models
+
+/// Model providers on their own keys: what each can call, context and output
+/// limits, prices per million tokens where the API gives them, and spend.
+struct ModelsView: View {
+    @Environment(AppModel.self) var model
+    @AppStorage("models.tab") private var tab = ""
+    @StateObject private var query = Box("")
+
+    var providers: [JSON] { model.models["providers"].array }
+    var current: JSON { providers.first { $0["id"].string == tab } ?? providers.first ?? .null }
+    var shown: [JSON] {
+        let q = query.v.trimmingCharacters(in: .whitespaces).lowercased()
+        let all = current["models"].array
+        return q.isEmpty ? all : all.filter { "\($0["id"].string) \($0["name"].string)".lowercased().contains(q) }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            PageHeader(title: "Models", subtitle: current.isNull ? "" : "\(current["models"].array.count) models", icon: "cpu") {
+                if providers.count > 1 {
+                    SlidingTabs(tabs: providers.map { .init(id: $0["id"].string, label: $0["name"].string, count: $0["models"].array.count) },
+                                selection: Binding(get: { current["id"].string }, set: { tab = $0 }))
+                }
+                if model.models["configured"].bool { SearchField(placeholder: "Filter models", text: $query.v).frame(width: 200) }
+                IconButton(icon: "arrow.clockwise", help: "Refresh", spinning: model.refreshing.contains("models")) { Task { await model.load("models", refresh: true) } }
+            }
+            if let e = model.errors["models"], !e.isEmpty { ErrorBar(text: e) }
+            if let e = current["error"].nonEmpty { ErrorBar(text: "\(current["name"].string): \(e)") }
+            if model.models.isNull {
+                EmptyState(icon: "cpu", title: model.loading.contains("models") ? "Loading models…" : "Nothing loaded")
+            } else if !model.models["configured"].bool {
+                SourceSetup(kind: .models, how: "Paste an OpenRouter key (openrouter.ai › Settings › Keys) as OPENROUTER_KEY for every model with its context, prices and your spend, and an Anthropic API key (console.anthropic.com) as ANTHROPIC_KEY for the Claude models it can call. Either is enough.")
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
+                        if !current["account"].isNull { AccountStrip(a: current["account"]) }
+                        Section {
+                            if shown.isEmpty {
+                                EmptyState(icon: "magnifyingglass", title: query.v.isEmpty ? "No models" : "No model matches").frame(height: 200)
+                            }
+                            ForEach(shown, id: \.self) { ModelRow(m: $0) }
+                        } header: {
+                            GroupHeader(title: current["id"].string == "anthropic" ? "Models · prices aren't in Anthropic's API" : "Models · $ per 1M tokens, in / out", count: shown.count)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Spend and limits for one key, as a row of figures.
+struct AccountStrip: View {
+    let a: JSON
+    var cells: [(String, String)] {
+        let usd = { (j: JSON) -> String? in j.isNull ? nil : String(format: "$%.2f", j.double) }
+        var out: [(String, String)] = []
+        if let v = usd(a["spentDay"]) { out.append(("Today", v)) }
+        if let v = usd(a["spentWeek"]) { out.append(("This week", v)) }
+        if let v = usd(a["spentMonth"]) { out.append(("This month", v)) }
+        if let v = usd(a["spent"]) { out.append(("All time", v)) }
+        if let v = usd(a["remaining"]), let l = usd(a["limit"]) { out.append(("Key limit left", "\(v) of \(l)")) }
+        if let v = usd(a["balance"]) { out.append(("Credits", v)) }
+        return out
+    }
+    var body: some View {
+        HStack(alignment: .top, spacing: 28) {
+            ForEach(cells, id: \.0) { c in
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(c.0).font(T.ui(11.5)).foregroundStyle(T.text3)
+                    Text(verbatim: c.1).font(T.mono(14, .medium)).foregroundStyle(T.text)
+                }
+            }
+            Spacer(minLength: 0)
+            if let l = a["label"].nonEmpty { Chip(text: l, icon: "key", mono: true) }
+            if a["freeTier"].bool { Chip(text: "Free tier") }
+        }
+        .padding(.horizontal, 20).padding(.vertical, 14)
+    }
+}
+
+struct ModelRow: View {
+    let m: JSON
+    var price: String {
+        guard !m["input"].isNull, !m["output"].isNull else { return "" }
+        if m["input"].double == 0 && m["output"].double == 0 { return "free" }
+        let f = { (d: Double) in d >= 10 || d.rounded() == d ? String(format: "%.0f", d) : String(format: "%.2f", d) }
+        return "$\(f(m["input"].double)) / $\(f(m["output"].double))"
+    }
+    var body: some View {
+        HoverRow(height: 44) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(m["name"].string).font(T.ui(13, .medium)).foregroundStyle(T.text).lineLimit(1)
+                    Text(m["id"].string).font(T.mono(11)).foregroundStyle(T.text3).lineLimit(1).truncationMode(.middle)
+                }
+                Spacer(minLength: 8)
+                ForEach(m["capabilities"].array.prefix(3), id: \.self) { Chip(text: $0.string) }
+                if let mod = m["modality"].nonEmpty, mod != "text->text" { Chip(text: mod, mono: true) }
+                Text(verbatim: m["context"].int > 0 ? Fmt.tokens(m["context"].int) : "")
+                    .font(T.mono(11.5)).foregroundStyle(T.text2).frame(width: 52, alignment: .trailing).help("Context window, tokens")
+                Text(verbatim: m["maxOutput"].int > 0 ? Fmt.tokens(m["maxOutput"].int) : "")
+                    .font(T.mono(11.5)).foregroundStyle(T.text3).frame(width: 48, alignment: .trailing).help("Most output tokens per reply")
+                Text(verbatim: price).font(T.mono(11.5)).foregroundStyle(T.text2).frame(width: 96, alignment: .trailing).help("$ per million tokens, input / output")
+            }
+        }
+        .onTapGesture { openURL(m["url"].string) }
+        .contextMenu {
+            Button { copyToPasteboard(m["id"].string) } label: { Label("Copy Model ID", systemImage: "doc.on.doc") }
+            Button { openURL(m["url"].string) } label: { Label("Open Model Page", systemImage: "arrow.up.right") }
         }
     }
 }

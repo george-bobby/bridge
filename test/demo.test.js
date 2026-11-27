@@ -45,7 +45,7 @@ test("demo serves fixture PRs, Linear sub-issues and dev servers", async () => {
   assert.ok((await get("/api/sources/ports")).servers.length >= 1);
 });
 
-test("demo serves Vercel, incident.io, Granola and Datadog fixtures", async () => {
+test("demo serves Vercel, incident.io, Granola, Datadog and model provider fixtures", async () => {
   const v = await get("/api/sources/vercel");
   assert.ok(v.configured && v.deployments.some((d) => d.state === "building") && v.deployments.some((d) => d.target === "production"));
   const inc = await get("/api/sources/incidents");
@@ -56,6 +56,8 @@ test("demo serves Vercel, incident.io, Granola and Datadog fixtures", async () =
   assert.ok(note.note.summary.length > 0 && note.note.attendees.length > 0);
   const dd = await get("/api/sources/datadog");
   assert.ok(dd.configured && dd.monitors.some((m) => m.status === "alert") && dd.issues.length > 0);
+  const md = await get("/api/sources/models");
+  assert.ok(md.configured && md.providers.length === 2 && md.providers[0].account.spent > 0 && md.providers[1].models[0].context > 0);
 });
 
 test("demo sessions cover the board, and the pending question survives boot", async () => {
