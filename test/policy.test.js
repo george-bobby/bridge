@@ -100,6 +100,30 @@ test("archive, stop and rename (bridge archive|unarchive|stop|rename) are an orc
   assert.equal(as("orchestrator", "/api/runs/t-1/answer"), "deny", "the rest of the API stays the app's");
 });
 
+test("bypass false positives: curl flag values, variables, the session's own local server", () => {
+  // Each of these raised an Allow/Deny card on a "Bypass permissions" chat.
+  const own = { policy: { ...DEFAULT_POLICY }, ownServer: (port) => port === "4400" || port === "4433" };
+  const v = (c, o = own) => (check("Bash", { command: c }, o) || { decision: "pass" }).decision;
+  const scratch = `H='Host: 127.0.0.1:4400'; curl -s -H "$H" -X POST http://127.0.0.1:4400/api/servers/1/stop`;
+  assert.equal(v(scratch), "pass", "a server this checkout runs");
+  assert.equal(v("curl -s -X POST localhost:4433/api/memory/approve -H 'content-type: application/json' -d '{}'"), "pass");
+  assert.equal(v(scratch, P), "ask", "without the lookup a local API write still asks");
+  assert.equal(v("curl -X POST http://localhost:39999/api/login -d x"), "ask", "someone else's local API still asks");
+  assert.equal(bash(scratch).reason.includes("$H"), false, "a -H value is not the URL");
+  // A header or write-out value held in a variable is not a URL in a variable.
+  assert.equal(verdict(`curl -H "$AUTH" -w '%{http_code}' -X POST http://localhost:3000/login -d x`), "pass");
+  // Variables set earlier on the line resolve to where the request goes.
+  const port = require("../server/env").port;
+  assert.equal(verdict(`P=http://127.0.0.1:${port}/api/config; curl -XPOST $P -d x`), "deny");
+  assert.equal(verdict(`P="https://hooks.slack.com/x"; curl -XPOST "$P" -d x`), "ask");
+  assert.equal(verdict(`curl -XPOST "$UNSET" -d x`), "ask", "an unknown variable is still an outward write");
+  // Flags with no value must not swallow the URL after them.
+  assert.equal(verdict("curl -i -X POST https://hooks.slack.com/x -d x"), "ask");
+  assert.equal(verdict("curl -O -X POST https://example.com/x -d x"), "ask");
+  // The hard gates are unchanged.
+  for (const ask of ["git push --force-with-lease origin HEAD", "gh pr merge 3 --merge", "git stash drop"]) assert.equal(verdict(ask), "ask", ask);
+});
+
 test("gh: PR workflow passes, merges and issue writes ask, review replies follow policy", () => {
   for (const ok of ["gh pr create --fill", "gh pr edit 12 --body x", "gh pr view 12", "gh api repos/o/r/pulls/12", "gh pr comment 12 -b hi", "gh api -X POST repos/o/r/pulls/12/comments/9/replies -f body=x"]) {
     assert.equal(verdict(ok), "pass", ok);
