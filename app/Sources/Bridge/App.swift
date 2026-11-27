@@ -390,18 +390,13 @@ struct Logo: View {
         // Heavier strokes and no hangers at sidebar sizes, as the icon does at 16/32px.
         let small = size < 24
         ZStack {
-            shape.fill(LinearGradient(stops: [.init(color: Color(red: 0.54, green: 0.56, blue: 0.97), location: 0),
-                                              .init(color: T.accent, location: 0.38),
-                                              .init(color: Color(red: 0.23, green: 0.17, blue: 0.61), location: 0.78),
-                                              .init(color: Color(red: 0.14, green: 0.09, blue: 0.37), location: 1)],
+            shape.fill(LinearGradient(colors: [.white, Color(red: 0.94, green: 0.94, blue: 0.97)],
                                       startPoint: UnitPoint(x: 0.15, y: 0), endPoint: UnitPoint(x: 0.85, y: 1)))
-            shape.fill(RadialGradient(colors: [.white.opacity(0.26), .clear], center: UnitPoint(x: 0.5, y: -0.1), startRadius: 0, endRadius: size * 0.85))
             BridgeMark(weight: small ? 1.35 : 1, hangers: !small)
                 .scale(small ? 1.15 : 1, anchor: UnitPoint(x: 0.5, y: 0.55))
-                .fill(LinearGradient(colors: [.white, Color(red: 0.89, green: 0.89, blue: 1)], startPoint: .top, endPoint: .bottom))
-                .shadow(color: Color(red: 0.07, green: 0.04, blue: 0.25).opacity(0.45), radius: size * 0.03, y: size * 0.015)
+                .fill(LinearGradient(colors: [Color(red: 0.48, green: 0.51, blue: 0.94), T.accent, Color(red: 0.23, green: 0.17, blue: 0.61)], startPoint: .top, endPoint: .bottom))
         }
-        .overlay(shape.strokeBorder(LinearGradient(colors: [.white.opacity(0.35), .white.opacity(0.04), .black.opacity(0.15)], startPoint: .top, endPoint: .bottom), lineWidth: max(0.5, size * 0.012)))
+        .overlay(shape.strokeBorder(Color.black.opacity(0.08), lineWidth: max(0.5, size * 0.012)))
         .frame(width: size, height: size)
     }
 }

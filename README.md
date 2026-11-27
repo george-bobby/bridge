@@ -20,9 +20,13 @@ watch and steer all of it.
 
 - **A board of sessions** that move on their own: Backlog, In Progress, Needs You, In Review, Done.
 - **Chats like a chat app**: streaming, a stop button, selectable text, inline diffs, tool output, Allow/Deny cards.
-- **Task progress**: the agent's to-do list as a ticking `3/10 tasks` pill and a section in the details panel.
+- **Split panes**: chats, diffs, browser and terminal tabs side by side; drag a session or tab onto a pane.
+- **Terminals built in**: a chat's Terminal tab resumes the agent's session; a VS Code-style panel (⌃`) under every page, with VS Code key bindings.
+- **Task progress**: the agent's to-do list as a ticking `3/10 tasks` pill, plus live subagents and background commands you can open or stop.
+- **MCP servers** for every agent in one Settings pane: add, edit, toggle per project, see each server's tools.
 - **Import chats** you had in Claude Code, Codex, Cursor or Devin; each becomes a worker that resumes the same session.
 - **Open anywhere**: one click to Cursor, VS Code, Finder, GitHub, Linear, or the Slack thread its Linear issue links.
+- **Archive, don't delete**: done chats leave the sidebar and board and come back from Sessions › Archived.
 - **GitHub, Linear and Slack**, cross-linked to the sessions working on them.
 - **An orchestrator per project** that writes briefs, spawns workers and relays what they report.
 - **You stay in control**: a guard hook turns force-pushes, Slack posts, ticket and PR writes into exact-payload approvals.
@@ -75,7 +79,7 @@ New task ── Slack link ──► worker running the Slack pipeline skill
 - **Workers** run headless in their own worktree with a chat you can follow up in. One that changes code keeps a short `report.md` (status, TL;DR, open questions, action requests); a question just gets an answer.
 - **Outcomes**: the server notices when a worker reports, changes code without a report, stalls, dies or hits a usage limit, and puts what needs you in the Inbox.
 - **Imported chats** keep their original folder and agent session; Bridge never removes a checkout it didn't create.
-- **Capacity**: 3 workers at once, 2 per repo by default; extra tasks queue.
+- **Capacity**: no cap; every task starts a worker right away, each in its own worktree.
 
 ## Safety
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env swift
 //
 // Renders Bridge's app icon: a macOS-style squircle (824pt body on a 1024
-// canvas, the standard icon grid) with an indigo gradient and a bridge mark.
+// canvas, the standard icon grid): a white body and an indigo bridge mark.
 //
 //   swift scripts/icon.swift [out.png]          1024px PNG (default app/icon.png)
 //   swift scripts/icon.swift --iconset DIR      every iconutil size, each drawn at its own
@@ -58,19 +58,17 @@ func render(px: Int) -> CGImage {
 
     // Drop shadow beneath the body (the grid leaves room for it).
     ctx.saveGState()
-    ctx.setShadow(offset: CGSize(width: 0, height: -12 * k), blur: 24 * k, color: rgb(0x000000, 0.30))
-    ctx.addPath(shape); ctx.setFillColor(rgb(0x2A2370)); ctx.fillPath()
+    ctx.setShadow(offset: CGSize(width: 0, height: -12 * k), blur: 24 * k, color: rgb(0x000000, 0.22))
+    ctx.addPath(shape); ctx.setFillColor(rgb(0xFFFFFF)); ctx.fillPath()
     ctx.restoreGState()
 
-    // Body: lit indigo top-left to deep violet bottom-right, a soft top glow,
-    // and a darker band under the deck like water under the bridge.
+    // Body: white at the top easing to a faint cool grey at the bottom, with a
+    // hint of indigo under the deck like water under the bridge.
     ctx.saveGState()
     ctx.addPath(shape); ctx.clip()
-    let base = CGGradient(colorsSpace: space, colors: [rgb(0x8A8FF7), rgb(0x5E6AD2), rgb(0x3B2C9C), rgb(0x24185E)] as CFArray, locations: [0, 0.38, 0.78, 1])!
+    let base = CGGradient(colorsSpace: space, colors: [rgb(0xFFFFFF), rgb(0xFBFBFE), rgb(0xEFEFF7)] as CFArray, locations: [0, 0.5, 1])!
     ctx.drawLinearGradient(base, start: U(0.15, 0), end: U(0.85, 1), options: [])
-    let glow = CGGradient(colorsSpace: space, colors: [rgb(0xFFFFFF, 0.28), rgb(0xFFFFFF, 0)] as CFArray, locations: [0, 1])!
-    ctx.drawRadialGradient(glow, startCenter: U(0.5, -0.1), startRadius: 0, endCenter: U(0.5, -0.1), endRadius: body * 0.85, options: [])
-    let water = CGGradient(colorsSpace: space, colors: [rgb(0x000000, 0), rgb(0x0A0630, 0.32)] as CFArray, locations: [0, 1])!
+    let water = CGGradient(colorsSpace: space, colors: [rgb(0x5E6AD2, 0), rgb(0x5E6AD2, 0.08)] as CFArray, locations: [0, 1])!
     ctx.drawLinearGradient(water, start: U(0.5, Mark.deckY), end: U(0.5, 1), options: [])
     ctx.restoreGState()
 
@@ -91,20 +89,20 @@ func render(px: Int) -> CGImage {
         stroke(Mark.hanger) { $0.move(to: U(Mark.archCX + dx, top)); $0.addLine(to: U(Mark.archCX + dx, Mark.deckY)) }
     }
     ctx.saveGState()
-    ctx.setShadow(offset: CGSize(width: 0, height: -10 * k), blur: 24 * k, color: rgb(0x120A40, 0.5))
+    ctx.setShadow(offset: CGSize(width: 0, height: -8 * k), blur: 20 * k, color: rgb(0x2A2370, 0.28))
     ctx.beginTransparencyLayer(auxiliaryInfo: nil)
     ctx.addPath(m); ctx.clip(using: .winding)
-    let ink = CGGradient(colorsSpace: space, colors: [rgb(0xFFFFFF), rgb(0xE4E3FF)] as CFArray, locations: [0, 1])!
+    let ink = CGGradient(colorsSpace: space, colors: [rgb(0x7B82F0), rgb(0x5E6AD2), rgb(0x3B2C9C)] as CFArray, locations: [0, 0.5, 1])!
     ctx.drawLinearGradient(ink, start: U(0.5, 0.3), end: U(0.5, Mark.pierBottom + 0.05), options: [])
     ctx.endTransparencyLayer()
     ctx.restoreGState()
 
-    // Rim: bright along the top edge, faintly dark along the bottom.
+    // Rim: a hairline that keeps the white body visible on light backgrounds.
     if px >= 64 {
         ctx.saveGState()
         ctx.addPath(shape); ctx.clip()
         ctx.addPath(shape); ctx.setLineWidth(5); ctx.replacePathWithStrokedPath(); ctx.clip()
-        let rim = CGGradient(colorsSpace: space, colors: [rgb(0xFFFFFF, 0.38), rgb(0xFFFFFF, 0.04), rgb(0x000000, 0.18)] as CFArray, locations: [0, 0.5, 1])!
+        let rim = CGGradient(colorsSpace: space, colors: [rgb(0x000000, 0.04), rgb(0x000000, 0.06), rgb(0x000000, 0.12)] as CFArray, locations: [0, 0.5, 1])!
         ctx.drawLinearGradient(rim, start: U(0.5, 0), end: U(0.5, 1), options: [])
         ctx.restoreGState()
     }
