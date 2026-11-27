@@ -96,6 +96,13 @@ test("Default is first and fixed; real projects reorder behind it", async () => 
   const after = await ids();
   assert.deepStrictEqual(after.slice(0, 2), ["default", last]);
   assert.strictEqual((await post("/api/projects/default", { index: 1 })).status, 400, "Default can't move");
+  // …but it can be renamed and pointed at another folder (any folder, not only a repo).
+  const renamed = await post("/api/projects/default", { name: "General", path: tmp });
+  assert.deepStrictEqual([renamed.project.name, renamed.project.path, renamed.project.root], ["General", tmp, true]);
+  assert.strictEqual((await post("/api/projects/default", { path: path.join(tmp, "nope") })).status, 400);
+  assert.strictEqual((await list())[0].name, "General");
+  await post("/api/projects/default", { name: "" });
+  assert.strictEqual((await list())[0].name, "Default", "an empty name goes back to Default");
   assert.strictEqual((await post("/api/projects/default/orchestrator")).runId, "orchestrator");
   await post(`/api/projects/${last}`, { index: real.length - 1 });
   assert.deepStrictEqual(await ids(), before);

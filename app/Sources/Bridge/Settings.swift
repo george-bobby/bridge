@@ -456,7 +456,7 @@ struct EnvField: View {
                 Chip(text: "Set", dot: T.green)
                 Button("Replace") { withAnimation(M.snappy) { _ = env.replacing.insert(key) } }.buttonStyle(LButton())
                 Button { env.edits[key] = "" } label: { Image(systemName: "trash").font(.system(size: 11)) }
-                    .buttonStyle(LButton(danger: true)).help("Remove from .env")
+                    .buttonStyle(LButton(danger: true, square: true)).help("Remove from .env")
             }
         } else {
             HStack(spacing: 8) {
@@ -855,17 +855,12 @@ struct ProjectSettings: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             SSection(title: "Projects", detail: "Repositories in the sidebar; each gets its own orchestrator") {
-                ForEach(model.projects.filter { !$0.root && Prefs.hit(q, $0.name, $0.path, "project repository") }) { p in ProjectRow(project: p) }
+                ForEach(model.projects.filter { Prefs.hit(q, $0.name, $0.path, "project repository default") }) { p in ProjectRow(project: p) }
                 if !model.projects.contains(where: { !$0.root }) && Prefs.hit(q, "project add") {
                     SRow(title: "No projects yet", detail: "Add a git checkout to start sessions in it") { EmptyView() }
                 }
             } trailing: {
                 Button { model.addProject() } label: { Label("Add project", systemImage: "plus") }.buttonStyle(LButton())
-            }
-            SSection(title: "Default", detail: "Sessions that aren't in any project, and Default's orchestrator, run in this folder (your home folder when empty)") {
-                ForEach(env.rows(Prefs.defaultKeys, q), id: \.self) { EnvField(env: env, e: $0) }
-            } trailing: {
-                if let p = model.projects.first(where: \.root) { Text(p.shortPath).font(T.mono(11.5)).foregroundStyle(T.text3) }
             }
             SSection(title: "Pipeline repository", detail: "Where the Slack pipeline works, and the project Bridge seeds on first run. Stored in .env") {
                 ForEach(env.rows(Prefs.repoKeys, q), id: \.self) { EnvField(env: env, e: $0) }
@@ -882,35 +877,29 @@ struct ProjectRow: View {
     let project: Project
 
     var body: some View {
-        SRow(title: project.name, detail: project.path, icon: AnyView(
-            Image(systemName: "folder.fill").font(.system(size: 13)).foregroundStyle(T.accent)
-                .frame(width: 28, height: 28).background(RoundedRectangle(cornerRadius: 7).fill(T.accentSoft))
-        )) {
+        SRow(title: project.name, detail: project.root ? "\(project.path) · sessions that aren't in a project" : project.path, icon: AnyView(ProjectBadge(project: project, size: 28))) {
             HStack(spacing: 6) {
                 Button("Orchestrator") { model.openOrchestrator(project.id) }.buttonStyle(LButton())
-                Menu {
-                    Button { model.compose(in: project.id) } label: { Label("New Task…", systemImage: "square.and.pencil") }
-                    Button { NSWorkspace.shared.open(URL(fileURLWithPath: project.path)) } label: { Label("Reveal in Finder", systemImage: "folder") }
-                    Divider()
-                    Button(role: .destructive) { remove() } label: { Label("Remove Project…", systemImage: "trash") }
-                } label: {
-                    Image(systemName: "ellipsis").font(.system(size: 12, weight: .semibold)).foregroundStyle(T.text2)
-                        .frame(width: 28, height: 28)
-                        .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(T.raised))
-                        .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).stroke(T.line, lineWidth: 1))
-                }
-                .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+                MoreMenu { ProjectActions(project: project) }
             }
         }
     }
+}
 
-    func remove() {
-        let a = NSAlert()
-        a.messageText = "Remove \(project.name) from Bridge?"
-        a.informativeText = "Its sessions and files stay; it just leaves the sidebar."
-        a.addButton(withTitle: "Remove")
-        a.addButton(withTitle: "Cancel")
-        if a.runModal() == .alertFirstButtonReturn { Task { await model.removeProject(project.id) } }
+/// Rename, folder and removal for a project: the Settings row's menu and the
+/// sidebar's context menu share these.
+struct ProjectActions: View {
+    @Environment(AppModel.self) var model
+    let project: Project
+    var body: some View {
+        Button { model.compose(in: project.id) } label: { Label("New Task…", systemImage: "square.and.pencil") }
+        Button { model.renameProject(project) } label: { Label("Rename…", systemImage: "pencil") }
+        if project.root { Button { model.chooseRootFolder() } label: { Label("Change Folder…", systemImage: "folder.badge.gearshape") } }
+        Button { NSWorkspace.shared.open(URL(fileURLWithPath: project.path)) } label: { Label("Reveal in Finder", systemImage: "folder") }
+        if !project.root {
+            Divider()
+            Button(role: .destructive) { model.confirmRemoveProject(project) } label: { Label("Remove Project…", systemImage: "trash") }
+        }
     }
 }
 
@@ -1019,7 +1008,7 @@ struct DevelopSettings: View {
                         } else {
                             Button("Add as Project") { Task { await model.addProject(path: root, name: "bridge") } }.buttonStyle(LButton()).disabled(root.isEmpty)
                         }
-                        Button { NSWorkspace.shared.open(URL(fileURLWithPath: root)) } label: { Image(systemName: "folder") }.buttonStyle(LButton()).disabled(root.isEmpty).help("Reveal in Finder")
+                        Button { NSWorkspace.shared.open(URL(fileURLWithPath: root)) } label: { Image(systemName: "folder") }.buttonStyle(LButton(square: true)).disabled(root.isEmpty).help("Reveal in Finder")
                     }
                 }
             }

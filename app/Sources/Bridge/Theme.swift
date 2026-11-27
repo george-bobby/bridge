@@ -367,66 +367,166 @@ extension PageHeader where Actions == EmptyView {
     }
 }
 
-/// Small borderless toolbar button with an SF Symbol.
+// MARK: - Buttons
+//
+// The style guide: every clickable control is one of these, so heights, corner
+// radius, hover, press and disabled look the same everywhere.
+//
+//  • LButton(.primary | .secondary | .danger | .ghost): text actions, with an
+//    optional leading icon (`Label`). Regular is 28pt tall, `small` 24pt.
+//  • IconButton: an icon on its own, ghost (fills on hover). 28pt in page and
+//    panel headers, 24pt inside rows, panes and the sidebar, 20pt inside dense
+//    property rows only.
+//  • MoreMenu: the "⋯" menu, drawn exactly like an IconButton.
+//  • LinkButton: a quiet text link ("All", "Show 3 more").
+//  • PickerChip (Composer.swift): a ghost button that shows a value and opens a picker.
+//
+// Metrics live in `B`; don't hand-roll a frame, radius or hover fill for a button.
+
+enum B {
+    static let regular: CGFloat = 28
+    static let small: CGFloat = 24
+    static let mini: CGFloat = 20
+    /// Corner radius for a control of `height`: 7pt at 28, scaling down with it.
+    static func radius(_ height: CGFloat) -> CGFloat { (height / 4).rounded() }
+    /// SF Symbol point size for an icon button of `size`.
+    static func glyph(_ size: CGFloat) -> CGFloat { (size * 13 / 28).rounded() }
+    /// How far a button sinks while pressed.
+    static let press: CGFloat = 0.94
+}
+
+/// An icon-only button: ghost, fills on hover, `on` for a selected state.
 struct IconButton: View {
     let icon: String
     var help: String = ""
     var spinning = false
-    var size: CGFloat = 28
+    var size: CGFloat = B.regular
     var on = false
     var tint: Color? = nil
     let action: () -> Void
-    @StateObject private var hover = Box(false)
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: icon)
-                .font(.system(size: size * 13 / 28, weight: .medium))
-                .foregroundStyle(tint ?? (hover.v || on ? T.text : T.text2))
-                // A symbol effect stops as soon as `spinning` goes false; a
-                // repeatForever rotation could keep turning after the load ended.
-                .symbolEffect(.rotate, options: .repeat(.continuous), isActive: spinning)
-                .frame(width: size, height: size)
-                .background(RoundedRectangle(cornerRadius: size / 4, style: .continuous).fill(hover.v ? T.hover : on ? T.selected : .clear))
-                .contentShape(Rectangle())
+            IconFace(icon: icon, size: size, on: on, tint: tint, spinning: spinning)
         }
-        .buttonStyle(Pressable(scale: 0.9))
+        .buttonStyle(Pressable(scale: B.press))
         .help(help)
+    }
+}
+
+/// What an IconButton draws, for controls that aren't plain Buttons (menus, drags).
+struct IconFace: View {
+    let icon: String
+    var size: CGFloat = B.regular
+    var on = false
+    var tint: Color? = nil
+    var spinning = false
+    @Environment(\.isEnabled) private var enabled
+    @StateObject private var hover = Box(false)
+
+    var body: some View {
+        Image(systemName: icon)
+            .font(.system(size: B.glyph(size), weight: .medium))
+            .foregroundStyle(!enabled ? T.text3.opacity(0.5) : tint ?? (hover.v || on ? T.text : T.text2))
+            // A symbol effect stops as soon as `spinning` goes false; a
+            // repeatForever rotation could keep turning after the load ended.
+            .symbolEffect(.rotate, options: .repeat(.continuous), isActive: spinning)
+            .frame(width: size, height: size)
+            .background(RoundedRectangle(cornerRadius: B.radius(size), style: .continuous).fill(hover.v && enabled ? T.hover : on ? T.selected : .clear))
+            .contentShape(Rectangle())
+            .hoverBox(hover)
+    }
+}
+
+/// The "⋯" menu, looking like an IconButton.
+struct MoreMenu<Items: View>: View {
+    var help = "More"
+    var size: CGFloat = B.regular
+    var icon = "ellipsis"
+    @ViewBuilder let items: () -> Items
+    var body: some View {
+        Menu { items() } label: { IconFace(icon: icon, size: size) }
+            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+            .help(help)
+    }
+}
+
+/// A quiet text link: tertiary text that brightens on hover.
+struct LinkButton: View {
+    let title: String
+    let action: () -> Void
+    @StateObject private var hover = Box(false)
+    init(_ title: String, action: @escaping () -> Void) { self.title = title; self.action = action }
+    var body: some View {
+        Button(action: action) {
+            Text(title).font(T.ui(12, .medium)).foregroundStyle(hover.v ? T.text : T.text3).contentShape(Rectangle())
+        }
+        .buttonStyle(Pressable(scale: 0.97))
         .hoverBox(hover)
     }
 }
 
-/// Linear's buttons: compact, 6pt radius, either filled accent or hairline.
+/// Text buttons, Linear-style: compact, one radius, filled accent or hairline.
 struct LButton: ButtonStyle {
-    var primary = false
-    var danger = false
+    enum Kind { case primary, secondary, danger, ghost }
+    var kind: Kind = .secondary
+    var small = false
+    /// Icon only: as wide as it is tall.
+    var square = false
+    init(kind: Kind = .secondary, small: Bool = false, square: Bool = false) { self.kind = kind; self.small = small; self.square = square }
+    init(primary: Bool = false, danger: Bool = false, small: Bool = false, square: Bool = false) {
+        kind = primary ? .primary : danger ? .danger : .secondary
+        self.small = small
+        self.square = square
+    }
     func makeBody(configuration: Configuration) -> some View {
-        LButtonBody(label: configuration.label, pressed: configuration.isPressed, primary: primary, danger: danger)
+        LButtonBody(label: configuration.label, pressed: configuration.isPressed, kind: kind, height: small ? B.small : B.regular, square: square)
     }
 }
 
 private struct LButtonBody<Label: View>: View {
     let label: Label
     let pressed: Bool
-    let primary: Bool
-    let danger: Bool
+    let kind: LButton.Kind
+    let height: CGFloat
+    let square: Bool
     @Environment(\.isEnabled) private var enabled
     @StateObject private var hover = Box(false)
 
+    var fill: Color {
+        switch kind {
+        case .primary: return T.accent
+        case .ghost: return hover.v ? T.hover : .clear
+        default: return hover.v ? T.hover : T.raised
+        }
+    }
+
     var body: some View {
+        let shape = RoundedRectangle(cornerRadius: B.radius(height), style: .continuous)
         label
-            .font(T.ui(12.5, .medium))
-            .foregroundStyle(primary ? .white : danger ? T.red : T.text)
-            .padding(.horizontal, 12)
-            .frame(height: 30)
-            .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(primary ? T.accent : hover.v ? T.hover : T.raised))
-            .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(.white.opacity(primary && hover.v ? 0.08 : 0)))
-            .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).stroke(primary ? Color.clear : T.line, lineWidth: 1))
+            .font(T.ui(height < B.regular ? 11.5 : 12.5, .medium))
+            .labelStyle(ButtonLabel())
+            .foregroundStyle(kind == .primary ? .white : kind == .danger ? T.red : T.text)
+            .padding(.horizontal, square ? 0 : height < B.regular ? 9 : 12)
+            .frame(width: square ? height : nil, height: height)
+            .background(shape.fill(fill))
+            .overlay(shape.fill(.white.opacity(kind == .primary && hover.v ? 0.08 : 0)))
+            .overlay(shape.stroke(kind == .primary || kind == .ghost ? Color.clear : T.line, lineWidth: 1))
             .scaleEffect(pressed ? 0.97 : 1)
             .opacity(enabled ? (pressed ? 0.85 : 1) : 0.45)
             .contentShape(Rectangle())
             .hoverBox(hover)
             .animation(pressed ? .easeOut(duration: 0.08) : M.pop, value: pressed)
+    }
+}
+
+/// Icon and title in a button, spaced and sized the same everywhere.
+struct ButtonLabel: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 6) {
+            configuration.icon.font(.system(size: 11, weight: .semibold))
+            configuration.title
+        }
     }
 }
 

@@ -222,9 +222,9 @@ struct PickerChip<Lead: View>: View {
                 .rotationEffect(.degrees(open ? 180 : 0))
         }
         .foregroundStyle(warn ? T.orange : T.text2)
-        .padding(.horizontal, 8).frame(height: 26)
-        .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(open ? T.selected : hover.v ? T.hover : .clear))
-        .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).stroke(warn ? T.orange.opacity(0.35) : .clear, lineWidth: 1))
+        .padding(.horizontal, 8).frame(height: B.regular)
+        .background(RoundedRectangle(cornerRadius: B.radius(B.regular), style: .continuous).fill(open ? T.selected : hover.v ? T.hover : .clear))
+        .overlay(RoundedRectangle(cornerRadius: B.radius(B.regular), style: .continuous).stroke(warn ? T.orange.opacity(0.35) : .clear, lineWidth: 1))
         .contentShape(Rectangle())
         .hoverBox(hover)
         .animation(M.snappy, value: open)
