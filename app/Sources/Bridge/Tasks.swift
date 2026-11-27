@@ -622,7 +622,7 @@ struct OutputPane: View {
             }
             .scrollIndicators(.never)
             .frame(minHeight: 160, maxHeight: 520)
-            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.black.opacity(0.35)))
+            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(T.codeBg))
             .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(T.line, lineWidth: 1))
             .onChange(of: text) { if running { proxy.scrollTo("bottom", anchor: .bottom) } }
             .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }

@@ -91,7 +91,7 @@ final class RichTextView: NSTextView {
         usesFontPanel = false
         isAutomaticLinkDetectionEnabled = false
         selectedTextAttributes = [.backgroundColor: NT.accent.withAlphaComponent(0.38)]
-        linkTextAttributes = [.foregroundColor: NSColor(srgbRed: 0.52, green: 0.58, blue: 0.98, alpha: 1), .cursor: NSCursor.pointingHand]
+        linkTextAttributes = [.foregroundColor: NT.link, .cursor: NSCursor.pointingHand]
         setContentHuggingPriority(.defaultLow, for: .horizontal)
     }
 

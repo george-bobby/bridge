@@ -1218,7 +1218,7 @@ private struct ComposerFrame: ViewModifier {
         content
             .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(T.raised))
             .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(focused ? T.accent.opacity(0.6) : T.line, lineWidth: 1))
-            .shadow(color: focused ? T.accent.opacity(0.18) : .black.opacity(0.2), radius: focused ? 10 : 6, y: 2)
+            .shadow(color: focused ? T.accent.opacity(0.18) : T.shade.opacity(0.2), radius: focused ? 10 : 6, y: 2)
             .animation(M.hover, value: focused)
             .padding(.horizontal, 32).padding(.bottom, 20).padding(.top, 8)
             .frame(maxWidth: 920)
