@@ -781,12 +781,9 @@ struct CommonRulesSettings: View {
     }
 
     var editor: some View {
-        TextEditor(text: $text.v)
-            .font(T.mono(12))
-            .scrollContentBackground(.hidden)
-            .padding(12)
+        MarkdownEditor(text: $text.v, enabled: loaded.v)
             .frame(minHeight: 560)
-            .disabled(!loaded.v)
+            .padding(8)
             .opacity(loaded.v ? 1 : 0.5)
     }
 

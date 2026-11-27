@@ -369,3 +369,262 @@ enum RichMarkdown {
         return out
     }
 }
+
+// MARK: - Live Markdown editor
+
+/// Markdown source styled while it is edited — one surface, no preview tab.
+/// The storage always holds the raw source (what you type is what saves),
+/// and every edit re-applies block and inline attributes over it: a heading
+/// reads big, a fence sits in a code box and the `#`/`*`/`>` markers stay
+/// put but dimmed. The settings panes that edit Markdown (Pipeline, Common
+/// rules) share it.
+struct MarkdownEditor: NSViewRepresentable {
+    @Binding var text: String
+    var enabled = true
+    var size: CGFloat = 13
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scroll = NSScrollView()
+        let tv = MarkdownEditView()
+        tv.delegate = context.coordinator
+        tv.textStorage?.delegate = context.coordinator
+        tv.typingAttributes = MarkdownStyle.base(size)
+        scroll.documentView = tv
+        scroll.hasVerticalScroller = true
+        scroll.drawsBackground = false
+        context.coordinator.view = tv
+        context.coordinator.set(text)
+        return scroll
+    }
+
+    func updateNSView(_ scroll: NSScrollView, context: Context) {
+        context.coordinator.parent = self
+        guard let tv = scroll.documentView as? NSTextView else { return }
+        tv.isEditable = enabled
+        if tv.string != text { context.coordinator.set(text) }
+    }
+
+    final class Coordinator: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
+        var parent: MarkdownEditor
+        weak var view: MarkdownEditView?
+        private var styling = false
+        private var syncing = false
+
+        init(_ parent: MarkdownEditor) { self.parent = parent }
+
+        /// Programmatic replace (load, revert, reset) — kept off the undo stack.
+        func set(_ s: String) {
+            guard let tv = view, let ts = tv.textStorage else { return }
+            syncing = true
+            tv.undoManager?.disableUndoRegistration()
+            ts.setAttributedString(NSAttributedString(string: s))
+            tv.undoManager?.enableUndoRegistration()
+            syncing = false
+        }
+
+        func textStorage(_ ts: NSTextStorage, didProcessEditing editedMask: NSTextStorageEditActions, range: NSRange, changeInLength delta: Int) {
+            guard editedMask.contains(.editedCharacters), !styling, view?.hasMarkedText() != true else { return }
+            styling = true
+            MarkdownStyle.apply(ts, size: parent.size)
+            styling = false
+        }
+
+        func textDidChange(_ note: Notification) {
+            guard !syncing, let tv = note.object as? NSTextView else { return }
+            parent.text = tv.string
+        }
+    }
+}
+
+final class MarkdownEditView: NSTextView {
+    init() {
+        let storage = NSTextStorage()
+        let layout = NSLayoutManager()
+        storage.addLayoutManager(layout)
+        let container = NSTextContainer(size: NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
+        container.widthTracksTextView = true
+        layout.addTextContainer(container)
+        super.init(frame: .zero, textContainer: container)
+        isVerticallyResizable = true
+        isHorizontallyResizable = false
+        autoresizingMask = [.width]
+        maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        isRichText = true
+        drawsBackground = false
+        textContainerInset = NSSize(width: 5, height: 8)
+        isAutomaticQuoteSubstitutionEnabled = false
+        isAutomaticDashSubstitutionEnabled = false
+        isAutomaticTextReplacementEnabled = false
+        isAutomaticDataDetectionEnabled = false
+        isAutomaticLinkDetectionEnabled = false
+        isAutomaticTextCompletionEnabled = false
+        isAutomaticSpellingCorrectionEnabled = false
+        isContinuousSpellCheckingEnabled = false
+        isGrammarCheckingEnabled = false
+        usesFindPanel = true
+        allowsUndo = true
+        insertionPointColor = NT.text
+        selectedTextAttributes = [.backgroundColor: NT.accent.withAlphaComponent(0.38)]
+        linkTextAttributes = [.foregroundColor: NT.link, .cursor: NSCursor.pointingHand]
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var acceptsFirstResponder: Bool { true }
+}
+
+/// Attributes over the raw Markdown in an editable storage: base text for
+/// everything, then a block pass (headings, lists, quotes, code, rules) and
+/// an inline pass (code spans, bold, italic, strike, links, placeholders)
+/// per line. Ranges a construct claims are left alone by later constructs.
+enum MarkdownStyle {
+    static func base(_ size: CGFloat) -> [NSAttributedString.Key: Any] {
+        let p = NSMutableParagraphStyle()
+        p.lineSpacing = 3
+        p.paragraphSpacing = 5
+        return [.font: RichMarkdown.font(size), .foregroundColor: NT.text, .paragraphStyle: p]
+    }
+
+    private static func rx(_ p: String) -> NSRegularExpression { try! NSRegularExpression(pattern: p) }
+    private static let heading = rx(#"^ {0,3}(#{1,6})[ \t]+"#)
+    private static let bullet = rx(#"^( *)([-*+])[ \t]+"#)
+    private static let numbered = rx(#"^( *)(\d+[.)])[ \t]+"#)
+    private static let quote = rx(#"^ {0,3}>[ \t]?"#)
+    private static let rule = rx(#"^ {0,3}(-{3,}|\*{3,})[ \t]*$"#)
+    private static let codeSpan = rx(#"`[^`\n]+`"#)
+    private static let bold = rx(#"(\*\*|__)([^\n]+?)\1"#)
+    private static let italicStar = rx(#"\*([^\s*][^*\n]*?)\*"#)
+    private static let italicLine = rx(#"(?<![A-Za-z0-9_])_([^\s_][^_\n]*?)_(?![A-Za-z0-9_])"#)
+    private static let strike = rx(#"~~([^\n]+?)~~"#)
+    private static let link = rx(#"\[([^\]\n]+)\]\(([^)\n]*)\)"#)
+    private static let placeholder = rx(#"\{\{[A-Z_]+\}\}"#)
+
+    static func apply(_ ts: NSTextStorage, size: CGFloat) {
+        let ns = ts.string as NSString
+        ts.setAttributes(base(size), range: NSRange(location: 0, length: ns.length))
+        guard ns.length > 0 else { return }
+        let dim: [NSAttributedString.Key: Any] = [.foregroundColor: NT.text3]
+        var loc = 0
+        var code = NSRange(location: NSNotFound, length: 0)
+        while loc < ns.length {
+            let line = ns.lineRange(for: NSRange(location: loc, length: 0))
+            loc = NSMaxRange(line)
+            var end = line.length
+            while end > 0, [10, 13].contains(ns.character(at: line.location + end - 1)) { end -= 1 }
+            let body = NSRange(location: line.location, length: end)
+            let trimmed = ns.substring(with: body).trimmingCharacters(in: .whitespaces)
+            if code.location != NSNotFound {
+                code.length = NSMaxRange(line) - code.location
+                if trimmed.hasPrefix("```") {
+                    ts.addAttributes([.font: RichMarkdown.mono(size - 1.5), .foregroundColor: NT.text3], range: body)
+                    codeBox(ts, code, size)
+                    code.location = NSNotFound
+                } else {
+                    ts.addAttributes([.font: RichMarkdown.mono(size - 1.5), .foregroundColor: NT.text], range: body)
+                }
+                continue
+            }
+            if trimmed.isEmpty { continue }
+            if trimmed.hasPrefix("```") {
+                code = line
+                ts.addAttributes([.font: RichMarkdown.mono(size - 1.5), .foregroundColor: NT.text3], range: body)
+                continue
+            }
+            var content = body
+            if let m = heading.firstMatch(in: ts.string, range: body) {
+                let level = m.range(at: 1).length
+                ts.addAttributes(dim, range: m.range)
+                content = NSRange(location: NSMaxRange(m.range), length: NSMaxRange(body) - NSMaxRange(m.range))
+                ts.addAttribute(.font, value: RichMarkdown.font(level == 1 ? size + 5 : level == 2 ? size + 3 : size + 1, .semibold), range: content)
+                let p = NSMutableParagraphStyle()
+                p.lineSpacing = 3
+                p.paragraphSpacing = 4
+                if line.location > 0 { p.paragraphSpacingBefore = 7 }
+                ts.addAttribute(.paragraphStyle, value: p, range: line)
+            } else if let m = bullet.firstMatch(in: ts.string, range: body) ?? numbered.firstMatch(in: ts.string, range: body) {
+                let depth = min(m.range(at: 1).length / 2, 3)
+                let marker = m.range(at: 2)
+                let digits = ns.substring(with: marker).first?.isNumber == true
+                ts.addAttributes([.font: digits ? NSFont.monospacedDigitSystemFont(ofSize: size, weight: .regular) : RichMarkdown.font(size, .bold), .foregroundColor: NT.text3], range: NSRange(location: marker.location, length: NSMaxRange(m.range) - marker.location))
+                let indent = CGFloat(depth) * 18
+                let hang: CGFloat = digits ? (marker.length > 3 ? 28 : 22) : 16
+                let p = NSMutableParagraphStyle()
+                p.lineSpacing = 3
+                p.paragraphSpacing = 4
+                p.firstLineHeadIndent = indent
+                p.headIndent = indent + hang
+                p.tabStops = [NSTextTab(textAlignment: .left, location: indent + hang)]
+                ts.addAttribute(.paragraphStyle, value: p, range: line)
+                content = NSRange(location: NSMaxRange(m.range), length: NSMaxRange(body) - NSMaxRange(m.range))
+            } else if let m = quote.firstMatch(in: ts.string, range: body) {
+                ts.addAttributes(dim, range: m.range)
+                content = NSRange(location: NSMaxRange(m.range), length: NSMaxRange(body) - NSMaxRange(m.range))
+                ts.addAttribute(.foregroundColor, value: NT.text2, range: content)
+                let p = NSMutableParagraphStyle()
+                p.lineSpacing = 3
+                p.paragraphSpacing = 5
+                p.textBlocks = [RichBlock(.quote)]
+                ts.addAttribute(.paragraphStyle, value: p, range: line)
+            } else if rule.firstMatch(in: ts.string, range: body) != nil {
+                ts.addAttributes([.foregroundColor: NT.line, .strikethroughStyle: NSUnderlineStyle.single.rawValue, .strikethroughColor: NT.text3], range: body)
+                continue
+            }
+            inline(ts, content, size)
+        }
+        if code.location != NSNotFound { codeBox(ts, code, size) }
+    }
+
+    /// One rounded box around the whole fenced region, fences included —
+    /// the same block instance on every paragraph is what merges them.
+    private static func codeBox(_ ts: NSTextStorage, _ r: NSRange, _ size: CGFloat) {
+        let block = RichBlock(.code)
+        block.setWidth(size >= 13 ? 13 : 11, type: .absoluteValueType, for: .margin, edge: .maxY)
+        let p = NSMutableParagraphStyle()
+        p.lineSpacing = 2.5
+        p.textBlocks = [block]
+        ts.addAttribute(.paragraphStyle, value: p, range: r)
+    }
+
+    private static func inline(_ ts: NSTextStorage, _ r: NSRange, _ size: CGFloat) {
+        guard r.length > 0 else { return }
+        let s = ts.string
+        var claimed: [NSRange] = []
+        func free(_ m: NSTextCheckingResult) -> Bool {
+            !claimed.contains { NSIntersectionRange($0, m.range).length > 0 }
+        }
+        for m in codeSpan.matches(in: s, range: r) where free(m) {
+            claimed.append(m.range)
+            ts.addAttributes([.font: RichMarkdown.mono(size - 1), .foregroundColor: NT.text, .backgroundColor: NT.selected], range: m.range)
+        }
+        for m in bold.matches(in: s, range: r) where free(m) {
+            claimed.append(m.range)
+            ts.addAttribute(.font, value: RichMarkdown.font(size, .semibold), range: m.range(at: 2))
+            ts.addAttribute(.foregroundColor, value: NT.text3, range: m.range(at: 1))
+            ts.addAttribute(.foregroundColor, value: NT.text3, range: NSRange(location: NSMaxRange(m.range(at: 2)), length: NSMaxRange(m.range) - NSMaxRange(m.range(at: 2))))
+        }
+        for m in italicStar.matches(in: s, range: r) + italicLine.matches(in: s, range: r) where free(m) {
+            claimed.append(m.range)
+            let i = NSFontManager.shared.convert(RichMarkdown.font(size), toHaveTrait: .italicFontMask)
+            ts.addAttribute(.font, value: i, range: m.range(at: 1))
+            ts.addAttribute(.foregroundColor, value: NT.text3, range: NSRange(location: m.range.location, length: 1))
+            ts.addAttribute(.foregroundColor, value: NT.text3, range: NSRange(location: NSMaxRange(m.range) - 1, length: 1))
+        }
+        for m in strike.matches(in: s, range: r) where free(m) {
+            claimed.append(m.range)
+            ts.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: m.range(at: 1))
+            ts.addAttribute(.foregroundColor, value: NT.text3, range: NSRange(location: m.range.location, length: 2))
+            ts.addAttribute(.foregroundColor, value: NT.text3, range: NSRange(location: NSMaxRange(m.range) - 2, length: 2))
+        }
+        for m in link.matches(in: s, range: r) where free(m) {
+            claimed.append(m.range)
+            ts.addAttributes([.foregroundColor: NT.link, .underlineStyle: NSUnderlineStyle.single.rawValue], range: m.range(at: 1))
+            ts.addAttribute(.foregroundColor, value: NT.text3, range: NSRange(location: NSMaxRange(m.range(at: 1)), length: NSMaxRange(m.range) - NSMaxRange(m.range(at: 1))))
+            ts.addAttribute(.foregroundColor, value: NT.text3, range: NSRange(location: m.range.location, length: 1))
+        }
+        for m in placeholder.matches(in: s, range: r) where free(m) {
+            ts.addAttributes([.font: RichMarkdown.font(size, .semibold), .foregroundColor: NT.accent], range: m.range)
+        }
+    }
+}

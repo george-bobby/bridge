@@ -9,50 +9,24 @@ struct PipelineSettings: View {
     @StateObject private var saved = Box("")
     @StateObject private var custom = Box(false)
     @StateObject private var loaded = Box(false)
-    @StateObject private var tab = Box("edit")
     @Environment(AppModel.self) var model
 
     var dirty: Bool { text.v != saved.v }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            if q.isEmpty {
-                SlidingTabs(tabs: [
-                    .init(id: "edit", label: "Edit", icon: "pencil"),
-                    .init(id: "preview", label: "Preview", icon: "eye"),
-                ], selection: $tab.v)
-            }
-            SSection(title: "Pipeline", detail: "Markdown, sent after the task in a new session's first message (Linear, Slack, New task, bridge spawn, relaunch), for every agent. {{URL}} is the task's Linear or Slack link, {{BRIEF}} the brief's path, {{USER}} your name, {{BRIDGE}} the bridge tool. Clear it to turn it off") {
-                if Prefs.hit(q, "pipeline opening fetch new session first message linear slack plan build pr review") {
-                    if tab.v == "preview" && q.isEmpty { preview } else { editor }
-                }
-            } trailing: {
-                actions
-            }
+        SSection(title: "Pipeline", detail: "Markdown, styled as you type. Sent after the task in a new session's first message (Linear, Slack, New task, bridge spawn, relaunch), for every agent. {{URL}} is the task's Linear or Slack link, {{BRIEF}} the brief's path, {{USER}} your name, {{BRIDGE}} the bridge tool. Clear it to turn it off") {
+            if Prefs.hit(q, "pipeline opening fetch new session first message linear slack plan build pr review") { editor }
+        } trailing: {
+            actions
         }
         .task { apply(try? await API.get("/api/pipeline")) }
     }
 
     var editor: some View {
-        TextEditor(text: $text.v)
-            .font(T.mono(12))
-            .scrollContentBackground(.hidden)
-            .padding(12)
+        MarkdownEditor(text: $text.v, enabled: loaded.v)
             .frame(minHeight: 560)
-            .disabled(!loaded.v)
+            .padding(8)
             .opacity(loaded.v ? 1 : 0.5)
-    }
-
-    var preview: some View {
-        Group {
-            if text.v.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Text("Off: new sessions just read their brief.").font(T.ui(12.5)).foregroundStyle(T.text3)
-            } else {
-                MarkdownText(text: text.v)
-            }
-        }
-        .frame(maxWidth: .infinity, minHeight: 560, alignment: .topLeading)
-        .padding(16)
     }
 
     var actions: some View {
