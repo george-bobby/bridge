@@ -587,17 +587,22 @@ async function removeWorktree({ repo, worktree, force }) {
 }
 
 /** A task's title from its brief: the first line that says something, not a
- *  pasted file path (a screenshot dropped in ahead of the ask). */
+ *  pasted file path (a screenshot dropped in ahead of the ask) or the app's
+ *  `[Attached image…: path]` line. Only files: "Attached image" / "Attached file". */
 const PATH_LINE = /^["']?(?:file:\/\/|~\/|\/)\S.*\.[A-Za-z0-9]{1,5}["']?$/;
+const ATTACHED = /^\[(Attached (image|file)|Referenced session)\b.*\]$/;
+const fileLine = (l) => PATH_LINE.test(l) || ATTACHED.test(l);
 function titleFrom(text) {
   const lines = String(text || "").split("\n").map((l) => l.trim().replace(/^#+\s*/, "")).filter(Boolean);
-  const pick = lines.find((l) => !PATH_LINE.test(l)) || lines[0] || "task";
-  return pick.slice(0, 80).trim();
+  const pick = lines.find((l) => !fileLine(l));
+  if (pick) return pick.slice(0, 80).trim();
+  if (lines.some((l) => /^\[Attached image/.test(l))) return "Attached image";
+  return lines.length ? "Attached file" : "task";
 }
 
 /** A stored title that is only a path (tasks named before titleFrom) reads
  *  as its brief's first real line instead. */
-const shownTitle = (title, brief) => (PATH_LINE.test(String(title || "").trim()) && brief ? titleFrom(brief) : title || "");
+const shownTitle = (title, brief) => (fileLine(String(title || "").trim()) && brief ? titleFrom(brief) : title || "");
 
 module.exports = {
   titleFrom,

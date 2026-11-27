@@ -6,8 +6,8 @@ import SwiftUI
 // first, with a preview; importing one makes it a worker in the folder it ran
 // in, filed under the project you import it into (`model.importProject`, from
 // the New task page), and your next message carries on in the same agent
-// session (server/history.js, harness.importChat). Scoped to that project's
-// folders by default. A chat Bridge already has opens.
+// session (server/history.js, harness.importChat). Every folder by default;
+// the project chip narrows it to that project's folders. A chat Bridge already has opens.
 
 struct HistoryChat: Identifiable, Hashable {
     let j: JSON
@@ -43,8 +43,8 @@ struct ImportSheet: View {
     @StateObject private var preview = Box(JSON.null)
     @StateObject private var busy = Box(false)
     @StateObject private var sqlite = Box(true)
-    /// Only chats that ran in the target project's checkout or its worktrees.
-    @StateObject private var scoped = Box(true)
+    /// Only chats that ran in the target project's checkout or its worktrees (opt-in).
+    @StateObject private var scoped = Box(false)
     @StateObject private var projectOpen = Box(false)
     @FocusState private var focused: Bool
 
@@ -129,7 +129,7 @@ struct ImportSheet: View {
                     Button { withAnimation(M.snappy) { scoped.v.toggle() } } label: {
                         HStack(spacing: 5) {
                             Image(systemName: scoped.v ? "folder.fill" : "folder").font(.system(size: 11))
-                            Text(scoped.v ? "In \(t.name)" : "All folders").font(T.ui(12, .medium))
+                            Text("Only \(t.name)").font(T.ui(12, .medium))
                         }
                         .foregroundStyle(scoped.v ? T.accent : T.text2)
                         .padding(.horizontal, 8).frame(height: 28)
@@ -138,7 +138,7 @@ struct ImportSheet: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain).fixedSize()
-                    .help(scoped.v ? "Only chats that ran in \(t.name) or its worktrees. Click for every folder." : "Every chat on this Mac. Click for \(t.name)'s only.")
+                    .help(scoped.v ? "Only chats that ran in \(t.name) or its worktrees. Click for every folder." : "Every chat on this Mac. Click for only \(t.name)'s.")
                 }
                 filters.fixedSize()
             }

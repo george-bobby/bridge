@@ -263,25 +263,30 @@ struct AttachmentChip: View {
     let remove: () -> Void
     @StateObject private var hover = Box(false)
 
+    /// An image is just its thumbnail: its saved file's name means nothing to you.
+    var isImage: Bool { item.kind == .image }
+
     var body: some View {
         HStack(spacing: 8) {
             Group {
-                if item.kind == .image, let img = thumb.v {
+                if isImage, let img = thumb.v {
                     Image(nsImage: img).resizable().scaledToFill()
                 } else {
-                    Image(systemName: item.kind == .text ? "text.alignleft" : item.kind == .session ? "number" : "doc").font(.system(size: 13)).foregroundStyle(T.text2)
+                    Image(systemName: isImage ? "photo" : item.kind == .text ? "text.alignleft" : item.kind == .session ? "number" : "doc").font(.system(size: 13)).foregroundStyle(T.text2)
                         .frame(maxWidth: .infinity, maxHeight: .infinity).background(T.hover)
                 }
             }
-            .frame(width: 34, height: 34)
+            .frame(width: isImage ? 48 : 34, height: isImage ? 48 : 34)
             .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-            VStack(alignment: .leading, spacing: 1) {
-                Text(item.kind == .image ? URL(fileURLWithPath: item.path).lastPathComponent : item.name).font(T.ui(12, .medium)).foregroundStyle(T.text).lineLimit(1)
-                Text(item.kind == .text ? "\(item.lines) lines" : item.kind == .image ? "Image" : item.kind == .session ? "Session" : "File").font(T.ui(11)).foregroundStyle(T.text3)
+            if !isImage {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(item.name).font(T.ui(12, .medium)).foregroundStyle(T.text).lineLimit(1)
+                    Text(item.kind == .text ? "\(item.lines) lines" : item.kind == .session ? "Session" : "File").font(T.ui(11)).foregroundStyle(T.text3)
+                }
+                .frame(maxWidth: 150, alignment: .leading)
             }
-            .frame(maxWidth: 150, alignment: .leading)
         }
-        .padding(5).padding(.trailing, 6)
+        .padding(isImage ? 3 : 5).padding(.trailing, isImage ? 0 : 6)
         .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(T.panel))
         .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(T.line, lineWidth: 1))
         .overlay(alignment: .topTrailing) {
@@ -294,10 +299,10 @@ struct AttachmentChip: View {
             .opacity(hover.v ? 1 : 0)
         }
         .hoverBox(hover)
-        .help(item.kind == .text ? String(item.text.prefix(400)) : item.path)
+        .help(item.kind == .text ? String(item.text.prefix(400)) : isImage ? "Image: click to preview" : item.path)
         .onTapGesture { if !item.path.isEmpty { preview.v = URL(fileURLWithPath: item.path) } }
         .quickLookPreview($preview.v)
-        .task(id: item.path) { if item.kind == .image { thumb.v = await Thumbs.load(item.path, max: 34) } }
+        .task(id: item.path) { if isImage { thumb.v = await Thumbs.load(item.path, max: 48) } }
     }
     @StateObject private var preview = Box<URL?>(nil)
     @StateObject private var thumb = Box<NSImage?>(nil)
@@ -405,7 +410,7 @@ struct ImageTile: View {
         .contentShape(shape)
         .onTapGesture(perform: open)
         .hoverBox(hover)
-        .help(item.path)
+        .help("Click to preview")
         .contextMenu {
             Button { NSWorkspace.shared.open(URL(fileURLWithPath: item.path)) } label: { Label("Open", systemImage: "arrow.up.forward.app") }
             Button { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: item.path)]) } label: { Label("Reveal in Finder", systemImage: "folder") }

@@ -904,6 +904,8 @@ struct PromptEditor: View {
     let attach: (Attachment) -> Void
     @StateObject private var ctl = TriggerController()
     @ObservedObject private var data = ComposerData.shared
+    /// The text's laid-out height (see `sizer`).
+    @StateObject private var measured = Box(CGFloat(0))
 
     var body: some View {
         let items = ctl.active.map(items(for:)) ?? []
@@ -919,8 +921,8 @@ struct PromptEditor: View {
                     .scrollContentBackground(.hidden)
                     .scrollIndicators(.never)
                     .focused(focused)
-                    .frame(minHeight: minHeight, maxHeight: maxHeight)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(height: min(maxHeight, max(minHeight, measured.v)))
+                    .background(alignment: .topLeading) { sizer }
             }
             .overlay(alignment: .topLeading) {
                 if menuAbove, let t = ctl.active {
@@ -943,6 +945,18 @@ struct PromptEditor: View {
             ctl.monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak ctl] e in ctl?.handle(e) ?? e }
         }
         .onDisappear { if let m = ctl.monitor { NSEvent.removeMonitor(m); ctl.monitor = nil } }
+    }
+
+    /// The editor's height: the text laid out at the same width, then clamped.
+    /// The NSTextView's own size only ever grew, so deleting text left a gap.
+    var sizer: some View {
+        Text(text.isEmpty || text.hasSuffix("\n") ? text + " " : text)
+            .font(T.ui(fontSize))
+            .padding(.horizontal, 5)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .fixedSize(horizontal: false, vertical: true)
+            .hidden()
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { measured.v = $0 }
     }
 
     func bind(_ items: [TriggerItem]) {
@@ -1553,6 +1567,14 @@ enum ComposerSnapshots {
                 try? await Task.sleep(nanoseconds: 1_800_000_000)
                 shoot(dir, name)
             }
+            // Grows with long text, then shrinks back once it's deleted.
+            focus()
+            setText((1...9).map { "Line \($0) of a long prompt" }.joined(separator: "\n"))
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            shoot(dir, "grow")
+            setText("Short again")
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            shoot(dir, "shrink")
             setText("")
             for name in ["model", "access", "context", "mcp", "tasks"] {
                 data.snapshotOpen = name

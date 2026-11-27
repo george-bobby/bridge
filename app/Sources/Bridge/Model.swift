@@ -41,7 +41,20 @@ struct Session: Identifiable, Hashable {
     }
     var snippet: String {
         let s = isTask ? (lastText.isEmpty ? text : lastText) : text
-        return Session.plain(s)
+        return Session.plain(Session.withoutFiles(s))
+    }
+
+    /// Text without the attachment lines the composer adds or a pasted file path
+    /// on its own line: a preview shows the words, never a saved file's path.
+    static func withoutFiles(_ s: String) -> String {
+        guard s.contains("/") else { return s }
+        return Memo.string(Memo.plain, "files:" + s) {
+            s.split(separator: "\n", omittingEmptySubsequences: false).filter { line in
+                let t = line.trimmingCharacters(in: .whitespaces)
+                if t.hasPrefix("[Attached ") || t.hasPrefix("[Referenced session ") { return false }
+                return t.range(of: #"^["']?(file://|~/|/)\S.*\.[A-Za-z0-9]{1,5}["']?$"#, options: .regularExpression) == nil
+            }.joined(separator: "\n")
+        }
     }
 
     /// The Linear key this session is about: its ticket link, branch or title.
@@ -317,6 +330,8 @@ final class AppModel {
     var usage: JSON = .null
     /// Settings: the open section, and whether saved .env edits wait on a server restart.
     var settingsPane = "general"
+    /// A search for the Settings page to apply when it shows (⌘K's Settings results); it clears it.
+    var settingsQuery = ""
     /// Settings › Customize: "mcp", "skills" or "plugins" (Customize.swift).
     var customizeTab = "mcp"
     /// Snapshot runs only: open the first skill in the editor.
