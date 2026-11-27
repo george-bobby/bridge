@@ -7,6 +7,11 @@ import SwiftUI
 enum MenuGlyph {
     static let size = NSSize(width: 24, height: 16)
 
+    /// Only the packaged app gets a menu bar item: dev builds (`.build/release/Bridge`,
+    /// demo runs) and snapshot runs would each add a second icon next to it.
+    static let shown = Bundle.main.bundlePath.hasSuffix(".app")
+        && ProcessInfo.processInfo.environment["BRIDGE_SNAPSHOT_DIR"] == nil
+
     static func image(badge: Bool) -> NSImage {
         let img = NSImage(size: size, flipped: true) { rect in
             guard let ctx = NSGraphicsContext.current?.cgContext else { return false }

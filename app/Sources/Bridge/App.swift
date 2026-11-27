@@ -165,7 +165,7 @@ struct BridgeApp: App {
         .defaultSize(width: 1480, height: 920)
         .commands { BridgeCommands(model: delegate.model); PaneCommands(model: delegate.model); ConsoleCommands(model: delegate.model) }
 
-        MenuBarExtra {
+        MenuBarExtra(isInserted: .constant(MenuGlyph.shown)) {
             MenuBarPanel().environment(delegate.model)
         } label: {
             Image(nsImage: delegate.model.needsCount > 0 ? MenuGlyph.badged : MenuGlyph.plain)
