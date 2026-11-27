@@ -65,7 +65,8 @@ function migrateDefault(all) {
   const to = path.join(runs, `orchestrator-${old.id}.json`);
   try {
     const run = JSON.parse(fs.readFileSync(from, "utf8"));
-    if (!fs.existsSync(to) && (!run.project || run.project === old.id)) {
+    // Default's orchestrator may have tagged it already; the flag says it predates Default.
+    if (!fs.existsSync(to) && (!run.project || run.project === old.id || run.project === DEFAULT)) {
       fs.writeFileSync(to, JSON.stringify({ ...run, runId: `orchestrator-${old.id}`, project: old.id }));
       fs.unlinkSync(from);
     }
@@ -94,7 +95,10 @@ function list(fallbackRepo = "") {
 const withRoot = (fallbackRepo = "") => [rootProject(), ...list(fallbackRepo).map(({ default: _, ...p }) => p)];
 
 function get(id) {
-  if (id === DEFAULT) return rootProject();
+  if (id === DEFAULT) {
+    list(); // runs the one-time migration before anyone touches Default's orchestrator
+    return rootProject();
+  }
   return list().find((p) => p.id === id) || null;
 }
 

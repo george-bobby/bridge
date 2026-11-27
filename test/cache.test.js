@@ -99,7 +99,8 @@ test("a task's meta.json and the project list refresh the summary on their own",
 
 test("a projects.json from before Default hands the old default's orchestrator chat to it", () => {
   const runs = path.join(tmp, "runs");
-  fs.writeFileSync(path.join(runs, "orchestrator.json"), JSON.stringify({ runId: "orchestrator", kind: "orchestrator", sessionId: "s-9", messages: [{ role: "user", text: "hi", ts: 1 }] }));
+  // Tagged as Default's already, as the server's startup used to do before the migration ran.
+  fs.writeFileSync(path.join(runs, "orchestrator.json"), JSON.stringify({ runId: "orchestrator", kind: "orchestrator", project: "default", sessionId: "s-9", messages: [{ role: "user", text: "hi", ts: 1 }] }));
   fs.writeFileSync(projects.FILE, JSON.stringify([{ id: "studio", name: "Studio", path: tmp, default: true }, { id: "other", name: "Other", path: os.tmpdir() }]));
   const ids = projects.list().map((p) => [p.id, !!p.default]);
   assert.deepEqual(ids, [["studio", false], ["other", false]]);
