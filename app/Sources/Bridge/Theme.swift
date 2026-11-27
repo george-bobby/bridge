@@ -288,6 +288,9 @@ struct Kbd: View {
 struct HoverRow<Content: View>: View {
     var selected = false
     var height: CGFloat? = 40
+    /// A hairline under the row, inset like its content, so long lists read
+    /// as rows (in light mode especially). Cards hide the last one under their border.
+    var divider = true
     let content: () -> Content
     @StateObject private var hover = Box(false)
 
@@ -296,9 +299,16 @@ struct HoverRow<Content: View>: View {
             .frame(minHeight: height)
             .padding(.horizontal, 20)
             .background(selected ? T.selected : hover.v ? T.hover : Color.clear)
+            .overlay(alignment: .bottom) { if divider { RowDivider() } }
             .contentShape(Rectangle())
             .hoverBox(hover)
     }
+}
+
+/// The hairline between list rows.
+struct RowDivider: View {
+    var inset: CGFloat = 20
+    var body: some View { Rectangle().fill(T.line.opacity(0.7)).frame(height: 1).padding(.horizontal, inset) }
 }
 
 /// Group header in a list: icon, label, count — on a faint band.

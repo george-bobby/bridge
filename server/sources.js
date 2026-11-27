@@ -267,12 +267,135 @@ async function loadPorts() {
   return { servers, at: Date.now() };
 }
 
+
+/* ------------------------------------------- Vercel, incident.io, Granola */
+
+// Each is read-only, on its own key from .env (never passed to sessions), and
+// answers { configured: false } without one so the app can say what's missing.
+
+async function getJson(url, headers, what) {
+  const res = await fetch(url, { headers: { Accept: "application/json", ...headers }, signal: AbortSignal.timeout(20_000) });
+  const out = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((out.error && (out.error.message || out.error)) || out.message || `${what} answered ${res.status}`);
+  return out;
+}
+
+// READY | ERROR | BUILDING | INITIALIZING | QUEUED | CANCELED → a word the app styles.
+const VERCEL_STATE = { READY: "ready", ERROR: "failed", BUILDING: "building", INITIALIZING: "building", QUEUED: "queued", CANCELED: "canceled" };
+
+function shapeDeployment(d, team) {
+  const m = d.meta || {};
+  return {
+    id: d.uid || d.id,
+    project: d.name || "",
+    url: d.url ? `https://${d.url}` : "",
+    inspect: d.inspectorUrl || "",
+    state: VERCEL_STATE[String(d.state || d.readyState || "").toUpperCase()] || "queued",
+    target: d.target || "preview", // production | preview
+    branch: m.githubCommitRef || m.gitlabCommitRef || m.branch || "",
+    message: String(m.githubCommitMessage || m.gitlabCommitMessage || "").split("\n")[0],
+    pr: m.githubPrId ? Number(m.githubPrId) : null,
+    repo: m.githubCommitOrg && m.githubCommitRepo ? `${m.githubCommitOrg}/${m.githubCommitRepo}` : "",
+    creator: (d.creator && (d.creator.username || d.creator.email)) || "",
+    team: team ? team.slug : "",
+    createdAt: d.created || d.createdAt || 0,
+  };
+}
+
+/** Recent deployments across your personal account and every team the token
+ *  can see (VERCEL_TEAM_ID pins it to one). */
+async function loadVercel() {
+  if (!env.vercelToken) return { configured: false, deployments: [], at: Date.now() };
+  const auth = { Authorization: `Bearer ${env.vercelToken}` };
+  const api = (p, q = "") => getJson(`https://api.vercel.com${p}${q}`, auth, "Vercel");
+  const user = await api("/v2/user").then((o) => o.user || {}).catch(() => ({}));
+  let teams = [];
+  if (env.vercelTeamId) teams = [{ id: env.vercelTeamId, slug: env.vercelTeamId }];
+  else teams = ((await api("/v2/teams", "?limit=20").catch(() => ({}))).teams || []).map((t) => ({ id: t.id, slug: t.slug, name: t.name }));
+  const scopes = env.vercelTeamId ? teams : [null, ...teams.slice(0, 6)];
+  const lists = await Promise.all(
+    scopes.map((t) =>
+      api("/v6/deployments", `?limit=40${t ? `&teamId=${encodeURIComponent(t.id)}` : ""}`)
+        .then((o) => (o.deployments || []).map((d) => shapeDeployment(d, t)))
+        .catch(() => []),
+    ),
+  );
+  const seen = new Set();
+  const deployments = lists.flat().filter((d) => d.id && !seen.has(d.id) && seen.add(d.id)).sort((a, b) => b.createdAt - a.createdAt).slice(0, 60);
+  return { configured: true, user: user.username || user.email || "", teams: teams.map((t) => t.slug), deployments, at: Date.now() };
+}
+
+/** Recent incidents in your incident.io workspace, live ones first. */
+async function loadIncidents() {
+  if (!env.incidentApiKey) return { configured: false, incidents: [], at: Date.now() };
+  const out = await getJson("https://api.incident.io/v2/incidents?page_size=40", { Authorization: `Bearer ${env.incidentApiKey}` }, "incident.io");
+  const incidents = (out.incidents || []).map((i) => ({
+    id: i.id,
+    ref: i.reference || "",
+    name: i.name || "",
+    summary: String(i.summary || "").slice(0, 600),
+    status: (i.incident_status && i.incident_status.name) || "",
+    category: (i.incident_status && i.incident_status.category) || "", // triage | live | learning | closed | declined | merged | canceled | paused
+    severity: (i.severity && i.severity.name) || "",
+    severityRank: (i.severity && i.severity.rank) || 0,
+    lead: ((i.incident_role_assignments || []).find((r) => r.role && r.role.role_type === "lead" && r.assignee) || { assignee: {} }).assignee.name || "",
+    url: i.permalink || "",
+    slack: i.slack_channel_id && i.slack_team_id ? `https://app.slack.com/client/${i.slack_team_id}/${i.slack_channel_id}` : "",
+    createdAt: i.created_at || "",
+    updatedAt: i.updated_at || "",
+  }));
+  return { configured: true, incidents, at: Date.now() };
+}
+
+const GRANOLA = "https://public-api.granola.ai/v1";
+const granolaAuth = () => ({ Authorization: `Bearer ${env.granolaApiKey}` });
+
+/** Your recent Granola notes (the list has no summary or link: see granolaNote). */
+async function loadGranola() {
+  if (!env.granolaApiKey) return { configured: false, notes: [], at: Date.now() };
+  const notes = [];
+  let cursor = "";
+  for (let page = 0; page < 3; page++) {
+    const out = await getJson(`${GRANOLA}/notes?page_size=30${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`, granolaAuth(), "Granola");
+    for (const n of out.notes || []) {
+      if (n.deleted_at) continue;
+      notes.push({ id: n.id, title: n.title || "Untitled", owner: (n.owner && (n.owner.name || n.owner.email)) || "", createdAt: n.created_at || "", updatedAt: n.updated_at || "" });
+    }
+    if (!out.hasMore || !out.cursor) break;
+    cursor = out.cursor;
+  }
+  return { configured: true, notes, at: Date.now() };
+}
+
+/** One note's summary, attendees and link to open it in Granola. */
+async function granolaNote(id) {
+  if (env.demo) return require("./demo").granolaNote(id);
+  if (!env.granolaApiKey) throw new Error("GRANOLA_API_KEY isn't set");
+  if (!/^[A-Za-z0-9_-]+$/.test(String(id))) throw new Error("bad note id");
+  return cached(`granola:${id}`, async () => {
+    const n = await getJson(`${GRANOLA}/notes/${id}`, granolaAuth(), "Granola");
+    return {
+      id: n.id,
+      title: n.title || "Untitled",
+      url: n.web_url || "",
+      attendees: (n.attendees || []).map((a) => a.name || a.email).filter(Boolean),
+      event: (n.calendar_event && n.calendar_event.event_title) || "",
+      summary: String(n.summary_markdown || n.summary_text || "").slice(0, 20000),
+      createdAt: n.created_at || "",
+    };
+  });
+}
+
 const demo = env.demo ? require("./demo") : null;
 
 module.exports = demo
-  ? { pulls: async () => demo.pulls(), linear: async () => demo.linear(), ports: async () => demo.ports() }
+  ? { pulls: async () => demo.pulls(), linear: async () => demo.linear(), ports: async () => demo.ports(), vercel: async () => demo.vercel(), incidents: async () => demo.incidents(), granola: async () => demo.granola(), granolaNote }
   : {
   ports: () => cached("ports", loadPorts, { refresh: true }),
   pulls: (o) => cached("pulls", loadPulls, o),
   linear: (o) => cached("linear", loadLinear, o),
+  vercel: (o) => cached("vercel", loadVercel, o),
+  incidents: (o) => cached("incidents", loadIncidents, o),
+  granola: (o) => cached("granola", loadGranola, o),
+  granolaNote,
     };

@@ -98,6 +98,9 @@ struct Project: Identifiable, Hashable {
     var id: String { j["id"].string }
     var name: String { j["name"].nonEmpty ?? id }
     var path: String { j["path"].string }
+    /// Default: not a repo, the root folder general sessions run in.
+    var root: Bool { j["root"].bool }
+    var shortPath: String { path.hasPrefix(NSHomeDirectory()) ? "~" + path.dropFirst(NSHomeDirectory().count) : path }
 }
 
 struct Mention: Identifiable, Hashable {
@@ -246,7 +249,7 @@ let statusLabels: [String: String] = [
 // MARK: - Routes
 
 enum Route: Hashable {
-    case home, inbox, slack, board, sessions, pulls, linear, memory, usage, settings
+    case home, inbox, slack, board, sessions, pulls, linear, vercel, incidents, granola, memory, usage, settings
     /// New task: the composer as its own page, like a fresh chat.
     case compose
     case session(String)
@@ -261,6 +264,9 @@ enum Route: Hashable {
         case .sessions: return "Sessions"
         case .pulls: return "GitHub"
         case .linear: return "Linear"
+        case .vercel: return "Vercel"
+        case .incidents: return "Incidents"
+        case .granola: return "Granola"
         case .memory: return "Memory"
         case .settings: return "Settings"
         case .compose: return "New task"
@@ -385,6 +391,12 @@ final class AppModel {
     @ObservationIgnored private var pullsByURL: [String: PullRequest] = [:]
     @ObservationIgnored private(set) var issuesByKey: [String: Issue] = [:]
     var ports: JSON = .null
+    /// Vercel deployments, incident.io incidents, Granola notes (Feeds.swift).
+    var vercel: JSON = .null
+    var incidents: JSON = .null
+    var granola: JSON = .null
+    /// Sources hidden from the sidebar (Settings › Integrations).
+    var hiddenSources = Sources.hidden
     var loading: Set<String> = []
     /// Sources a refresh button asked for; background polls never spin a button.
     var refreshing: Set<String> = []
@@ -518,8 +530,22 @@ final class AppModel {
             else if route == .compose { if backStack.isEmpty { route = .home } else { back() } }
         }
     }
-    /// The Import a chat sheet (Import.swift).
+    /// The Import a chat sheet (Import.swift), and the project it imports into.
     var importOpen = false
+    var importProject = AppModel.rootId
+    /// Whose memory the Memory page shows ("" until first opened: then the
+    /// filtered project, the open chat's, else the first real one).
+    var memoryProject = ""
+    func openMemory(_ project: String? = nil) {
+        var fromChat: String? = nil
+        if case .session(let id) = route { fromChat = sessions.first { $0.id == id }?.project }
+        memoryProject = project ?? projectFilter ?? fromChat ?? projects.first { !$0.root }?.id ?? AppModel.rootId
+        navigate(.memory)
+    }
+    func openImport(into project: String? = nil) {
+        importProject = project ?? (route == .compose ? composeProject : nil) ?? projectFilter ?? AppModel.rootId
+        importOpen = true
+    }
     /// The MCP editor or tools list, floating over the window (Servers.swift).
     var mcpSheet: MCPSheet? = nil
     var composeText = ""
@@ -590,18 +616,18 @@ final class AppModel {
 
     // MARK: projects
 
-    /// The one marked default on the server, else the first (older projects.json).
-    var defaultProject: Project? { projects.first { $0.j["default"].bool } ?? projects.first }
+    /// Default: the root folder for sessions that aren't in any project. Always first.
+    static let rootId = "default"
     func project(_ id: String) -> Project? { projects.first { $0.id == id } }
     func inFilter(_ s: Session) -> Bool { projectFilter == nil || s.project == projectFilter }
     func sessions(in projectId: String) -> [Session] { boardSessions.filter { $0.project == projectId } }
     func orchestratorId(_ projectId: String?) -> String {
-        guard let p = projectId, p != defaultProject?.id else { return "orchestrator" }
+        guard let p = projectId, p != AppModel.rootId, !p.isEmpty else { return "orchestrator" }
         return "orchestrator-\(p)"
     }
 
     func openOrchestrator(_ projectId: String?) {
-        let pid = projectId ?? defaultProject?.id ?? ""
+        let pid = projectId ?? AppModel.rootId
         let id = orchestratorId(pid)
         if sessions.contains(where: { $0.id == id }) || pid.isEmpty { return open(id) }
         Task {
@@ -637,12 +663,14 @@ final class AppModel {
 
     func updateProject(_ id: String, _ patch: [String: Any]) async { await act { try await API.post("/api/projects/\(id)", patch) } }
     /// Move a project to `index` in the sidebar; shown at once, then saved.
+    /// Default stays first: indexes here count it, the server's don't.
     func moveProject(_ id: String, to index: Int) async {
-        guard let from = projects.firstIndex(where: { $0.id == id }), index >= 0, index < projects.count, index != from else { return }
+        let first = projects.first?.root == true ? 1 : 0
+        guard let from = projects.firstIndex(where: { $0.id == id }), !projects[from].root, index >= first, index < projects.count, index != from else { return }
         var next = projects
         next.insert(next.remove(at: from), at: index)
         withAnimation(M.snappy) { projects = next }
-        await updateProject(id, ["index": index])
+        await updateProject(id, ["index": index - first])
     }
     func removeProject(_ id: String) async {
         await act { try await API.delete("/api/projects/\(id)") }
@@ -931,7 +959,10 @@ final class AppModel {
         async let a: Void = load("pulls", refresh: refresh)
         async let b: Void = load("linear", refresh: refresh)
         async let c: Void = load("ports")
-        _ = await (a, b, c)
+        async let d: Void = sourceShown(.vercel) ? load("vercel", refresh: refresh) : ()
+        async let e: Void = sourceShown(.incidents) ? load("incidents", refresh: refresh) : ()
+        async let f: Void = sourceShown(.granola) ? load("granola", refresh: refresh) : ()
+        _ = await (a, b, c, d, e, f)
     }
 
     func load(_ name: String, refresh: Bool = false) async {
@@ -944,6 +975,9 @@ final class AppModel {
             switch name {
             case "pulls": pulls = out
             case "linear": linear = out
+            case "vercel": vercel = out
+            case "incidents": incidents = out
+            case "granola": granola = out
             default: ports = out
             }
             errors[name] = out["stale"].nonEmpty

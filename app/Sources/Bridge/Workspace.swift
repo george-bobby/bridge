@@ -16,7 +16,6 @@ struct Sidebar: View {
                 VStack(alignment: .leading, spacing: 2) {
                     ActionRow(icon: "square.and.pencil", label: "New task", keys: "⌘N", on: model.route == .compose) { model.compose(in: model.projectFilter) }
                     ActionRow(icon: "magnifyingglass", label: "Search", keys: "⌘K") { model.paletteOpen = true }
-                    ActionRow(icon: "square.and.arrow.down.on.square", label: "Import chat", keys: "⇧⌘I") { model.importOpen = true }
 
                     SideLabel("Overview")
                     NavItem(icon: "house", label: "Home", route: .home)
@@ -24,10 +23,11 @@ struct Sidebar: View {
                     NavItem(icon: "rectangle.stack", label: "Sessions", route: model.sessionsRoute, also: [.board, .sessions],
                             count: model.boardSessions.filter { model.inFilter($0) && model.column(of: $0) != .done }.count)
 
-                    SideLabel("Sources")
-                    NavItem(icon: "number", label: "Slack", route: .slack, badge: model.slackUnread, count: model.mentions.filter { model.session(forPermalink: $0.permalink) == nil }.count, hot: model.slackUnread > 0)
-                    NavItem(icon: "arrow.triangle.pull", label: "GitHub", route: .pulls, count: model.openPulls.count, hot: model.openPulls.contains(where: \.needsAttention))
-                    NavItem(icon: "circle.lefthalf.filled", label: "Linear", route: .linear, count: model.issues.filter(\.active).count)
+                    let sources = SourceKind.allCases.filter(model.sourceShown)
+                    if !sources.isEmpty {
+                        SideLabel("Sources")
+                        ForEach(sources) { k in sourceItem(k).transition(.opacity) }
+                    }
 
                     let pinned = model.boardSessions.filter(\.pinned).sorted { $0.updatedAt > $1.updatedAt }
                     if !pinned.isEmpty {
@@ -54,9 +54,31 @@ struct Sidebar: View {
             .scrollIndicators(.never)
 
             Spacer(minLength: 0)
+            NavItem(icon: "gearshape", label: "Settings", route: .settings)
+                .padding(.horizontal, 10).padding(.top, 6)
             SidebarFooter()
         }
         .animation(M.snappy, value: model.route)
+    }
+
+    /// A source's row: what needs you as the badge, what's open as the count.
+    @ViewBuilder func sourceItem(_ k: SourceKind) -> some View {
+        switch k {
+        case .slack:
+            NavItem(icon: k.icon, label: k.label, route: k.route, badge: model.slackUnread, count: model.mentions.filter { model.session(forPermalink: $0.permalink) == nil }.count, hot: model.slackUnread > 0)
+        case .github:
+            NavItem(icon: k.icon, label: k.label, route: k.route, count: model.openPulls.count, hot: model.openPulls.contains(where: \.needsAttention))
+        case .linear:
+            NavItem(icon: k.icon, label: k.label, route: k.route, count: model.issues.filter(\.active).count)
+        case .vercel:
+            let building = model.vercelDeployments.filter { $0["state"].string == "building" }.count
+            let failed = model.vercelDeployments.prefix(10).contains { $0["state"].string == "failed" }
+            NavItem(icon: k.icon, label: k.label, route: k.route, count: building, hot: failed)
+        case .incidents:
+            NavItem(icon: k.icon, label: k.label, route: k.route, badge: model.liveIncidents.count, hot: !model.liveIncidents.isEmpty)
+        case .granola:
+            NavItem(icon: k.icon, label: k.label, route: k.route, count: model.granola["notes"].array.filter { Calendar.current.isDateInToday(Date(timeIntervalSince1970: Fmt.iso($0["createdAt"].string))) }.count)
+        }
     }
 }
 
@@ -100,9 +122,7 @@ struct SidebarFooter: View {
                 Text(model.connected ? "\(model.sessions.filter(model.isLive).count) running" : "Offline").font(T.ui(11.5)).foregroundStyle(T.text3)
                     .contentTransition(.numericText())
                 Spacer()
-                FooterButton(icon: "book.closed", help: "Memory (⌘7)", on: model.route == .memory) { model.route = .memory }
-                FooterButton(icon: "gauge.with.dots.needle.50percent", help: "Usage (⌘8)", on: model.route == .usage, fill: false) { model.route = .usage }
-                FooterButton(icon: "gearshape", help: "Settings (⌘,)", on: model.route == .settings) { model.navigate(.settings) }
+                FooterButton(icon: "gauge.with.dots.needle.50percent", help: "Usage", on: model.route == .usage, fill: false) { model.route = .usage }
             }
             .padding(.horizontal, 4)
         }
@@ -181,13 +201,13 @@ struct ProjectSection: View {
             HStack(spacing: 6) {
                 Image(systemName: "chevron.right").font(.system(size: 8.5, weight: .bold)).foregroundStyle(T.text3).frame(width: 10)
                     .rotationEffect(.degrees(collapsed ? 0 : 90))
-                RoundedRectangle(cornerRadius: 5, style: .continuous).fill(Avatar.color(for: project.name))
-                    .overlay(Text(project.name.prefix(1).uppercased()).font(.system(size: 10.5, weight: .bold)).foregroundStyle(.white))
-                    .frame(width: 18, height: 18)
+                ProjectBadge(project: project)
                 Text(project.name).font(T.ui(13.5, .medium)).foregroundStyle(model.projectFilter == project.id ? T.text : T.text2).lineLimit(1)
-                if project.id == model.defaultProject?.id { Text("default").font(T.ui(10.5)).foregroundStyle(T.text3) }
+                if project.root { Text(project.shortPath).font(T.ui(10.5)).foregroundStyle(T.text3).lineLimit(1).help("Default sessions run in \(project.path), outside any project") }
                 Spacer(minLength: 4)
                 if hover.v {
+                    Button { model.openMemory(project.id) } label: { Image(systemName: "book.closed").font(.system(size: 10.5, weight: .medium)).foregroundStyle(T.text2) }
+                        .buttonStyle(.plain).help("\(project.name)'s memory")
                     Button { model.compose(in: project.id) } label: { Image(systemName: "plus").font(.system(size: 10.5, weight: .semibold)).foregroundStyle(T.text2) }
                         .buttonStyle(.plain).help("New task in \(project.name)")
                 } else if !sessions.isEmpty {
@@ -205,14 +225,14 @@ struct ProjectSection: View {
             .contentShape(Rectangle())
             .hoverBox(hover)
             .onTapGesture { withAnimation(M.snappy) { toggle() } }
-            // Drag a project header onto another to reorder the sidebar.
-            .onDrag { NSItemProvider(object: (ProjectSection.dragPrefix + project.id) as NSString) }
+            // Drag a project header onto another to reorder the sidebar (Default stays first).
+            .onDrag { NSItemProvider(object: (project.root ? "" : ProjectSection.dragPrefix + project.id) as NSString) }
             .contextMenu { ProjectMenu(project: project) }
             .dropDestination(for: String.self) { ids, _ in
                 guard let id = ids.first else { return false }
                 if id.hasPrefix(ProjectSection.dragPrefix) {
                     let moved = String(id.dropFirst(ProjectSection.dragPrefix.count))
-                    guard moved != project.id, let to = model.projects.firstIndex(where: { $0.id == project.id }) else { return false }
+                    guard moved != project.id, !project.root, let to = model.projects.firstIndex(where: { $0.id == project.id }) else { return false }
                     Task { await model.moveProject(moved, to: to) }
                     return true
                 }
@@ -316,6 +336,8 @@ struct ProjectMenu: View {
         Section {
             Button { model.compose(in: project.id) } label: { Label("New Task in \(project.name)…", systemImage: "square.and.pencil") }
             Button { model.openOrchestrator(project.id) } label: { Label("Open Orchestrator", systemImage: "sparkles") }
+            Button { model.openMemory(project.id) } label: { Label("Memory", systemImage: "book.closed") }
+            Button { model.openImport(into: project.id) } label: { Label("Import a Chat…", systemImage: "square.and.arrow.down.on.square") }
         }
         Section {
             let only = model.projectFilter == project.id
@@ -329,17 +351,19 @@ struct ProjectMenu: View {
             Button { NSWorkspace.shared.open(URL(fileURLWithPath: project.path)) } label: { Label("Reveal in Finder", systemImage: "folder") }
             Button { copyToPasteboard(project.path) } label: { Label("Copy Path", systemImage: "doc.on.doc") }
         }
+        if !project.root { realProjectItems }
+    }
+
+    @ViewBuilder var realProjectItems: some View {
         Section {
             let i = model.projects.firstIndex(where: { $0.id == project.id }) ?? 0
+            let first = model.projects.first?.root == true ? 1 : 0
             Button { Task { await model.moveProject(project.id, to: i - 1) } } label: { Label("Move Up", systemImage: "arrow.up") }
-                .disabled(i == 0)
+                .disabled(i <= first)
             Button { Task { await model.moveProject(project.id, to: i + 1) } } label: { Label("Move Down", systemImage: "arrow.down") }
                 .disabled(i >= model.projects.count - 1)
         }
         Section {
-            if project.id != model.defaultProject?.id {
-                Button { Task { await model.updateProject(project.id, ["makeDefault": true]) } } label: { Label("Make Default", systemImage: "star") }
-            }
             Button {
                 let a = NSAlert()
                 a.messageText = "Rename \(project.name)"
@@ -353,8 +377,21 @@ struct ProjectMenu: View {
         }
         Section {
             Button(role: .destructive) { Task { await model.removeProject(project.id) } } label: { Label("Remove from Bridge", systemImage: "trash") }
-                .disabled(model.projects.count <= 1)
         }
+    }
+}
+
+/// A project's square: its initial on a color, or a house for Default.
+struct ProjectBadge: View {
+    let project: Project
+    var size: CGFloat = 18
+    var body: some View {
+        RoundedRectangle(cornerRadius: size * 0.28, style: .continuous).fill(project.root ? T.text3.opacity(0.35) : Avatar.color(for: project.name))
+            .overlay {
+                if project.root { Image(systemName: "house.fill").font(.system(size: size * 0.5, weight: .semibold)).foregroundStyle(.white) }
+                else { Text(project.name.prefix(1).uppercased()).font(.system(size: size * 0.58, weight: .bold)).foregroundStyle(.white) }
+            }
+            .frame(width: size, height: size)
     }
 }
 

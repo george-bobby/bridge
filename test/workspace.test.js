@@ -357,8 +357,12 @@ test("import a chat from an agent's own history: a worker in its folder that res
   await waitFor(async () => prompts().length >= 2);
   assert.ok(!prompts()[1].includes("<instructions>"), "only once");
 
-  const codex = await post("/api/history/import", { agent: "codex", id: fx.CODEX_ID });
+  // Imported into a chosen project: it still runs in its own folder.
+  const target = (await get("/api/projects")).projects.find((p) => !p.root);
+  const codex = await post("/api/history/import", { agent: "codex", id: fx.CODEX_ID, project: target.id });
   const crun = (await get(`/api/runs/${codex.taskId}`)).run;
+  assert.strictEqual((await get("/api/runs")).runs.find((r) => r.runId === codex.taskId).project, target.id);
+  assert.strictEqual(crun.opts.workdir, repo);
   assert.deepStrictEqual([crun.opts.agent, crun.agentSessions.codex], ["codex", fx.CODEX_ID]);
   assert.strictEqual((await post("/api/history/import", { agent: "nope", id: "x" })).status, 400);
   // A chat whose folder is gone is listed as such and can't be carried on elsewhere.

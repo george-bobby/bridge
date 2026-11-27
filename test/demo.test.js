@@ -45,6 +45,17 @@ test("demo serves fixture PRs, Linear sub-issues and dev servers", async () => {
   assert.ok((await get("/api/sources/ports")).servers.length >= 1);
 });
 
+test("demo serves Vercel, incident.io and Granola fixtures", async () => {
+  const v = await get("/api/sources/vercel");
+  assert.ok(v.configured && v.deployments.some((d) => d.state === "building") && v.deployments.some((d) => d.target === "production"));
+  const inc = await get("/api/sources/incidents");
+  assert.ok(inc.incidents.some((i) => i.category === "live"));
+  const g = await get("/api/sources/granola");
+  // The app percent-encodes everything but letters and digits (not_1 → not%5F1).
+  const note = await get(`/api/sources/granola/${encodeURIComponent(g.notes[0].id).replace(/_/g, "%5F")}`);
+  assert.ok(note.note.summary.length > 0 && note.note.attendees.length > 0);
+});
+
 test("demo sessions cover the board, and the pending question survives boot", async () => {
   const { runs } = await get("/api/runs");
   const csv = runs.find((r) => r.runId === "1732530001.000100");
@@ -68,20 +79,25 @@ test("pin and move a session between projects; each project gets its own orchest
   assert.strictEqual(orch.runId, "orchestrator-mobile");
   r = (await get("/api/runs")).runs.find((x) => x.runId === "orchestrator-mobile");
   assert.deepStrictEqual([r.kind, r.project], ["orchestrator", "mobile"]);
-  assert.strictEqual((await post("/api/projects/storefront/orchestrator")).runId, "orchestrator", "the default project keeps the original chat");
+  assert.strictEqual((await post("/api/projects/storefront/orchestrator")).runId, "orchestrator-storefront");
+  assert.strictEqual((await post("/api/projects/default/orchestrator")).runId, "orchestrator", "Default (the root folder) keeps the original chat");
 });
 
-test("projects reorder without moving the default", async () => {
-  const ids = async () => (await get("/api/projects")).projects.map((p) => p.id);
+test("Default is first and fixed; real projects reorder behind it", async () => {
+  const list = async () => (await get("/api/projects")).projects;
+  const ids = async () => (await list()).map((p) => p.id);
   const before = await ids();
-  const last = before[before.length - 1];
+  const def = (await list())[0];
+  assert.deepStrictEqual([def.id, def.name, def.root], ["default", "Default", true]);
+  assert.ok(!(await list()).some((p) => p.default), "no project is marked default");
+  const real = before.slice(1);
+  const last = real[real.length - 1];
   await post(`/api/projects/${last}`, { index: 0 });
   const after = await ids();
-  assert.strictEqual(after[0], last);
-  assert.deepStrictEqual([...after].sort(), [...before].sort());
-  assert.strictEqual((await post(`/api/projects/${before[0]}/orchestrator`)).runId, "orchestrator", "the default keeps its orchestrator");
-  assert.strictEqual((await get("/api/projects")).projects.find((p) => p.default).id, before[0]);
-  await post(`/api/projects/${last}`, { index: before.length - 1 });
+  assert.deepStrictEqual(after.slice(0, 2), ["default", last]);
+  assert.strictEqual((await post("/api/projects/default", { index: 1 })).status, 400, "Default can't move");
+  assert.strictEqual((await post("/api/projects/default/orchestrator")).runId, "orchestrator");
+  await post(`/api/projects/${last}`, { index: real.length - 1 });
   assert.deepStrictEqual(await ids(), before);
 });
 
