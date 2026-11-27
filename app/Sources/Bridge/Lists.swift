@@ -501,7 +501,8 @@ struct Card<Content: View>: View {
             }
             .padding(.horizontal, 20).frame(height: 46)
             Hairline()
-            VStack(spacing: 0) { content() }.padding(.vertical, 6)
+            // No bottom padding: the last row's divider lands under the card's border.
+            VStack(spacing: 0) { content() }.padding(.top, 4)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(T.raised.opacity(0.35)))

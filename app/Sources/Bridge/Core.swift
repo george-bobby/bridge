@@ -262,6 +262,22 @@ enum Fmt {
         return n >= 1_000_000 ? short(Double(n) / 1_000_000, "M") : n >= 1000 ? short(Double(n) / 1000, "k") : "\(n)"
     }
 
+    /// "Today", "Yesterday", else "Mon, Nov 24".
+    static func day(_ seconds: Double) -> String {
+        guard seconds > 0 else { return "" }
+        let d = Date(timeIntervalSince1970: seconds)
+        if Calendar.current.isDateInToday(d) { return "Today" }
+        if Calendar.current.isDateInYesterday(d) { return "Yesterday" }
+        return weekdayDay.string(from: d)
+    }
+    private static let weekdayDay: DateFormatter = { let f = DateFormatter(); f.setLocalizedDateFormatFromTemplate("EEE MMM d"); return f }()
+
+    /// "14:05" in the user's clock style.
+    static func time(_ seconds: Double) -> String {
+        guard seconds > 0 else { return "" }
+        return hourMinute.string(from: Date(timeIntervalSince1970: seconds))
+    }
+
     static func clock(_ seconds: Double) -> String {
         let d = Date(timeIntervalSince1970: seconds)
         return (Calendar.current.isDateInToday(d) ? hourMinute : dayTime).string(from: d)

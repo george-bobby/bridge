@@ -89,6 +89,10 @@ test("a task's meta.json and the project list refresh the summary on their own",
   fs.unlinkSync(meta);
   assert.equal(store.listRunSummaries()[0].task, null);
 
+  // A run moved to a project that isn't in the list yet is Default's, until the list has it.
+  const big = store.loadRun("big");
+  store.saveRun({ ...big, project: "other" });
+  assert.equal(store.listRunSummaries()[0].project, "default");
   fs.writeFileSync(projects.FILE, JSON.stringify([{ id: "other", name: "Other", path: tmp }]));
   assert.equal(store.listRunSummaries()[0].project, "other");
 });
