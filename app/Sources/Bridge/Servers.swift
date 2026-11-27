@@ -535,10 +535,7 @@ struct MCPRow: View {
                     .disabled(!s.toggleable)
                     .help(s.toggleable ? (s.enabled ? "Turn off" : "Turn on") : s.note)
             }
-            Menu { menuItems } label: {
-                Image(systemName: "ellipsis").font(.system(size: 13)).foregroundStyle(T.text2).frame(width: 26, height: 26)
-            }
-            .menuStyle(.borderlessButton).menuIndicator(.hidden).frame(width: 28)
+            MoreMenu(size: B.small) { menuItems }
         }
     }
 

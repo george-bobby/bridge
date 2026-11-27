@@ -112,7 +112,7 @@ struct DecisionRow: View {
                 Button("Tomorrow") { submit("defer", tomorrow()) }.buttonStyle(LButton()).help("Hide until tomorrow")
                 Button("Dismiss") { submit("dismiss") }.buttonStyle(LButton())
                 Button(kind == "action" ? "Approve" : kind == "resume" ? "Resume" : "Answer") { submit("answer") }.buttonStyle(LButton(primary: true))
-                Button { model.open(d["taskId"].string) } label: { Image(systemName: "arrow.up.right") }.buttonStyle(LButton()).help("Open the chat")
+                Button { model.open(d["taskId"].string) } label: { Image(systemName: "arrow.up.right") }.buttonStyle(LButton(square: true)).help("Open the chat")
             }
         }
         .padding(18)
@@ -198,7 +198,7 @@ struct SlackItemRow: View {
             Spacer()
             if let link = item["permalink"].nonEmpty {
                 Button { model.openThread(link) } label: { Label("Read thread", systemImage: "text.bubble") }.buttonStyle(LButton())
-                Button { openURL(link) } label: { Image(systemName: "arrow.up.right") }.buttonStyle(LButton()).help("Open in Slack")
+                Button { openURL(link) } label: { Image(systemName: "arrow.up.right") }.buttonStyle(LButton(square: true)).help("Open in Slack")
                 Menu {
                     ForEach(model.projects) { p in
                         Button(p.name) { Task { await model.slackItem(item["id"].string, "start", ["project": p.id]) } }

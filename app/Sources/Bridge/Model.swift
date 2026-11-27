@@ -672,6 +672,43 @@ final class AppModel {
         withAnimation(M.snappy) { projects = next }
         await updateProject(id, ["index": index - first])
     }
+    func renameProject(_ p: Project) {
+        let a = NSAlert()
+        a.messageText = "Rename \(p.name)"
+        if p.root { a.informativeText = "Default is where sessions that aren't in a project run. Leave the name empty to go back to “Default”." }
+        let f = NSTextField(string: p.name)
+        f.frame = NSRect(x: 0, y: 0, width: 260, height: 24)
+        a.accessoryView = f
+        a.addButton(withTitle: "Rename")
+        a.addButton(withTitle: "Cancel")
+        a.window.initialFirstResponder = f
+        guard a.runModal() == .alertFirstButtonReturn else { return }
+        let name = f.stringValue.trimmingCharacters(in: .whitespaces)
+        guard p.root || !name.isEmpty else { return }
+        Task { await updateProject(p.id, ["name": name]) }
+    }
+
+    /// Point Default at another folder (any folder; it needn't be a repo).
+    func chooseRootFolder() {
+        let p = NSOpenPanel()
+        p.canChooseDirectories = true
+        p.canChooseFiles = false
+        p.prompt = "Use Folder"
+        p.message = "Sessions that aren't in a project run in this folder"
+        if let root = projects.first(where: \.root) { p.directoryURL = URL(fileURLWithPath: root.path) }
+        guard p.runModal() == .OK, let u = p.url else { return }
+        Task { await updateProject(AppModel.rootId, ["path": u.path]) }
+    }
+
+    func confirmRemoveProject(_ p: Project) {
+        let a = NSAlert()
+        a.messageText = "Remove \(p.name) from Bridge?"
+        a.informativeText = "Its sessions and files stay; it just leaves the sidebar."
+        a.addButton(withTitle: "Remove")
+        a.addButton(withTitle: "Cancel")
+        if a.runModal() == .alertFirstButtonReturn { Task { await removeProject(p.id) } }
+    }
+
     func removeProject(_ id: String) async {
         await act { try await API.delete("/api/projects/\(id)") }
         if projectFilter == id { projectFilter = nil }

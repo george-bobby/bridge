@@ -3,10 +3,11 @@
  *
  * A project is a name and a git checkout. Every session belongs to one: the
  * one you dragged it to, else the one whose checkout (or worktree folder) it
- * runs in. Anything else is "Default": not a repo, just a folder (DEFAULT_DIR,
- * else your home) for general questions and one-off work. Default is listed
- * first, can't be renamed, moved or removed, and its orchestrator keeps the
- * original `orchestrator` id; every real project gets `orchestrator-<id>`.
+ * runs in. Anything else is "Default": not a repo, just a folder (set in the
+ * app, else DEFAULT_DIR, else your home) for general questions and one-off
+ * work. Default is listed first; it can be renamed and pointed at another
+ * folder but not moved or removed, and its orchestrator keeps the original
+ * `orchestrator` id; every real project gets `orchestrator-<id>`.
  *
  * Stored in data/projects.json, in sidebar order (Default isn't stored). The
  * first project is seeded from TARGET_REPO on first use.
@@ -21,12 +22,42 @@ const os = require("os");
 const FILE = path.join(env.dataDir, "projects.json");
 const DEFAULT = "default";
 
+// Default's name and folder, as you set them in the app (data/default.json);
+// the folder falls back to DEFAULT_DIR in .env, then your home folder.
+const ROOT_FILE = path.join(env.dataDir, "default.json");
+function rootPrefs() {
+  try {
+    return JSON.parse(fs.readFileSync(ROOT_FILE, "utf8")) || {};
+  } catch {
+    return {};
+  }
+}
+
+const expand = (d) => path.resolve(String(d).replace(/^~(?=$|\/)/, os.homedir()));
+
 /** The folder Default sessions and its orchestrator work in. */
 function rootDir() {
-  const d = env.defaultDir ? path.resolve(env.defaultDir.replace(/^~(?=$|\/)/, os.homedir())) : os.homedir();
-  return fs.existsSync(d) ? d : os.homedir();
+  for (const d of [rootPrefs().path, env.defaultDir]) {
+    if (d && fs.existsSync(expand(d))) return expand(d);
+  }
+  return os.homedir();
 }
-const rootProject = () => ({ id: DEFAULT, name: "Default", path: rootDir(), root: true });
+const rootProject = () => ({ id: DEFAULT, name: rootPrefs().name || "Default", path: rootDir(), root: true });
+
+/** Rename Default or point it at another folder (any folder: it needn't be a repo). */
+function updateRoot(patch) {
+  if (patch.index !== undefined) throw new Error("Default stays first");
+  const next = { ...rootPrefs() };
+  if (patch.name !== undefined) next.name = String(patch.name).trim().slice(0, 60) || undefined;
+  if (patch.path !== undefined) {
+    const dir = expand(patch.path);
+    if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) throw new Error(`not a folder: ${dir}`);
+    next.path = dir;
+  }
+  fs.mkdirSync(path.dirname(ROOT_FILE), { recursive: true });
+  fs.writeFileSync(ROOT_FILE, JSON.stringify(next, null, 2));
+  return rootProject();
+}
 
 const slug = (s) =>
   String(s || "")
@@ -116,7 +147,7 @@ function add({ path: repo, name }) {
 }
 
 function update(id, patch) {
-  if (id === DEFAULT) throw new Error("Default can't be renamed or moved");
+  if (id === DEFAULT) return updateRoot(patch);
   const all = list();
   const p = all.find((x) => x.id === id);
   if (!p) throw new Error(`no such project: ${id}`);

@@ -648,7 +648,7 @@ struct PaneHeader: View {
                     model.toggleDetails(pane.id)
                 }
             }
-            Menu {
+            MoreMenu(size: B.small) {
                 if let s {
                     Button { Task { await model.setPinned(s.id, !s.pinned) } } label: { Label(s.pinned ? "Unpin" : "Pin to the Sidebar", systemImage: s.pinned ? "star.slash" : "star") }
                 }
@@ -661,11 +661,7 @@ struct PaneHeader: View {
                     if !s.permalink.isEmpty { Button { model.openThread(s.permalink) } label: { Label("Read the Slack Thread", systemImage: "number") } }
                     SessionMenu(session: s, inChat: true)
                 }
-            } label: {
-                Image(systemName: "ellipsis").font(.system(size: 12, weight: .medium)).foregroundStyle(T.text2).frame(width: 24, height: 24)
             }
-            .menuStyle(.borderlessButton).menuIndicator(.hidden).frame(width: 26)
-            .help("More")
             if !narrow {
                 IconButton(icon: "minus", help: "Minimize pane", size: 24) { model.collapsePane(pane.id) }
                     .disabled(model.panes.filter { !$0.collapsed }.count < 2)
