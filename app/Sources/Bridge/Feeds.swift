@@ -83,6 +83,7 @@ extension AppModel {
         case .vercel: feed = vercel
         case .incidents: feed = incidents
         case .granola: feed = granola
+        case .datadog: feed = datadog
         case .github: return true
         }
         return feed["configured"].isNull || feed["configured"].bool
