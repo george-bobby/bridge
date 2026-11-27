@@ -488,6 +488,24 @@ async function handle(req, res) {
     }
   }
 
+  // --- Settings › Tokens: CodeBurn spend and the token savers (server/tokens.js) ---
+  if (p.startsWith("/api/tokens/")) {
+    const tokens = require("./tokens");
+    try {
+      if (req.method === "GET" && p === "/api/tokens/codeburn") {
+        return sendJson(res, 200, await tokens.codeburn({ period: url.searchParams.get("period") || "30days", refresh: url.searchParams.get("refresh") === "1" }));
+      }
+      if (req.method === "GET" && p === "/api/tokens/savers") return sendJson(res, 200, { ok: true, savers: await tokens.savers() });
+      if (req.method === "POST" && p === "/api/tokens/savers") {
+        const body = JSON.parse((await readBody(req)) || "{}");
+        return sendJson(res, 200, { ok: true, ...(await tokens.toggle(String(body.id || ""), body.on === true)) });
+      }
+      return sendJson(res, 404, { ok: false, error: `no tokens route for ${req.method} ${p}` });
+    } catch (e) {
+      return sendJson(res, 400, { ok: false, error: String(e.message || e) });
+    }
+  }
+
   // --- chats from the agents' own histories (Import chat) ------------------
   // GET /api/history[?agent=&q=] lists them, GET /api/history/:agent/:id
   // previews one, POST /api/history/import {agent, id} makes it a worker.
