@@ -27,6 +27,7 @@ const ENV = {
   CODEX_BIN: path.join(tmp, "fake-codex"),
   CLAUDE_CONFIG_DIR: path.join(tmp, "claude-home"),
   BRIDGE_HISTORY_HOME: path.join(tmp, "home"),
+  BRIDGE_MCP_HOME: path.join(tmp, "home"),
   STUB_LOG: path.join(tmp, "stub.log"),
 };
 
@@ -391,5 +392,5 @@ test("Default's folder is the fallback everywhere, not the first project; only S
   // A Slack chat with no project still runs in the pipeline's repo (TARGET_REPO).
   const slack = "1700000002.000200";
   fs.writeFileSync(path.join(DATA, "runs", `${slack}.json`), JSON.stringify({ runId: slack, createdAt: 1700000000, updatedAt: 1700000000, who: "Sam", text: "a thread", action: "pending", messages: [] }));
-  assert.strictEqual((await get(`/api/memory?runId=${slack}`)).workdir, tmp);
+  assert.strictEqual((await get(`/api/runs/${slack}/terminal`)).workdir, tmp);
 });

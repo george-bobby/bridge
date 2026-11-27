@@ -54,6 +54,7 @@ const ENV = {
   STUB_LOG: path.join(tmp, "stub.log"),
   // A scratch ~/.claude: no user skills or settings leak into the tests.
   CLAUDE_CONFIG_DIR: path.join(tmp, "claude-home"),
+  BRIDGE_MCP_HOME: path.join(tmp, "home"),
   BRIDGE_URL: URL_,
   BRIDGE_TASK_ID: "",
 };

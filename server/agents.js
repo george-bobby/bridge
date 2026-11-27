@@ -27,12 +27,14 @@ const NAMES = Object.keys(AGENTS);
 
 /** Command line for one turn. The prompt always goes on stdin (or a file):
  *  briefings run long, and a long argv is fragile. */
-function command(agent, { workdir, sessionId, permissionMode, model, effort, promptFile, exportFile }) {
+function command(agent, { workdir, sessionId, permissionMode, model, effort, promptFile, exportFile, memoryDir }) {
   const full = permissionMode === "bypassPermissions";
   const bin = AGENTS[agent].bin();
   if (agent === "codex") {
     const policy = full ? ["--dangerously-bypass-approvals-and-sandbox"] : ["--sandbox", permissionMode === "plan" ? "read-only" : "workspace-write"];
-    const base = ["exec", ...(sessionId ? ["resume", sessionId] : []), "--json", "--skip-git-repo-check", ...policy];
+    // The shared memory sits outside the worktree: its proposals folder must be writable.
+    const extra = !full && permissionMode !== "plan" && memoryDir ? ["--add-dir", memoryDir] : [];
+    const base = ["exec", ...extra, ...(sessionId ? ["resume", sessionId] : []), "--json", "--skip-git-repo-check", ...policy];
     if (!sessionId) base.push("-C", workdir);
     if (model) base.push("-m", model);
     if (effort) base.push("-c", `model_reasoning_effort=${effort}`);

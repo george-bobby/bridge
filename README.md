@@ -30,7 +30,7 @@ watch and steer all of it.
 - **Sources**: GitHub, Linear, Slack, Vercel deployments, incident.io incidents, Granola meeting notes, Datadog monitors and errors, and model providers (OpenRouter, Anthropic: models, context, prices, spend), cross-linked to the sessions working on them; pick which ones the sidebar shows.
 - **Preview deployments**: each PR's Vercel or Netlify preview in the sidebar, the PR list and the details panel; a click opens it in a browser tab next to the chat.
 - **Light and dark**: follows macOS, or pick one in Settings › General.
-- **Projects**: an orchestrator and a memory per project, plus **Default** for anything that isn't in a repo (it runs in your home folder).
+- **Projects**: an orchestrator and a memory per project (shared by Claude, Codex, Cursor and Devin; agents propose, you approve), plus **Default** for anything that isn't in a repo (it runs in your home folder).
 - **Customize** each agent: MCP servers, skills (edit, create, delete) and plugins, in one Settings pane.
 - **An orchestrator per project** that writes briefs, spawns workers and relays what they report.
 - **Common rules** every session follows in every repo (worktree off a fresh main, rebase before each push, verify on the running app, drafts before posting), edited in Settings › Rules.

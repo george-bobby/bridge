@@ -3,130 +3,180 @@ import SwiftUI
 
 // MARK: - Memory
 
-/// What Claude Code remembers about one project (`model.memoryProject`):
-/// its MEMORY.md index and the topic files beside it. Pick the project in the header.
+/// One project's shared memory (`model.memoryProject`): the MEMORY.md index and
+/// topic files every agent reads, plus the proposals agents filed, which become
+/// memories only when approved here. Pick the project in the header.
 struct MemoryView: View {
     @Environment(AppModel.self) var model
     @StateObject private var projectOpen = Box(false)
     @StateObject private var list = Box(JSON.null)
+    /// "m:<file>" for a memory, "p:<file>" for a proposal.
     @StateObject private var selected = Box("")
     @StateObject private var text = Box("")
     @StateObject private var saved = Box("")
     @StateObject private var loading = Box(false)
 
+    var name: String { String(selected.v.dropFirst(2)) }
+    var isProposal: Bool { selected.v.hasPrefix("p:") }
+    var dirty: Bool { text.v != saved.v && !selected.v.isEmpty }
+
     var body: some View {
         VStack(spacing: 0) {
-            PageHeader(title: "Memory", subtitle: "what Claude Code remembers about \(model.project(model.memoryProject)?.name ?? "this project")", icon: "book.closed") {
-                Button { projectOpen.v.toggle() } label: {
-                    PickerChip(text: model.project(model.memoryProject)?.name ?? "Project", open: projectOpen.v) {
-                        if let p = model.project(model.memoryProject) { ProjectBadge(project: p, size: 14) }
-                    }
-                }
-                .buttonStyle(Pressable(scale: 0.97))
-                .popover(isPresented: $projectOpen.v, arrowEdge: .bottom) {
-                    ProjectPanel(current: model.memoryProject) { id in projectOpen.v = false; switchProject(id) } add: { projectOpen.v = false; model.addProject() }
-                        .environment(model)
-                }
-                if text.v != saved.v && !selected.v.isEmpty && !loading.v {
-                    Button("Revert") { text.v = saved.v }.buttonStyle(LButton())
-                    Button("Save") { save() }.buttonStyle(LButton(primary: true)).keyboardShortcut("s")
-                }
+            PageHeader(title: "Memory", subtitle: "shared by Claude, Codex, Cursor and Devin in \(model.project(model.memoryProject)?.name ?? "this project")", icon: "book.closed") {
+                projectPicker
+                actions
                 IconButton(icon: "folder", help: "Show in Finder") { if let d = list.v["dir"].nonEmpty { NSWorkspace.shared.open(URL(fileURLWithPath: d)) } }
             }
             HStack(spacing: 0) {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        if !list.v.isNull && list.v["files"].array.isEmpty {
-                            Text("No memories yet. Claude Code writes them as it learns this project.").font(T.ui(12)).foregroundStyle(T.text3).padding(16)
-                        }
-                        ForEach(list.v["files"].array, id: \.self) { f in
-                            let name = f["name"].string
-                            HoverRow(selected: selected.v == name, height: 46) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    HStack(spacing: 6) {
-                                        Text(f["title"].nonEmpty ?? name).font(T.ui(12.5, .medium)).foregroundStyle(T.text).lineLimit(1)
-                                        if !f["type"].string.isEmpty { Chip(text: f["type"].string) }
-                                    }
-                                    Text(f["desc"].nonEmpty ?? name).font(T.ui(11.5)).foregroundStyle(T.text3).lineLimit(1)
-                                }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            }
-                            .onTapGesture { open(name) }
-                        }
-                    }
-                }
-                .frame(width: 300)
+                sidebar.frame(width: 300)
                 Rectangle().fill(T.line).frame(width: 1)
-                if selected.v.isEmpty {
-                    EmptyState(icon: "book.closed", title: "Pick a memory", detail: "Every headless run reads these. Edit them here and press ⌘S.")
-                } else {
-                    TextEditor(text: $text.v)
-                        .font(T.mono(12.5))
-                        .scrollContentBackground(.hidden)
-                        .padding(18)
-                        .disabled(loading.v)
-                        .opacity(loading.v ? 0.5 : 1)
-                }
+                editor
             }
         }
         .onAppear { if model.project(model.memoryProject) == nil { model.openMemory() } }
         .task(id: model.memoryProject) { if !model.memoryProject.isEmpty { await reload() } }
     }
 
+    var projectPicker: some View {
+        Button { projectOpen.v.toggle() } label: {
+            PickerChip(text: model.project(model.memoryProject)?.name ?? "Project", open: projectOpen.v) {
+                if let p = model.project(model.memoryProject) { ProjectBadge(project: p, size: 14) }
+            }
+        }
+        .buttonStyle(Pressable(scale: 0.97))
+        .popover(isPresented: $projectOpen.v, arrowEdge: .bottom) {
+            ProjectPanel(current: model.memoryProject) { id in projectOpen.v = false; switchProject(id) } add: { projectOpen.v = false; model.addProject() }
+                .environment(model)
+        }
+    }
+
+    @ViewBuilder var actions: some View {
+        if !selected.v.isEmpty && !loading.v {
+            if isProposal {
+                Button("Discard") { discard() }.buttonStyle(LButton(kind: .danger))
+                Button("Approve") { approve() }.buttonStyle(LButton(kind: .primary)).keyboardShortcut("s")
+            } else {
+                if dirty {
+                    Button("Revert") { text.v = saved.v }.buttonStyle(LButton())
+                    Button("Save") { save() }.buttonStyle(LButton(kind: .primary)).keyboardShortcut("s")
+                }
+                if name != "MEMORY.md" { IconButton(icon: "trash", help: "Delete this memory") { delete() } }
+            }
+        }
+    }
+
+    var sidebar: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                let proposals = list.v["proposals"].array
+                if !proposals.isEmpty {
+                    SectionLabel(text: "Proposed", count: proposals.count)
+                    ForEach(proposals, id: \.self) { row($0, key: "p:") }
+                    SectionLabel(text: "Memories")
+                }
+                if !list.v.isNull && list.v["files"].array.isEmpty {
+                    Text("No memories yet. Agents propose them as they learn this project; approve them here.").font(T.ui(12)).foregroundStyle(T.text3).padding(16)
+                }
+                ForEach(list.v["files"].array, id: \.self) { row($0, key: "m:") }
+            }
+        }
+    }
+
+    func row(_ f: JSON, key: String) -> some View {
+        let file = f["name"].string
+        return HoverRow(selected: selected.v == key + file, height: 46) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(f["title"].nonEmpty ?? file).font(T.ui(12.5, .medium)).foregroundStyle(T.text).lineLimit(1)
+                    if key == "p:" { Chip(text: f["updates"].bool ? "update" : "new") }
+                    if !f["type"].string.isEmpty { Chip(text: f["type"].string) }
+                }
+                Text(f["desc"].nonEmpty ?? file).font(T.ui(11.5)).foregroundStyle(T.text3).lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .onTapGesture { open(key + file) }
+    }
+
+    @ViewBuilder var editor: some View {
+        if selected.v.isEmpty {
+            EmptyState(icon: "book.closed", title: "Pick a memory", detail: "Every agent reads these. Edit one and press ⌘S; approve a proposal to keep it.")
+        } else {
+            TextEditor(text: $text.v)
+                .font(T.mono(12.5))
+                .scrollContentBackground(.hidden)
+                .padding(18)
+                .disabled(loading.v)
+                .opacity(loading.v ? 0.5 : 1)
+        }
+    }
+
     var q: String { "project=\(API.q(model.memoryProject))" }
 
     func reload() async {
-        list.v = .null
         let out = (try? await API.get("/api/memory?\(q)")) ?? .null
-        list.v = out.isNull ? .obj(["files": .arr([])]) : out
+        list.v = out.isNull ? .obj(["files": .arr([]), "proposals": .arr([])]) : out
     }
 
+    /// Asks before throwing away unsaved edits; true when it's fine to move on.
+    func leave() -> Bool {
+        guard dirty else { return true }
+        let a = NSAlert()
+        a.messageText = "Discard your changes to \(name)?"
+        a.addButton(withTitle: "Discard")
+        a.addButton(withTitle: "Keep Editing")
+        return a.runModal() == .alertFirstButtonReturn
+    }
+
+    func clear() { selected.v = ""; text.v = ""; saved.v = "" }
+
     func switchProject(_ id: String) {
-        guard id != model.memoryProject else { return }
-        if text.v != saved.v && !selected.v.isEmpty {
-            let a = NSAlert()
-            a.messageText = "Discard your changes to \(selected.v)?"
-            a.addButton(withTitle: "Discard")
-            a.addButton(withTitle: "Keep Editing")
-            if a.runModal() != .alertFirstButtonReturn { return }
-        }
-        selected.v = ""; text.v = ""; saved.v = ""
+        guard id != model.memoryProject, leave() else { return }
+        clear()
+        list.v = .null
         model.memoryProject = id
     }
 
     /// The buffer always belongs to the file it was read from: a read is
     /// applied only if that file is still selected, and editing waits for it.
-    func open(_ name: String) {
-        guard name != selected.v else { return }
-        if text.v != saved.v && !selected.v.isEmpty {
-            let a = NSAlert()
-            a.messageText = "Discard your changes to \(selected.v)?"
-            a.addButton(withTitle: "Discard")
-            a.addButton(withTitle: "Keep Editing")
-            if a.runModal() != .alertFirstButtonReturn { return }
-        }
-        selected.v = name
+    func open(_ key: String) {
+        guard key != selected.v, leave() else { return }
+        selected.v = key
         loading.v = true
+        let proposed = key.hasPrefix("p:") ? "&proposed=1" : ""
         Task {
-            guard let f = try? await API.get("/api/memory/file?name=\(API.q(name))&\(q)"), selected.v == name else { return }
+            guard let f = try? await API.get("/api/memory/file?name=\(API.q(String(key.dropFirst(2))))\(proposed)&\(q)"), selected.v == key else { return }
             text.v = f["text"].string
             saved.v = text.v
             loading.v = false
         }
     }
 
-    func save() {
-        let name = selected.v
-        let body = text.v
-        guard !loading.v, !name.isEmpty else { return }
+    func post(_ verb: String, _ extra: [String: String] = [:], done: String, keep: Bool = false) {
+        let file = name
+        var body = ["name": file, "project": model.memoryProject]
+        body.merge(extra) { $1 }
         Task {
             await model.act {
-                try await API.post("/api/memory/file", ["name": name, "text": body, "project": self.model.memoryProject])
-                // Only this file's baseline moves, and only if you're still on it.
-                if self.selected.v == name { self.saved.v = body }
-                self.model.say("Saved \(name)")
+                try await API.post("/api/memory/\(verb)", body)
+                if keep { if self.name == file { self.saved.v = body["text"] ?? "" } } else { self.clear() }
+                await self.reload()
+                self.model.say("\(done) \(file)")
             }
         }
+    }
+
+    func save() { guard !loading.v, !name.isEmpty else { return }; post("file", ["text": text.v], done: "Saved", keep: true) }
+    func approve() { post("approve", ["text": text.v], done: "Approved") }
+    func discard() { post("discard", done: "Discarded") }
+
+    func delete() {
+        let a = NSAlert()
+        a.messageText = "Delete \(name)?"
+        a.informativeText = "Every agent stops seeing it. This can't be undone."
+        a.addButton(withTitle: "Delete")
+        a.addButton(withTitle: "Cancel")
+        if a.runModal() == .alertFirstButtonReturn { post("delete", done: "Deleted") }
     }
 }
 

@@ -1,69 +1,41 @@
 /**
- * Claude Code's project memory, read and written from the dashboard.
+ * One memory per project, shared by Claude Code, Codex, Cursor and Devin.
  *
- * Every repo Claude Code has worked in gets a directory under
- * `~/.claude/projects/<slug>/`, and the memory lives in `memory/` inside it:
- * one fact per file, plus a `MEMORY.md` index that is loaded into context at
- * the start of every session. That index is the thing worth editing from here —
- * it is what the poller's headless runs actually read, and until now the only
- * way to see what a run was told about the repo was to go open the folder.
+ * It lives in `data/memory/<project id>/`: a `MEMORY.md` index (one line per
+ * memory) and one topic file per fact, with frontmatter `name`, `description`
+ * and `metadata.type` (user | feedback | project | reference). Every session
+ * Bridge starts gets the index (`block()`); agents started anywhere else find
+ * it through the pointers `connect()` writes into each agent's own global
+ * instructions.
  *
- * This module is deliberately the whole of the filesystem surface: server/index.js
- * hands it a workdir and a filename and gets back text, and every path it
- * builds is re-checked against the memory directory it derived. A POST to this
- * server can already start a session with permissions skipped, so the write
- * side is narrow on purpose — `*.md`, inside one directory, and nothing that
- * loses text: creating requires a name that does not exist yet, and retiring a
- * memory moves it into `.archive/` rather than unlinking it.
- *
- * **Every write also maintains `MEMORY.md`.** The index is the only part of a
- * project's memory that is loaded into every session, which makes it the real
- * context budget — a file the index doesn't mention is never found, and an
- * index line pointing at a file that has been retired is a broken promise. The
- * two are edited together here so neither can drift.
+ * Agents never edit it. They write a proposal, a whole topic file, into the
+ * folder's `.proposed/`, which nothing loads; you approve or discard it on the
+ * Memory page. Approving writes the file and its index line together, so the
+ * index and the folder can't drift.
  */
 
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const env = require("./env");
+const projects = require("./projects");
 
-const reads = require("./reads");
+const ROOT = path.join(env.dataDir, "memory");
+const PROPOSED = ".proposed";
+const TYPES = ["user", "feedback", "project", "reference"];
+const INDEX_CAP = 25000;
 
-const PROJECTS = path.join(os.homedir(), ".claude", "projects");
-
-// Where a retired memory goes. Inside the memory directory so it travels with
-// the project, dot-prefixed so Claude Code's own loader skips it, and a plain
-// move so restoring is a move back.
-const ARCHIVE = ".archive";
-
-/**
- * A working directory to its `~/.claude/projects` folder name.
- *
- * Claude Code flattens the absolute path by replacing every character that is
- * not a letter or digit with a dash, which is why worktrees come out as
- * `-Users-you-Development-repo--claude-worktrees-exp-379`: the slash and the
- * dot of `/.claude` both become dashes and collapse into a visible `--`.
- */
-function dirFor(workdir) {
-  return path.join(PROJECTS, reads.slugFor(workdir), "memory");
+/** A project's memory folder, or throw for an unknown project. */
+function dirOf(projectId) {
+  const p = projects.get(String(projectId || ""));
+  if (!p) throw new Error(`no such project: ${projectId}`);
+  return path.join(ROOT, p.id);
 }
 
-/**
- * A memory file's own name for itself.
- *
- * The per-fact files open with YAML frontmatter carrying `name`, `description`
- * and a `metadata.type` of user | feedback | project | reference — which is
- * what the list groups by, so a repo with twenty memories still reads as four
- * short sections rather than one wall of filenames. `MEMORY.md` has no
- * frontmatter at all, so both fallbacks matter.
- */
+/** `name`, `description` and `metadata.type` from a topic file's frontmatter. */
 function describe(text, file) {
   const fm = text.startsWith("---\n") ? text.slice(4, text.indexOf("\n---", 4) + 1) : "";
-  // Descriptions are long enough to need quoting in YAML, and both the quotes
-  // and the backslashes escaping the inner ones are syntax rather than content
-  // — neither may reach the index line or the panel, which show the value to a
-  // reader. Unescaping only inside a quoted scalar, because that is the only
-  // place YAML gives `\"` that meaning.
+  // Quoted YAML scalars: the quotes and their escapes are syntax, not content.
   const field = (k) => {
     const raw = (fm.match(new RegExp(`^\\s*${k}:\\s*(.+)$`, "m")) || [, ""])[1].trim();
     const m = raw.match(/^(['"])([\s\S]*)\1$/);
@@ -71,200 +43,105 @@ function describe(text, file) {
     return m[1] === '"' ? m[2].replace(/\\(["\\])/g, "$1") : m[2].replace(/''/g, "'");
   };
   const heading = (text.match(/^#\s+(.+)$/m) || [, ""])[1].trim();
-  return {
-    title: field("name") || heading || file.replace(/\.md$/, ""),
-    desc: field("description"),
-    // `type:` only ever appears under `metadata:`, so it needs no more care.
-    type: field("type"),
-  };
+  return { title: field("name") || heading || file.replace(/\.md$/, ""), desc: field("description"), type: field("type") };
 }
 
-/** Every `*.md` in a project's memory, index first and the rest alphabetical.
- *  Missing directory is a normal answer, not an error: most repos have no
- *  memory, and the panel says so rather than showing a failure.
- *
- *  Each file carries what it has cost and earned: `reads` and `lastUsedAt` from
- *  the session transcripts (see server/reads.js), and `unusedDays` measured from
- *  the last read *or* from when the file was written if it has never been read
- *  — a memory created yesterday is new, not stale, and the two are
- *  indistinguishable without that fallback. */
-function list(workdir, opts = {}) {
-  const dir = dirFor(workdir);
-  const out = {
-    dir,
-    project: path.basename(path.resolve(workdir)),
-    exists: false,
-    files: [],
-    archived: archived(workdir),
-  };
+function files(dir) {
   let names;
   try {
     names = fs.readdirSync(dir);
   } catch {
-    return out;
+    return [];
   }
-  out.exists = true;
-
+  const out = [];
   for (const name of names) {
     if (!name.endsWith(".md")) continue;
-    let stat, text;
     try {
-      stat = fs.statSync(path.join(dir, name));
+      const file = path.join(dir, name);
+      const stat = fs.statSync(file);
       if (!stat.isFile()) continue;
-      text = fs.readFileSync(path.join(dir, name), "utf8");
-    } catch {
-      continue;
-    }
-    out.files.push({ name, size: stat.size, mtime: Math.floor(stat.mtimeMs / 1000), ...describe(text, name) });
+      out.push({ name, size: stat.size, mtime: Math.floor(stat.mtimeMs / 1000), ...describe(fs.readFileSync(file, "utf8"), name) });
+    } catch {}
   }
-
-  out.files.sort((a, b) =>
-    a.name === "MEMORY.md" ? -1 : b.name === "MEMORY.md" ? 1 : a.name.localeCompare(b.name)
-  );
-
-  if (opts.usage !== false) {
-    const stats = reads.usage(
-      workdir,
-      out.files.map((f) => f.name)
-    );
-    out.scannedTranscripts = stats.transcripts;
-    const now = Date.now();
-    for (const f of out.files) {
-      const s = stats.byName[f.name];
-      if (!s) continue;
-      f.reads = s.reads;
-      f.recalls = s.recalls;
-      f.lastUsedAt = s.lastUsedAt ? Math.floor(s.lastUsedAt / 1000) : 0;
-      f.unusedDays = Math.floor((now - (s.lastUsedAt || f.mtime * 1000)) / 86400000);
-    }
-    // The index is what every session pays for, so its size is the budget the
-    // panel shows rather than the total size of the memory directory.
-    const idx = out.files.find((f) => f.name === "MEMORY.md");
-    out.indexBytes = idx ? idx.size : 0;
-  }
-
-  /*
-   * Does the index still agree with the directory?
-   *
-   * These drift, and the drift is silent in both directions. A memory the index
-   * has stopped listing is still on disk and still perfectly good, but nothing
-   * loads it and no session can find it — which also pins its read count at
-   * zero forever, so any rule that retires unused memories will eventually
-   * retire it *because* it was orphaned. An index line with no file behind it
-   * is the mirror image: it spends context on every session to promise
-   * something that cannot be opened.
-   *
-   * Neither is inferable from a file listing alone, and both are one set
-   * difference away, so the panel is never without the answer.
-   */
-  const index = readIndex(dir);
-  // The headings already in use, offered when writing a new memory so a repo
-  // does not accumulate a fourth spelling of "Code style".
-  out.sections = index
-    .split("\n")
-    .filter((l) => /^#{1,6}\s/.test(l))
-    .map((l) => l.replace(/^#{1,6}\s*/, "").trim());
-  const listed = new Set([...index.matchAll(/\]\(([^)]+)\)/g)].map((m) => m[1]));
-  const present = new Set(out.files.map((f) => f.name).filter((n) => n !== "MEMORY.md"));
-  out.orphaned = [...present].filter((n) => !listed.has(n));
-  out.dangling = [...listed].filter((n) => n.endsWith(".md") && !present.has(n));
-  for (const f of out.files) f.orphaned = out.orphaned.includes(f.name);
-
-  return out;
+  return out.sort((a, b) => (a.name === "MEMORY.md" ? -1 : b.name === "MEMORY.md" ? 1 : a.name.localeCompare(b.name)));
 }
 
-/**
- * Resolve one file inside a project's memory, or throw.
- *
- * Two checks rather than one: the name has to look like a bare markdown
- * filename, *and* the joined path has to still be inside the directory after
- * resolution. The first rejects `../../.ssh/config` outright; the second is
- * what holds if the first is ever loosened, and costs nothing to keep.
- */
-function resolve(workdir, name) {
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*\.md$/.test(String(name || ""))) {
-    throw new Error("memory files are named like feedback-thing.md");
-  }
-  const dir = dirFor(workdir);
+/** The index first, then every memory; pending proposals beside them. */
+function list(projectId) {
+  const dir = dirOf(projectId);
+  const live = files(dir);
+  const names = new Set(live.map((f) => f.name));
+  const idx = live.find((f) => f.name === "MEMORY.md");
+  return {
+    dir,
+    project: projectId,
+    files: live,
+    proposals: files(path.join(dir, PROPOSED)).map((f) => ({ ...f, updates: names.has(f.name) })),
+    indexBytes: idx ? idx.size : 0,
+  };
+}
+
+/** A bare `*.md` name inside the folder (or its `.proposed/`), or throw. */
+function resolve(projectId, name, proposed = false) {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*\.md$/.test(String(name || ""))) throw new Error("memory files are named like feedback-thing.md");
+  const dir = proposed ? path.join(dirOf(projectId), PROPOSED) : dirOf(projectId);
   const file = path.resolve(dir, name);
-  if (path.dirname(file) !== path.resolve(dir)) throw new Error("outside the memory directory");
+  if (path.dirname(file) !== path.resolve(dir)) throw new Error("outside the memory folder");
   return file;
 }
 
-function read(workdir, name) {
-  const file = resolve(workdir, name);
-  return { name, text: fs.readFileSync(file, "utf8") };
+function read(projectId, name, proposed = false) {
+  return { name, text: fs.readFileSync(resolve(projectId, name, proposed), "utf8") };
 }
 
-/**
- * Overwrite one memory file.
- *
- * Only files that already exist: this panel is for reading and correcting what
- * Claude wrote about the repo, and letting a browser POST new files into
- * `~/.claude` is a bigger door than that needs. Written through a temp file and
- * renamed, so a session reading MEMORY.md mid-save gets the old one or the new
- * one and never half of either.
- */
-function write(workdir, name, text) {
-  const file = resolve(workdir, name);
-  if (!fs.existsSync(file)) throw new Error(`no such memory: ${name}`);
-  if (typeof text !== "string") throw new Error("text must be a string");
-  if (text.length > 500_000) throw new Error("that is too long to be a memory");
-
+function save(file, text) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.tmp-${process.pid}`;
   fs.writeFileSync(tmp, text.endsWith("\n") ? text : text + "\n");
   fs.renameSync(tmp, file);
+}
+
+function checkText(text) {
+  if (typeof text !== "string" || !text.trim()) throw new Error("a memory needs text");
+  if (text.length > 500_000) throw new Error("that is too long to be a memory");
+}
+
+/** Edit a memory, or the index, that already exists. */
+function write(projectId, name, text) {
+  const file = resolve(projectId, name);
+  if (!fs.existsSync(file)) throw new Error(`no such memory: ${name}`);
+  checkText(text);
+  save(file, text);
   return { name, savedAt: Math.floor(Date.now() / 1000) };
 }
 
 /* ------------------------------------------------------------------ index */
 
-/**
- * `MEMORY.md` as sections of bullets.
- *
- * The format is the one Claude Code writes and the one a human keeps editing by
- * hand, so this parses loosely and rewrites conservatively: headings are `#`
- * lines, entries are `- [Title](file.md) — hook`, and anything else in the file
- * is carried through untouched. A prose paragraph someone added under a heading
- * survives a create and a retire.
- */
+// `MEMORY.md` entries are `- [Title](file.md) — hook` under `#` headings;
+// anything else in the file is carried through untouched.
 const ENTRY = /^\s*-\s*\[[^\]]*\]\(([^)]+)\)/;
-
-function indexOf(dir) {
-  return path.join(dir, "MEMORY.md");
-}
 
 function readIndex(dir) {
   try {
-    return fs.readFileSync(indexOf(dir), "utf8");
+    return fs.readFileSync(path.join(dir, "MEMORY.md"), "utf8");
   } catch {
     return "";
   }
 }
 
-/** Add one entry, under `section` if it exists and in a new trailing section if
- *  it does not. Never adds a second line for a file already listed. */
+/** Add one entry under `section` (a new trailing section if it's missing);
+ *  never a second line for a file already listed. */
 function addToIndex(text, { name, title, hook, section }) {
   const lines = text.split("\n");
   if (lines.some((l) => (l.match(ENTRY) || [, ""])[1] === name)) return text;
-
   const one = (s) => String(s || "").replace(/\s+/g, " ").trim();
   const entry = `- [${one(title).replace(/[[\]]/g, "")}](${name})${one(hook) ? ` — ${one(hook)}` : ""}`;
   const heading = one(section);
-  const at = heading
-    ? lines.findIndex((l) => /^#{1,6}\s/.test(l) && l.replace(/^#{1,6}\s*/, "").trim() === heading)
-    : -1;
-
+  const at = heading ? lines.findIndex((l) => /^#{1,6}\s/.test(l) && l.replace(/^#{1,6}\s*/, "").trim() === heading) : -1;
   if (at === -1) {
-    // A project's first memory writes the whole index, so the empty case must
-    // not leave the blank lines that separate sections in a populated one.
     const body = text.replace(/\s*$/, "");
-    const lead = body ? `${body}\n\n` : "";
-    return `${lead}${heading ? `# ${heading}\n\n` : ""}${entry}\n`;
+    return `${body ? `${body}\n\n` : ""}${heading ? `# ${heading}\n\n` : ""}${entry}\n`;
   }
-
-  // Last bullet of that section, so a new memory lands beside its siblings
-  // rather than above them.
   let end = at + 1;
   for (let i = at + 1; i < lines.length; i++) {
     if (/^#{1,6}\s/.test(lines[i])) break;
@@ -274,16 +151,14 @@ function addToIndex(text, { name, title, hook, section }) {
   return lines.join("\n");
 }
 
-/** Drop a file's entry, and the heading above it if that leaves it empty. */
+/** Drop a file's entry, and its heading if that leaves the section empty. */
 function removeFromIndex(text, name) {
   const lines = text.split("\n").filter((l) => (l.match(ENTRY) || [, ""])[1] !== name);
   const out = [];
   for (let i = 0; i < lines.length; i++) {
     if (/^#{1,6}\s/.test(lines[i])) {
       let hasBody = false;
-      for (let j = i + 1; j < lines.length && !/^#{1,6}\s/.test(lines[j]); j++) {
-        if (lines[j].trim()) hasBody = true;
-      }
+      for (let j = i + 1; j < lines.length && !/^#{1,6}\s/.test(lines[j]); j++) if (lines[j].trim()) hasBody = true;
       if (!hasBody) {
         while (i + 1 < lines.length && !lines[i + 1].trim()) i++;
         continue;
@@ -294,163 +169,131 @@ function removeFromIndex(text, name) {
   return out.join("\n").replace(/\n{3,}/g, "\n\n").replace(/\s*$/, "\n");
 }
 
-function saveText(file, text) {
-  const tmp = `${file}.tmp-${process.pid}`;
-  fs.writeFileSync(tmp, text.endsWith("\n") ? text : text + "\n");
-  fs.renameSync(tmp, file);
-}
-
-/* ------------------------------------------------------- create and retire */
+/* --------------------------------------------------- approve and discard */
 
 /**
- * Write a memory that does not exist yet, and list it in the index.
- *
- * Refuses to overwrite: an approval that silently replaced a memory would lose
- * the very thing the panel exists to protect. The frontmatter is checked rather
- * than trusted because `describe()` and Claude Code's own loader both read it
- * by key — a file without `name` and `description` is findable by neither.
+ * A proposal becomes a memory: written into the folder (replacing the memory
+ * of the same name, if it amends one) and listed in the index. `text` is the
+ * proposal as you last edited it.
  */
-function create(workdir, name, text, opts = {}) {
-  const file = resolve(workdir, name);
+function approve(projectId, name, text) {
   if (name === "MEMORY.md") throw new Error("MEMORY.md is the index, not a memory");
-  if (fs.existsSync(file)) throw new Error(`already exists: ${name} — update it instead`);
-  if (typeof text !== "string" || !text.trim()) throw new Error("a memory needs text");
-  if (text.length > 500_000) throw new Error("that is too long to be a memory");
-
-  const meta = describe(text, name);
-  if (!meta.desc) throw new Error("frontmatter needs a description — it is what recall matches on");
-  if (!["user", "feedback", "project", "reference"].includes(meta.type)) {
-    throw new Error("frontmatter needs metadata.type of user | feedback | project | reference");
-  }
-
-  const dir = dirFor(workdir);
-  fs.mkdirSync(dir, { recursive: true });
-  saveText(file, text);
-  saveText(
-    indexOf(dir),
-    addToIndex(readIndex(dir), {
-      name,
-      title: opts.title || meta.title,
-      hook: opts.hook || meta.desc,
-      section: opts.section,
-    })
-  );
-  return { name, createdAt: Math.floor(Date.now() / 1000) };
+  const from = resolve(projectId, name, true);
+  if (!fs.existsSync(from)) throw new Error(`no such proposal: ${name}`);
+  const body = typeof text === "string" ? text : fs.readFileSync(from, "utf8");
+  checkText(body);
+  const meta = describe(body, name);
+  if (!meta.desc) throw new Error("frontmatter needs a description: it is what the index line says");
+  if (!TYPES.includes(meta.type)) throw new Error(`frontmatter needs metadata.type of ${TYPES.join(" | ")}`);
+  const dir = dirOf(projectId);
+  save(resolve(projectId, name), body);
+  save(path.join(dir, "MEMORY.md"), addToIndex(readIndex(dir), { name, title: meta.title, hook: meta.desc }));
+  fs.rmSync(from, { force: true });
+  return { name, approvedAt: Math.floor(Date.now() / 1000) };
 }
 
-/**
- * The frontmatter for a memory you are about to write by hand.
- *
- * Composed here rather than in the page because `create()` rejects a file whose
- * frontmatter it cannot read, and a form that can produce an invalid one is a
- * form that fails after you have typed the prose. `node_type` and the quoting
- * style match what Claude Code writes, so a hand-made memory and a session-made
- * one are the same kind of file.
- */
-function scaffold({ name, title, description, type }) {
-  const slug = String(name || "").replace(/\.md$/, "");
-  // A description carrying a quote or a newline would break the YAML scalar it
-  // is about to become; both are the caller's text, so neither may be trusted.
-  const desc = String(description || "").replace(/[\r\n]+/g, " ").replace(/"/g, '\\"').trim();
+function discard(projectId, name) {
+  fs.rmSync(resolve(projectId, name, true), { force: true });
+  return { name };
+}
+
+/** Delete a memory and its index line. */
+function remove(projectId, name) {
+  if (name === "MEMORY.md") throw new Error("MEMORY.md is the index, not a memory");
+  const file = resolve(projectId, name);
+  if (!fs.existsSync(file)) throw new Error(`no such memory: ${name}`);
+  fs.rmSync(file);
+  const dir = dirOf(projectId);
+  save(path.join(dir, "MEMORY.md"), removeFromIndex(readIndex(dir), name));
+  return { name };
+}
+
+/* ------------------------------------------------------------- sessions */
+
+const HOW_TO_PROPOSE = (dir) =>
+  `To remember something durable (it generalises beyond this task, isn't in the repo, and was non-obvious), don't edit these files: write the whole topic file, frontmatter \`name\`, \`description\` (one sentence) and \`metadata.type\` (user | feedback | project | reference), to \`${path.join(dir, PROPOSED)}/<kebab-name>.md\`. Reuse an existing file's name to amend it. It is used once approved in Bridge.`;
+
+/** What a session is told: the index, capped, and how to propose. */
+function block(projectId) {
+  let dir;
+  try {
+    dir = dirOf(projectId);
+  } catch {
+    return "";
+  }
+  let index = readIndex(dir).trim();
+  if (index.length > INDEX_CAP) index = `${index.slice(0, INDEX_CAP)}\n(index cut short)`;
+  const head = `## This project's memory\nShared by every agent. Topic files are in ${dir}: open one when its line below bears on the task.`;
+  return `${head}\n\n${index || "(empty so far)"}\n\n${HOW_TO_PROPOSE(dir)}\n`;
+}
+
+/* -------------------------------------------- agents started elsewhere */
+
+// The agents' own homes. BRIDGE_MCP_HOME is the scratch home tests use, and
+// wins over the agents' own overrides so a test can never reach the real ones.
+const scratch = () => process.env.BRIDGE_MCP_HOME;
+const home = () => scratch() || os.homedir();
+const claudeDir = () => (!scratch() && process.env.CLAUDE_CONFIG_DIR) || path.join(home(), ".claude");
+const codexDir = () => (!scratch() && process.env.CODEX_HOME) || path.join(home(), ".codex");
+const BEGIN = "<!-- bridge:memory -->";
+const END = "<!-- /bridge:memory -->";
+
+function pointer() {
+  const rows = projects.withRoot().filter((p) => !p.root || fs.existsSync(path.join(ROOT, p.id, "MEMORY.md")));
+  const lines = rows.map((p) => `- ${p.path}${p.root ? "" : ` (and its worktrees in ${p.path}-worktrees/)`}: ${path.join(ROOT, p.id, "MEMORY.md")}`);
   return [
-    "---",
-    `name: ${slug}`,
-    `description: "${desc}"`,
-    "metadata: ",
-    "  node_type: memory",
-    `  type: ${type}`,
-    `  modified: ${new Date().toISOString()}`,
-    "---",
+    "## Shared memory",
     "",
-    // Trailing whitespace is a line break in markdown, so the stub ends clean.
-    title ? `**${title}.**` : "",
+    "Claude Code, Codex, Cursor and Devin share one memory per project, kept by Bridge. When you work in one of these folders, read its MEMORY.md index first and open the topic files beside it whose line bears on the task:",
     "",
+    ...lines,
+    "",
+    "To remember something, write a proposal into that folder's `.proposed/` (the whole topic file with frontmatter `name`, `description`, `metadata.type`); it is used once approved in Bridge. Never edit the memory files directly.",
   ].join("\n");
 }
 
-/**
- * Retire a memory: out of the index, into `.archive/`.
- *
- * Deliberately not a delete. A memory is the distilled output of work that has
- * already happened and cannot be reconstructed from the repo, and the pruning
- * signal that suggests retiring one — nobody has read it lately — is exactly
- * the signal that is wrong about a memory covering a rare case. Moving it costs
- * a directory entry and makes the mistake recoverable.
- */
-function archive(workdir, name) {
-  const file = resolve(workdir, name);
-  if (name === "MEMORY.md") throw new Error("MEMORY.md is the index, not a memory");
-  if (!fs.existsSync(file)) throw new Error(`no such memory: ${name}`);
-
-  const dir = dirFor(workdir);
-  const into = path.join(dir, ARCHIVE);
-  fs.mkdirSync(into, { recursive: true });
-  const to = fs.existsSync(path.join(into, name)) ? name.replace(/\.md$/, `-${Date.now()}.md`) : name;
-  fs.renameSync(file, path.join(into, to));
-  saveText(indexOf(dir), removeFromIndex(readIndex(dir), name));
-  return { name, archivedAt: Math.floor(Date.now() / 1000) };
-}
-
-/**
- * List a memory that is on disk but missing from the index.
- *
- * Distinct from `restore` because the file never moved: something rewrote
- * MEMORY.md and dropped the line, leaving a perfectly good memory that no
- * session can find. The fix is one index entry, rebuilt from the file's own
- * frontmatter, so it says exactly what the memory says about itself.
- */
-function relist(workdir, name, opts = {}) {
-  const file = resolve(workdir, name);
-  if (name === "MEMORY.md") throw new Error("MEMORY.md is the index, not a memory");
-  if (!fs.existsSync(file)) throw new Error(`no such memory: ${name}`);
-
-  const dir = dirFor(workdir);
-  const meta = describe(fs.readFileSync(file, "utf8"), name);
-  saveText(
-    indexOf(dir),
-    addToIndex(readIndex(dir), {
-      name,
-      title: opts.title || meta.title,
-      hook: opts.hook || meta.desc,
-      section: opts.section,
-    })
-  );
-  return { name, relistedAt: Math.floor(Date.now() / 1000) };
-}
-
-/** Put an archived memory back, index line and all. */
-function restore(workdir, name) {
-  const file = resolve(workdir, name);
-  const dir = dirFor(workdir);
-  const from = path.join(dir, ARCHIVE, name);
-  if (!fs.existsSync(from)) throw new Error(`not archived: ${name}`);
-  if (fs.existsSync(file)) throw new Error(`already live: ${name}`);
-
-  fs.renameSync(from, file);
-  const meta = describe(fs.readFileSync(file, "utf8"), name);
-  saveText(indexOf(dir), addToIndex(readIndex(dir), { name, title: meta.title, hook: meta.desc }));
-  return { name, restoredAt: Math.floor(Date.now() / 1000) };
-}
-
-function archived(workdir) {
+/** Replace Bridge's marked block in a Markdown file, keeping the rest. */
+function upsertBlock(file, body) {
+  let text = "";
   try {
-    return fs.readdirSync(path.join(dirFor(workdir), ARCHIVE)).filter((n) => n.endsWith(".md"));
-  } catch {
-    return [];
-  }
+    text = fs.readFileSync(file, "utf8");
+  } catch {}
+  const block = `${BEGIN}\n${body}\n${END}`;
+  const at = text.indexOf(BEGIN);
+  const end = text.indexOf(END);
+  const next = at >= 0 && end > at ? text.slice(0, at) + block + text.slice(end + END.length) : `${text.replace(/\s*$/, "")}${text.trim() ? "\n\n" : ""}${block}\n`;
+  if (next !== text) save(file, next);
 }
 
-module.exports = {
-  dirFor,
-  list,
-  read,
-  write,
-  create,
-  archive,
-  restore,
-  relist,
-  scaffold,
-  archived,
-  addToIndex,
-  removeFromIndex,
-};
+/**
+ * Point every agent at the shared memory, wherever it is started:
+ * Claude Code (and Devin, which reads it too) through ~/.claude/CLAUDE.md,
+ * Codex through ~/.codex/AGENTS.md, Cursor through a user rule. Claude's own
+ * auto memory is turned off, so it proposes like the rest instead of writing
+ * a second memory under ~/.claude/projects. Idempotent; run at startup and
+ * whenever projects change. The demo leaves your home alone.
+ */
+function connect() {
+  if (env.demo) return;
+  const body = pointer();
+  upsertBlock(path.join(claudeDir(), "CLAUDE.md"), body);
+  upsertBlock(path.join(codexDir(), "AGENTS.md"), body);
+  const rule = `---\ndescription: Shared memory for every project Bridge knows\nalwaysApply: true\n---\n\n${body}\n`;
+  const ruleFile = path.join(home(), ".cursor", "rules", "bridge-memory.mdc");
+  let old = "";
+  try {
+    old = fs.readFileSync(ruleFile, "utf8");
+  } catch {}
+  if (old !== rule) save(ruleFile, rule);
+
+  const settings = path.join(claudeDir(), "settings.json");
+  let json = {};
+  try {
+    json = JSON.parse(fs.readFileSync(settings, "utf8"));
+  } catch (e) {
+    if (e.code !== "ENOENT") return; // never rewrite a settings file we couldn't parse
+  }
+  if (json.autoMemoryEnabled !== false) save(settings, JSON.stringify({ ...json, autoMemoryEnabled: false }, null, 2));
+}
+
+module.exports = { ROOT, dirOf, list, read, write, approve, discard, remove, block, connect, addToIndex, removeFromIndex };

@@ -179,10 +179,8 @@ const DEFAULT_CONFIG = {
   // After the PR opens, wait for the review bots that run on every push to a
   // ready PR, then run /resolve.
   botReview: true,
-  // Let a run *propose* a memory — never write one. Proposals land in
-  // data/runs/memories/, which no session loads, and only recurrence or an
-  // explicit approval promotes one into the repo's memory. See server/proposals.js
-  // for why the old always-bank behaviour had to go.
+  // Let a pipeline run propose a memory (server/memory.js); nothing is kept
+  // until you approve it on the Memory page.
   saveToMemory: true,
   reply: true,
   // The harness: how outcomes reach you.

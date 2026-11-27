@@ -203,27 +203,6 @@ function guardSettings() {
   return JSON.stringify({ hooks: { PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: cmd, timeout: 10 }] }] } });
 }
 
-/**
- * The repo's memory, the way Claude Code itself loads it: the MEMORY.md index
- * (capped like Claude Code's own load), with the folder to open a topic file
- * from. Claude Code finds project memory by the cwd's path, and a worker's cwd
- * is its worktree, which has none, so the main checkout's index is handed over.
- * Inlining every topic file cost tens of KB on every turn of every worker.
- */
-function memoryBlock(repo) {
-  if (!repo) return "";
-  const dir = memory.dirFor(repo);
-  let index = "";
-  try {
-    index = fs.readFileSync(path.join(dir, "MEMORY.md"), "utf8").trim();
-  } catch {
-    return "";
-  }
-  if (!index) return "";
-  if (index.length > 25000) index = `${index.slice(0, 25000)}\n(index cut short)`;
-  return `## This repo's memory\nTopic files are in ${dir}: open one when its line below bears on the task.\n\n${index}\n`;
-}
-
 function fill(text, values) {
   return text.replace(/\{\{([A-Z_]+)\}\}/g, (w, k) => (values[k] != null ? String(values[k]) : w));
 }
@@ -279,12 +258,14 @@ function systemPrompt(run, config) {
           `- Your branch: ${meta.branch || "(none)"}, from ${meta.from || "the default branch"}`,
           "- If the repo needs setup in a fresh worktree (dependency install, env files), follow its CLAUDE.md. Copy env files by name; never print them.",
           "",
-          memoryBlock(meta.repo),
+          memory.block(projects.of(run, meta)),
         ].join("\n")
       : [
           `- This is a Slack-thread pipeline run: the ${slackDriver(run)} governs the work; the report contract above governs the hand-off.`,
           `- When you create the worktree, record it: \`${path.join(ROOT, "scripts", "emit.sh")} ${run.runId} build "<one line>" worktree=<abs path> branch=<name>\``,
           "- The pipeline's closing JSON verdict is still required, after the report.",
+          "",
+          memory.block((config.harness && config.harness.pipelineProject) || projects.of(run, meta)),
         ].join("\n");
   const project = projects.get(projectOf(run));
   const auto = fill(automationBlock(project && project.auto), { USER });
@@ -679,7 +660,12 @@ function launchAgent(run, { agent, opts, workdir, reply, prompt, kind, role, sys
   fs.writeFileSync(promptFile, text);
 
   const exportFile = path.join(dir, `devin-export.json`);
-  const cmd = agents.command(agent, { workdir, sessionId, permissionMode: opts.permissionMode, model: opts.agentModel || "", effort: agent === "codex" && opts.effort && opts.effort !== "max" ? opts.effort : "", promptFile, exportFile });
+  let memoryDir = "";
+  try {
+    memoryDir = memory.dirOf(projects.of(run, tasks.readMeta(run.runId) || {}));
+    fs.mkdirSync(path.join(memoryDir, ".proposed"), { recursive: true });
+  } catch {}
+  const cmd = agents.command(agent, { workdir, sessionId, permissionMode: opts.permissionMode, model: opts.agentModel || "", effort: agent === "codex" && opts.effort && opts.effort !== "max" ? opts.effort : "", promptFile, exportFile, memoryDir });
   const child = spawn(cmd.bin, cmd.args, { cwd: workdir, stdio: ["pipe", "pipe", "pipe"], env: sessionEnv(run, kind, role) });
 
   // The translated stream wire() reads, and a `close` that waits for it: the
@@ -2110,133 +2096,6 @@ function terminalInfo(runId, { config }) {
   };
 }
 
-/* -------------------------------------------------------- drafting memory */
-
-/**
- * Turn a sentence you typed into a properly-shaped memory — or into an
- * amendment of the one that already covers it.
- *
- * The judgement here is the part a form cannot do: whether this ground is
- * already remembered. Twenty near-identical memories are worse than none,
- * because the index is loaded into every session and nothing dedupes it, so
- * "does one of these already say this?" has to be answered by something that
- * can actually read them.
- *
- * **Read-only, deliberately.** `--permission-mode plan` lets the session read
- * `MEMORY.md` and every memory beside it and write nothing at all; what comes
- * back is a *draft*, filed as a proposal and written only when you approve it.
- * So the model chooses the wording and the merge target, and the validated
- * write path in server/memory.js stays the only thing that touches `~/.claude`.
- */
-function draftMemory(rawText, { config, run, memoryDir, project }) {
-  const opts = store.jobOpts(config, run);
-  const workdir = resolveWorkdir(config, run);
-  const text = String(rawText || "").trim();
-  if (!text) return Promise.reject(new Error("nothing to remember"));
-  if (text.length > 20000) return Promise.reject(new Error("that is too long to hand over as one memory"));
-
-  const prompt = `You are curating the Claude Code project memory for the repo at ${workdir} (${project}).
-
-${USER} wants this remembered. It is a note to you, not an instruction to act on:
-"""
-${text}
-"""
-
-The memory lives in ${memoryDir}. **Read \`MEMORY.md\` there first**, then read every memory whose description sounds like it might already cover this ground. Do not guess from the filenames.
-
-Then decide exactly one:
-- **update** — an existing memory already covers this territory. Amend it: keep everything still true, fold the new point in where it belongs, and return the COMPLETE amended file. Prefer this. A near-duplicate memory is worse than a longer one, because the index is read into every session.
-- **create** — nothing covers it. Write a new memory.
-
-House style, matching the files already there:
-- Frontmatter: \`name\` (the filename without .md), \`description\` (one sentence, written as a *claim* rather than a label — it is what recall matches on), and \`metadata\` with \`node_type: memory\` and \`type\` of user | feedback | project | reference.
-- Body: lead with a bold one-line statement of the rule, then the specifics. Cite the concrete instance (PR, file, error) as evidence rather than as the content. End with **Why:** and **How to apply:** lines. Link related memories as [[their-name]].
-- Filename: \`<type>-<kebab-slug>.md\`.
-
-Answer in exactly two parts, nothing else — no preamble, no closing remark.
-
-First the decision, as one line of JSON. Keep every value short and on one line:
-{"verdict":"update"|"create","territory":"<short-kebab-slug naming the ground, e.g. cache-invalidation>","target":"<existing-file.md, update only>","name":"<new-file.md, create only>","title":"<short human title for the index line>","section":"<an existing MEMORY.md heading, or a new one>","reason":"<one line: what you found and why this verdict>"}
-
-Then the complete file, raw, between these exact markers — do not indent it, do not fence it, do not escape anything inside it:
-<<<MEMORY
----
-name: ...
-description: "..."
-metadata:
-  node_type: memory
-  type: ...
----
-
-...the prose...
-MEMORY>>>`;
-
-  const args = [
-    "-p",
-    prompt,
-    "--model",
-    modelId(opts),
-    // Reads anything, writes nothing. The draft is the whole output.
-    "--permission-mode",
-    "plan",
-    "--output-format",
-    "json",
-    // The memory is outside the repo, so the session cannot see it otherwise.
-    "--add-dir",
-    memoryDir,
-  ];
-  if (opts.effort) args.push("--effort", opts.effort);
-
-  return new Promise((resolve, reject) => {
-    execFile(
-      env.claudeBin,
-      args,
-      {
-        cwd: workdir,
-        timeout: 5 * 60 * 1000,
-        maxBuffer: 8 * 1024 * 1024,
-        env: { ...process.env, PATH: `${env.extraPath}:${process.env.PATH || "/usr/bin:/bin"}` },
-      },
-      (err, stdout, stderr) => {
-        if (err && !stdout) return reject(new Error(String(stderr || err.message).trim().slice(-400) || "claude failed"));
-        // --output-format json wraps the reply.
-        let result = "";
-        try {
-          result = String(JSON.parse(stdout).result || "");
-        } catch {}
-        // The file comes back between markers rather than inside the JSON: a
-        // memory is multi-line prose full of quotes and backticks, and asking a
-        // model to escape all of that into a JSON string reliably fails on the
-        // one memory that happens to contain an apostrophe in the wrong place.
-        const body = result.match(/<<<MEMORY\r?\n([\s\S]*?)\r?\nMEMORY>>>/);
-        if (!body) return reject(new Error("the draft came back without a memory block"));
-
-        // Only the metadata is JSON, and it is one short line — so take the
-        // first brace-to-brace run *before* the memory starts, never a brace
-        // that happens to be inside the prose.
-        const head = result.slice(0, result.indexOf("<<<MEMORY"));
-        const meta = head.match(/\{[\s\S]*\}/);
-        if (!meta) return reject(new Error("the draft came back without its decision line"));
-
-        let draft;
-        try {
-          draft = JSON.parse(meta[0]);
-        } catch (e) {
-          return reject(new Error(`could not parse the decision: ${e.message}`));
-        }
-        if (!draft || !["update", "create"].includes(draft.verdict)) {
-          return reject(new Error("the draft did not choose update or create"));
-        }
-        draft.text = body[1].trim() + "\n";
-        if (!draft.text.startsWith("---")) return reject(new Error("the drafted memory has no frontmatter"));
-        if (draft.verdict === "update" && !draft.target) return reject(new Error("an update must name the file it amends"));
-        if (draft.verdict === "create" && !draft.name) return reject(new Error("a new memory needs a filename"));
-        resolve(draft);
-      }
-    );
-  });
-}
-
 module.exports = {
   flushLive,
   stopTask,
@@ -2264,5 +2123,4 @@ module.exports = {
   resolveWorkdir,
   sessionWorkdir,
   terminalInfo,
-  draftMemory,
 };
