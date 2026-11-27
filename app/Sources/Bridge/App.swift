@@ -288,7 +288,7 @@ struct RootView: View {
         .onAppear { Keys.install(model) }
         .background(VisualEffect(material: .sidebar))
         .background(T.bg.opacity(0.55))
-        .background(WindowChrome())
+        .background(WindowChrome(center: Chrome.center(sidebarHidden: model.sidebarHidden)))
         .contentShape(Rectangle())
         .gesture(SpatialTapGesture(count: 2).onEnded { if $0.location.y <= T.headerHeight + T.panelInset { titleBarDoubleClick() } })
         .ignoresSafeArea()
@@ -301,7 +301,7 @@ struct RootView: View {
                     .disabled(model.forwardStack.isEmpty).opacity(model.forwardStack.isEmpty ? 0.35 : 1)
             }
             .frame(height: 28)
-            .padding(.leading, Chrome.buttonsLeft).padding(.top, Chrome.center - 14)
+            .padding(.leading, Chrome.buttonsLeft).padding(.top, Chrome.center(sidebarHidden: model.sidebarHidden) - 14)
             .ignoresSafeArea()
         }
         .overlay {

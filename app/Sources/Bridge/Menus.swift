@@ -8,9 +8,11 @@ import SwiftUI
 // MARK: - Window chrome
 
 enum Chrome {
-    /// The vertical center every top-left control shares: the traffic lights,
-    /// the sidebar/back/forward buttons and each page header's title.
-    static let center: CGFloat = T.panelInset + T.headerHeight / 2
+    /// The vertical center every top-left control shares: the traffic lights
+    /// and the sidebar/back/forward buttons. On the standard title-bar line
+    /// next to the sidebar; on the page header's line when it's hidden.
+    static let top: CGFloat = 18
+    static func center(sidebarHidden: Bool) -> CGFloat { sidebarHidden ? T.panelInset + T.headerHeight / 2 : top }
     static let lightsLeft: CGFloat = 18
     static let buttonsLeft: CGFloat = 84
 }
@@ -19,12 +21,18 @@ enum Chrome {
 /// title bar out again on resize, key changes and full screen, so this
 /// re-applies itself then (the way Electron's trafficLightPosition does).
 struct WindowChrome: NSViewRepresentable {
+    let center: CGFloat
     func makeNSView(context: Context) -> NSView { ChromeProbe() }
-    func updateNSView(_ v: NSView, context: Context) { (v as? ChromeProbe)?.place() }
+    func updateNSView(_ v: NSView, context: Context) {
+        guard let p = v as? ChromeProbe else { return }
+        p.center = center
+        p.place()
+    }
 }
 
 final class ChromeProbe: NSView {
     private var observers: [NSObjectProtocol] = []
+    var center = Chrome.top
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -50,19 +58,19 @@ final class ChromeProbe: NSView {
         place()
     }
 
-    func place() { if let w = window { TrafficLights.place(in: w) } }
+    func place() { if let w = window { TrafficLights.place(in: w, center: center) } }
 
     deinit { observers.forEach(NotificationCenter.default.removeObserver) }
 }
 
 @MainActor enum TrafficLights {
-    static func place(in w: NSWindow) {
+    static func place(in w: NSWindow, center: CGFloat) {
         guard !w.styleMask.contains(.fullScreen),
               let close = w.standardWindowButton(.closeButton),
               let mini = w.standardWindowButton(.miniaturizeButton),
               let zoom = w.standardWindowButton(.zoomButton),
               let bar = close.superview, let container = bar.superview else { return }
-        let h = (Chrome.center * 2).rounded()
+        let h = (center * 2).rounded()
         var f = container.frame
         if abs(f.height - h) > 0.5 || abs(f.minY - (w.frame.height - h)) > 0.5 {
             f.size.height = h

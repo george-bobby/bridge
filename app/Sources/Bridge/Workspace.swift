@@ -8,9 +8,8 @@ struct Sidebar: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Clears the traffic lights and the sidebar/back/forward row, so the
-            // first item starts just under the page header's bottom edge.
-            Color.clear.frame(height: T.panelInset + T.headerHeight - 4)
+            // Clears the traffic lights and the sidebar/back/forward row.
+            Color.clear.frame(height: Chrome.top + 20)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 2) {
