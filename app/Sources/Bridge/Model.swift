@@ -401,6 +401,10 @@ final class AppModel {
     @ObservationIgnored var messageNavs: [String: MessageNav] = [:]
     func taskData(_ id: String) -> JSON { id == openId ? openTask : taskCache[id] ?? .null }
 
+    /// "system", "light" or "dark" (Settings › General › Appearance).
+    var appearance = Appearance.current {
+        didSet { Appearance.save(appearance) }
+    }
     var sidebarHidden = UserDefaults.standard.bool(forKey: "sidebar.hidden") {
         didSet { UserDefaults.standard.set(sidebarHidden, forKey: "sidebar.hidden") }
     }

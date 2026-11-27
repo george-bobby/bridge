@@ -158,7 +158,7 @@ struct IconTabs: View {
                         .background {
                             if on {
                                 RoundedRectangle(cornerRadius: 6).fill(T.selected)
-                                    .shadow(color: .black.opacity(0.25), radius: 1.5, y: 0.5)
+                                    .shadow(color: T.shade.opacity(0.25), radius: 1.5, y: 0.5)
                                     .matchedGeometryEffect(id: "pill", in: ns)
                             }
                         }
@@ -271,7 +271,7 @@ struct LSwitch: ToggleStyle {
                 ZStack(alignment: configuration.isOn ? .trailing : .leading) {
                     Capsule().fill(configuration.isOn ? T.accent : T.line)
                     Circle().fill(.white).frame(width: 12, height: 12).padding(2)
-                        .shadow(color: .black.opacity(0.3), radius: 1, y: 0.5)
+                        .shadow(color: T.shade.opacity(0.3), radius: 1, y: 0.5)
                 }
                 .frame(width: 28, height: 16)
             }

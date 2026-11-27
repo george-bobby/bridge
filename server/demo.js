@@ -39,19 +39,22 @@ const pr = (n, title, o = {}) => ({
   updatedAt: iso(o.ago || 3600),
   mergedAt: o.state === "MERGED" ? iso(o.ago || DAY) : null,
   issueKey: (title.match(/\b([A-Z]+-\d+)\b/) || [])[1] || "",
+  previews: o.preview ? [{ provider: o.preview[0], url: o.preview[1], state: o.preview[2] || "ready", env: o.preview[0] === "vercel" ? "Preview – storefront" : "deploy-preview" }] : [],
 });
+const vercel = (branch, state) => ["vercel", `https://storefront-git-${branch.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}-acme.vercel.app`, state];
+const netlify = (n, state) => ["netlify", `https://deploy-preview-${n}--acme-storefront.netlify.app`, state];
 
 function pulls() {
   return {
     login: "alex-rivera",
     mine: [
-      pr(482, "feat(checkout): Apple Pay in the payment step (WEB-124)", { branch: "alex/web-124-apple-pay", review: "REVIEW_REQUIRED", add: 612, del: 48, comments: 9, ago: 1500 }),
-      pr(479, "feat(api): rate-limit the search endpoint per API key (WEB-131)", { branch: "alex/web-131-rate-limit-search", checks: "FAILURE", review: "CHANGES_REQUESTED", add: 288, del: 31, comments: 14, ago: 5400 }),
-      pr(476, "test(e2e): stabilise the checkout flow suite (WEB-133)", { branch: "alex/web-133-flaky-e2e", draft: true, checks: "PENDING", add: 74, del: 102, comments: 2, ago: 9000 }),
-      pr(473, "fix(cart): show VAT-inclusive prices for EU shoppers", { branch: "alex/eu-vat-cart", mergeable: "CONFLICTING", checks: "SUCCESS", review: "APPROVED", add: 131, del: 22, comments: 6, ago: 20000 }),
+      pr(482, "feat(checkout): Apple Pay in the payment step (WEB-124)", { branch: "alex/web-124-apple-pay", preview: vercel("alex/web-124-apple-pay"), review: "REVIEW_REQUIRED", add: 612, del: 48, comments: 9, ago: 1500 }),
+      pr(479, "feat(api): rate-limit the search endpoint per API key (WEB-131)", { branch: "alex/web-131-rate-limit-search", preview: vercel("alex/web-131-rate-limit-search"), checks: "FAILURE", review: "CHANGES_REQUESTED", add: 288, del: 31, comments: 14, ago: 5400 }),
+      pr(476, "test(e2e): stabilise the checkout flow suite (WEB-133)", { branch: "alex/web-133-flaky-e2e", preview: vercel("alex/web-133-flaky-e2e", "building"), draft: true, checks: "PENDING", add: 74, del: 102, comments: 2, ago: 9000 }),
+      pr(473, "fix(cart): show VAT-inclusive prices for EU shoppers", { branch: "alex/eu-vat-cart", preview: netlify(473), mergeable: "CONFLICTING", checks: "SUCCESS", review: "APPROVED", add: 131, del: 22, comments: 6, ago: 20000 }),
     ],
     review: [
-      pr(485, "feat(checkout): promo codes with stacking rules (WEB-123)", { author: "maya-chen", branch: "maya/web-123-promo-codes", review: "REVIEW_REQUIRED", add: 540, del: 87, comments: 4, ago: 2600 }),
+      pr(485, "feat(checkout): promo codes with stacking rules (WEB-123)", { author: "maya-chen", branch: "maya/web-123-promo-codes", preview: vercel("maya/web-123-promo-codes"), review: "REVIEW_REQUIRED", add: 540, del: 87, comments: 4, ago: 2600 }),
       pr(488, "chore(deps): bump Next.js to 15.2", { author: "sam-ortiz", branch: "sam/next-15-2", checks: "PENDING", review: "REVIEW_REQUIRED", add: 41, del: 39, comments: 1, ago: 7200 }),
     ],
     merged: [
@@ -94,7 +97,7 @@ function prActivity(url) {
     additions: p.additions, deletions: p.deletions, headRefName: p.branch, baseRefName: "main", updatedAt: p.updatedAt,
     comments: f.comments, reviews: f.reviews, statusCheckRollup: f.checks,
   };
-  return require("./changes").shapeActivity(raw, f.inline);
+  return { ...require("./changes").shapeActivity(raw, f.inline), previews: p.previews };
 }
 
 /* ------------------------------------------------------------- Linear */

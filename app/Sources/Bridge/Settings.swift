@@ -539,6 +539,17 @@ struct GeneralSettings: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            SSection(title: "Appearance") {
+                if Prefs.hit(q, "appearance theme light dark mode system color") {
+                    SRow(title: "Theme", detail: "Light, dark, or follow macOS") {
+                        SlidingTabs(tabs: [
+                            .init(id: "system", label: "System", icon: "circle.lefthalf.filled"),
+                            .init(id: "light", label: "Light", icon: "sun.max"),
+                            .init(id: "dark", label: "Dark", icon: "moon"),
+                        ], selection: Binding(get: { model.appearance }, set: { v in model.appearance = v }))
+                    }
+                }
+            }
             SSection(title: "Server") {
                 if Prefs.hit(q, "server status connected offline address") {
                     SRow(title: "Status", detail: model.connected ? "Bridge's server is running at \(API.base.absoluteString)" : "Can't reach \(API.base.absoluteString)") {

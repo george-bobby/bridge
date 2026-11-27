@@ -436,7 +436,7 @@ struct IssueCard: View {
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(hover.v ? T.hover : T.raised))
         .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(hover.v ? T.text3.opacity(0.5) : T.line, lineWidth: 1))
-        .shadow(color: .black.opacity(hover.v ? 0.35 : 0.18), radius: hover.v ? 10 : 2, y: hover.v ? 4 : 1)
+        .shadow(color: T.shade.opacity(hover.v ? 0.35 : 0.18), radius: hover.v ? 10 : 2, y: hover.v ? 4 : 1)
         .offset(y: hover.v ? -1 : 0)
         .contentShape(Rectangle())
         .hoverBox(hover)

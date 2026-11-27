@@ -9,6 +9,7 @@ const fs = require("fs");
 const path = require("path");
 const { execFile } = require("child_process");
 const env = require("./env");
+const { previews } = require("./previews");
 
 function git(args, cwd, timeout = 60000) {
   return new Promise((resolve, reject) =>
@@ -137,7 +138,12 @@ function checkOf(c) {
   return { name: c.name || c.context || "check", workflow: c.workflowName || "", state, url: c.detailsUrl || c.targetUrl || "" };
 }
 
-function shapeActivity(pr, inline) {
+// The head commit's deployments and statuses, for preview links.
+const HEAD_QUERY = `query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) {
+  commits(last: 1) { nodes { commit { status { contexts { context state targetUrl } }
+    deployments(last: 6) { nodes { environment state latestStatus { state environmentUrl } } } } } } } } }`;
+
+function shapeActivity(pr, inline, head = null) {
   const login = (a) => (a && (a.login || a.name)) || "";
   const checks = (pr.statusCheckRollup || []).map(checkOf);
   const reviews = (pr.reviews || [])
@@ -168,6 +174,11 @@ function shapeActivity(pr, inline) {
     checks,
     checkCounts: { pass: checks.filter((c) => c.state === "pass").length, fail: checks.filter((c) => c.state === "fail").length, pending: checks.filter((c) => c.state === "pending").length },
     reviewers: [...verdicts].map(([author, state]) => ({ author, state })),
+    previews: previews({
+      deployments: (head && head.deployments && head.deployments.nodes) || [],
+      statuses: (head && head.status && head.status.contexts) || [],
+      comments: pr.comments || [],
+    }),
     conversation: conversation.slice(-40),
   };
 }
@@ -180,11 +191,17 @@ async function activity(prUrl, { refresh = false } = {}) {
   const key = m[0];
   const hit = activityCache.get(key);
   if (!refresh && hit && Date.now() - hit.at < ACTIVITY_TTL) return hit.data;
-  const [view, inline] = await Promise.all([
+  const [view, inline, head] = await Promise.all([
     gh(["pr", "view", key, "--json", PR_JSON]),
     gh(["api", `repos/${m[1]}/${m[2]}/pulls/${m[3]}/comments?per_page=100`]).then((o) => JSON.parse(o || "[]")).catch(() => []),
+    gh(["api", "graphql", "-f", `query=${HEAD_QUERY}`, "-f", `owner=${m[1]}`, "-f", `name=${m[2]}`, "-F", `number=${m[3]}`])
+      .then((o) => {
+        const n = JSON.parse(o).data.repository.pullRequest.commits.nodes[0];
+        return n ? n.commit : null;
+      })
+      .catch(() => null),
   ]);
-  const data = { pr: shapeActivity(JSON.parse(view), Array.isArray(inline) ? inline : []) };
+  const data = { pr: shapeActivity(JSON.parse(view), Array.isArray(inline) ? inline : [], head) };
   activityCache.set(key, { at: Date.now(), data });
   return data;
 }

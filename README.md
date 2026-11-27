@@ -28,6 +28,8 @@ watch and steer all of it.
 - **Open anywhere**: one click to Cursor, VS Code, Finder, GitHub, Linear, or the Slack thread its Linear issue links.
 - **Archive, don't delete**: done chats leave the sidebar and board and come back from Sessions › Archived.
 - **GitHub, Linear and Slack**, cross-linked to the sessions working on them.
+- **Preview deployments**: each PR's Vercel or Netlify preview in the sidebar, the PR list and the details panel; a click opens it in a browser tab next to the chat.
+- **Light and dark**: follows macOS, or pick one in Settings › General.
 - **An orchestrator per project** that writes briefs, spawns workers and relays what they report.
 - **You stay in control**: a guard hook turns force-pushes, Slack posts, ticket and PR writes into exact-payload approvals.
 - **Local**: a zero-dependency Node server on `127.0.0.1`, plain files for state. No account, no cloud.
@@ -39,6 +41,7 @@ watch and steer all of it.
 | ![Session](docs/screenshots/chat.png) **Session**: the transcript, task progress, PR activity and the worker's report | ![Import a chat](docs/screenshots/import.png) **Import a chat** from any agent's history |
 | ![Home](docs/screenshots/home.png) **Home**: what's running, what needs you, PRs and issues | ![Inbox](docs/screenshots/inbox.png) **Inbox**: workers' questions, Slack, to-dos, activity |
 | ![Linear](docs/screenshots/linear.png) **Linear**: your issues with sub-issues as a tree | ![Command menu](docs/screenshots/palette.png) **⌘K**: commands and full-text search |
+| ![Light mode](docs/screenshots/light.png) **Light mode**: the whole app, terminals included | |
 
 Every screenshot is the built-in demo (`npm run demo`): a fictional team, no real data.
 

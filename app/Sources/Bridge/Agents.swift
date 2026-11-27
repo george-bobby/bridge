@@ -17,8 +17,8 @@ enum AgentKind: String, CaseIterable, Identifiable {
     var color: Color {
         switch self {
         case .claude: return Color(red: 0.85, green: 0.47, blue: 0.34)
-        case .codex: return Color(white: 0.86)
-        case .cursor: return Color(white: 0.62)
+        case .codex: return T.text.opacity(0.88)
+        case .cursor: return T.text2
         case .devin: return Color(red: 0.24, green: 0.72, blue: 0.62)
         }
     }
