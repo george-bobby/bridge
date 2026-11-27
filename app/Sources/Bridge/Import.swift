@@ -4,8 +4,10 @@ import SwiftUI
 //
 // Every chat Claude Code, Codex, Cursor and Devin keep on this Mac, newest
 // first, with a preview; importing one makes it a worker in the folder it ran
-// in, and your next message carries on in the same agent session
-// (server/history.js, harness.importChat). A chat Bridge already has opens.
+// in, filed under the project you import it into (`model.importProject`, from
+// the New task page), and your next message carries on in the same agent
+// session (server/history.js, harness.importChat). Scoped to that project's
+// folders by default. A chat Bridge already has opens.
 
 struct HistoryChat: Identifiable, Hashable {
     let j: JSON
@@ -41,12 +43,24 @@ struct ImportSheet: View {
     @StateObject private var preview = Box(JSON.null)
     @StateObject private var busy = Box(false)
     @StateObject private var sqlite = Box(true)
+    /// Only chats that ran in the target project's checkout or its worktrees.
+    @StateObject private var scoped = Box(true)
+    @StateObject private var projectOpen = Box(false)
     @FocusState private var focused: Bool
+
+    var target: Project? { model.project(model.importProject) }
+    /// Scoping applies to a real project; Default (the root folder) lists everything.
+    var scoping: Bool { scoped.v && !(target?.root ?? true) }
+
+    func inTarget(_ c: HistoryChat) -> Bool {
+        guard let p = target, !p.root, !c.cwd.isEmpty else { return true }
+        return [p.path, p.path + "-worktrees"].contains { c.cwd == $0 || c.cwd.hasPrefix($0 + "/") }
+    }
 
     var shown: [HistoryChat] {
         let words = query.v.lowercased().split(separator: " ").map(String.init)
         return chats.v.filter { c in
-            (agent.v.isEmpty || c.agent.rawValue == agent.v) && words.allSatisfy { "\(c.title) \(c.prompt) \(c.cwd)".lowercased().contains($0) }
+            (agent.v.isEmpty || c.agent.rawValue == agent.v) && (!scoping || inTarget(c)) && words.allSatisfy { "\(c.title) \(c.prompt) \(c.cwd)".lowercased().contains($0) }
         }
     }
     var selected: HistoryChat? { shown.first { $0.id == sel.v } ?? shown.first }
@@ -88,6 +102,16 @@ struct ImportSheet: View {
                         .font(T.ui(12)).foregroundStyle(T.text3).lineLimit(1)
                 }
                 Spacer()
+                Text("Into").font(T.ui(12)).foregroundStyle(T.text3)
+                Button { projectOpen.v.toggle() } label: {
+                    PickerChip(text: target?.name ?? "Default", open: projectOpen.v) { if let t = target { ProjectBadge(project: t, size: 14) } }
+                }
+                .buttonStyle(Pressable(scale: 0.97))
+                .help("The project the imported chat is filed under. It keeps running in its own folder.")
+                .popover(isPresented: $projectOpen.v, arrowEdge: .bottom) {
+                    ProjectPanel(current: model.importProject) { id in projectOpen.v = false; model.importProject = id } add: { projectOpen.v = false; model.addProject() }
+                        .environment(model)
+                }
                 IconButton(icon: "xmark", help: "Close (Esc)") { model.importOpen = false }
             }
             HStack(spacing: 10) {
@@ -101,6 +125,21 @@ struct ImportSheet: View {
                 .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(T.bg.opacity(0.6)))
                 .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(focused ? T.accent.opacity(0.6) : T.line, lineWidth: 1))
                 .frame(minWidth: 220)
+                if let t = target, !t.root {
+                    Button { withAnimation(M.snappy) { scoped.v.toggle() } } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: scoped.v ? "folder.fill" : "folder").font(.system(size: 11))
+                            Text(scoped.v ? "In \(t.name)" : "All folders").font(T.ui(12, .medium))
+                        }
+                        .foregroundStyle(scoped.v ? T.accent : T.text2)
+                        .padding(.horizontal, 8).frame(height: 28)
+                        .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(scoped.v ? T.accentSoft : .clear))
+                        .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).stroke(T.line, lineWidth: 1))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain).fixedSize()
+                    .help(scoped.v ? "Only chats that ran in \(t.name) or its worktrees. Click for every folder." : "Every chat on this Mac. Click for \(t.name)'s only.")
+                }
                 filters.fixedSize()
             }
         }
@@ -142,7 +181,10 @@ struct ImportSheet: View {
                     } else if items.isEmpty {
                         VStack(spacing: 8) {
                             Image(systemName: "tray").font(.system(size: 22, weight: .light)).foregroundStyle(T.text3)
-                            Text(chats.v.isEmpty ? "No chats found on this Mac" : "No chats match").font(T.ui(13, .medium)).foregroundStyle(T.text2)
+                            Text(chats.v.isEmpty ? "No chats found on this Mac" : scoping ? "No chats in \(target?.name ?? "this project") match" : "No chats match").font(T.ui(13, .medium)).foregroundStyle(T.text2)
+                            if scoping && !chats.v.isEmpty {
+                                Button("Show every folder") { withAnimation(M.snappy) { scoped.v = false } }.buttonStyle(LButton())
+                            }
                             if !sqlite.v { Text("Cursor and Devin chats need Node 22.5+ or the sqlite3 tool").font(T.ui(11.5)).foregroundStyle(T.text3) }
                         }
                         .padding(.top, 60)
@@ -209,7 +251,7 @@ struct ImportSheet: View {
             HStack(spacing: 6) { Kbd(keys: "↩"); Text("Import").font(T.ui(11.5)).foregroundStyle(T.text3) }
             Spacer()
             if let c = selected {
-                Text(!c.runId.isEmpty ? "Already imported" : c.gone ? "Its folder is gone, so it can't carry on" : "Opens in \(c.folder.isEmpty ? "its folder" : c.folder)")
+                Text(!c.runId.isEmpty ? "Already imported" : c.gone ? "Its folder is gone, so it can't carry on" : "Into \(target?.name ?? "Default") · runs in \(c.folder.isEmpty ? "its folder" : c.folder)")
                     .font(T.ui(11.5)).foregroundStyle(c.gone && c.runId.isEmpty ? T.orange : T.text3).lineLimit(1)
                 Button { Task { await importSelected() } } label: {
                     HStack(spacing: 6) {
@@ -256,7 +298,7 @@ struct ImportSheet: View {
         if !c.runId.isEmpty { model.importOpen = false; return model.open(c.runId) }
         busy.v = true
         await model.act {
-            let out = try await API.post("/api/history/import", ["agent": c.agent.rawValue, "id": c.chatId])
+            let out = try await API.post("/api/history/import", ["agent": c.agent.rawValue, "id": c.chatId, "project": self.model.importProject])
             await self.model.loadAll()
             self.model.importOpen = false
             self.model.open(out["taskId"].string)

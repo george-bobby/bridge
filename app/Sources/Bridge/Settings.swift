@@ -36,7 +36,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .general: return "The server, how outcomes reach you, and what the Slack pipeline may do."
         case .agents: return "Which agent and model new sessions start with, and how many sessions run at once."
         case .mcp: return "The tool servers each agent loads: add, edit, switch off and inspect them. Changes go into the agent's own config."
-        case .integrations: return "Slack, GitHub and Linear. Tokens are stored in .env and never shown again."
+        case .integrations: return "Slack, GitHub, Linear, Vercel, incident.io and Granola, and which of them the sidebar shows. Tokens are stored in .env and never shown again."
         case .projects: return "The repositories in the sidebar, each with its own orchestrator."
         case .notifications: return "When Bridge interrupts you, on this Mac."
         case .advanced: return "Every .env key, the server runtime, and developing Bridge with Bridge."
@@ -89,10 +89,14 @@ enum Prefs {
     static let githubKeys = ["GITHUB_LOGIN", "GITHUB_REPO"]
     static let linearKeys = ["LINEAR_API_KEY", "LINEAR_WORKSPACE", "LINEAR_TEAM", "LINEAR_ISSUE_PREFIX", "LINEAR_PROJECT"]
     static let repoKeys = ["TARGET_REPO", "TARGET_SCOPE", "WORKTREE_ROOT", "BRANCH_PREFIX"]
+    static let defaultKeys = ["DEFAULT_DIR"]
+    static let vercelKeys = ["VERCEL_TOKEN", "VERCEL_TEAM_ID"]
+    static let incidentKeys = ["INCIDENT_API_KEY"]
+    static let granolaKeys = ["GRANOLA_API_KEY"]
     static let productKeys = ["PRODUCT_NAME", "PRODUCT_URL"]
     static let agentKeys = ["WORKER_SKILL", "PIPELINE_MODEL", "EXTRA_PATH"]
     /// Keys with a home in a friendlier section; Advanced lists the rest.
-    static var placed: Set<String> { Set(slackKeys + githubKeys + linearKeys + repoKeys + productKeys + agentKeys) }
+    static var placed: Set<String> { Set(slackKeys + githubKeys + linearKeys + repoKeys + defaultKeys + vercelKeys + incidentKeys + granolaKeys + productKeys + agentKeys) }
 }
 
 // MARK: - Page
@@ -746,6 +750,27 @@ struct IntegrationSettings: View {
             } trailing: {
                 StatusChip(on: model.linear["configured"].bool, onText: model.linear["viewer"].nonEmpty.map { "Connected · \($0)" } ?? "Connected")
             }
+            SSection(title: "Vercel", detail: "Deployments across your account and teams. A token from vercel.com › Account Settings › Tokens") {
+                ForEach(env.rows(Prefs.vercelKeys, q), id: \.self) { EnvField(env: env, e: $0) }
+                if Prefs.hit(q, "vercel token create") {
+                    SRow(title: "Create a token", detail: "Read access is all Bridge uses") {
+                        Button { openURL("https://vercel.com/account/settings/tokens") } label: { Label("Open Vercel", systemImage: "arrow.up.right") }.buttonStyle(LButton())
+                    }
+                }
+            } trailing: {
+                StatusChip(on: model.vercel["configured"].bool, onText: model.vercel["user"].nonEmpty.map { "Connected · @\($0)" } ?? "Connected")
+            }
+            SSection(title: "incident.io", detail: "Live and recent incidents. An admin creates the key under Settings › API keys") {
+                ForEach(env.rows(Prefs.incidentKeys, q), id: \.self) { EnvField(env: env, e: $0) }
+            } trailing: {
+                StatusChip(on: model.incidents["configured"].bool)
+            }
+            SSection(title: "Granola", detail: "Your meeting notes. Granola › Settings › Connectors › API keys (Business and Enterprise plans)") {
+                ForEach(env.rows(Prefs.granolaKeys, q), id: \.self) { EnvField(env: env, e: $0) }
+            } trailing: {
+                StatusChip(on: model.granola["configured"].bool)
+            }
+            SourceVisibility(q: q)
         }
     }
 }
@@ -830,14 +855,19 @@ struct ProjectSettings: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             SSection(title: "Projects", detail: "Repositories in the sidebar; each gets its own orchestrator") {
-                ForEach(model.projects.filter { Prefs.hit(q, $0.name, $0.path, "project repository") }) { p in ProjectRow(project: p) }
-                if model.projects.isEmpty && Prefs.hit(q, "project add") {
+                ForEach(model.projects.filter { !$0.root && Prefs.hit(q, $0.name, $0.path, "project repository") }) { p in ProjectRow(project: p) }
+                if !model.projects.contains(where: { !$0.root }) && Prefs.hit(q, "project add") {
                     SRow(title: "No projects yet", detail: "Add a git checkout to start sessions in it") { EmptyView() }
                 }
             } trailing: {
                 Button { model.addProject() } label: { Label("Add project", systemImage: "plus") }.buttonStyle(LButton())
             }
-            SSection(title: "Default repository", detail: "Where the Slack pipeline and the default orchestrator work. Stored in .env") {
+            SSection(title: "Default", detail: "Sessions that aren't in any project, and Default's orchestrator, run in this folder (your home folder when empty)") {
+                ForEach(env.rows(Prefs.defaultKeys, q), id: \.self) { EnvField(env: env, e: $0) }
+            } trailing: {
+                if let p = model.projects.first(where: \.root) { Text(p.shortPath).font(T.mono(11.5)).foregroundStyle(T.text3) }
+            }
+            SSection(title: "Pipeline repository", detail: "Where the Slack pipeline works, and the project Bridge seeds on first run. Stored in .env") {
                 ForEach(env.rows(Prefs.repoKeys, q), id: \.self) { EnvField(env: env, e: $0) }
             }
             SSection(title: "Product", detail: "Named in the skill the pipeline renders") {
@@ -881,6 +911,24 @@ struct ProjectRow: View {
         a.addButton(withTitle: "Remove")
         a.addButton(withTitle: "Cancel")
         if a.runModal() == .alertFirstButtonReturn { Task { await model.removeProject(project.id) } }
+    }
+}
+
+/// Which sources the sidebar lists. Hidden ones stay reachable from ⌘K.
+struct SourceVisibility: View {
+    @Environment(AppModel.self) var model
+    let q: String
+    var body: some View {
+        SSection(title: "Sidebar sources", detail: "Show or hide each source in the sidebar; hidden ones are still in ⌘K") {
+            ForEach(SourceKind.allCases.filter { Prefs.hit(q, $0.label, $0.detail, "sidebar source show hide") }) { k in
+                SRow(title: k.label, detail: k.detail, icon: AnyView(
+                    Image(systemName: k.icon).font(.system(size: 12.5, weight: .medium)).foregroundStyle(T.text2)
+                        .frame(width: 28, height: 28).background(RoundedRectangle(cornerRadius: 7).fill(T.raised))
+                )) {
+                    SToggle(on: Binding(get: { model.sourceShown(k) }, set: { model.setSource(k, shown: $0) }))
+                }
+            }
+        }
     }
 }
 
