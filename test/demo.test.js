@@ -154,3 +154,12 @@ test("demo serves a worker's Changes and the orchestrator's Source Control witho
   assert.ok(wt.files.some((f) => f.path.includes("/")), "nested paths for the folder tree");
   assert.match((await get(`/api/runs/${worker.runId}/diff?file=${encodeURIComponent(wt.files[0].path)}`)).diff, /^\+\+\+ b\//m);
 });
+
+test("demo serves the Explorer's tree and a file to read", async () => {
+  const orch = (await get("/api/runs")).runs.find((r) => r.kind === "orchestrator");
+  const tree = await get(`/api/runs/${orch.runId}/tree`);
+  assert.ok(tree.files.includes("src/App.tsx") && tree.dirs.includes("src"));
+  const f = await get(`/api/runs/${orch.runId}/file?path=src%2FApp.tsx`);
+  assert.match(f.text, /export function PaymentStep/);
+  assert.ok(f.lines > 10 && !f.binary);
+});

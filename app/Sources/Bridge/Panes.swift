@@ -934,8 +934,8 @@ struct PaneContent: View {
         if run.isEmpty {
             Color.clear
         } else if tab == "changes" {
-            // An orchestrator's second tab is Source Control for its project's checkout.
-            if model.sessions.first(where: { $0.id == run })?.isOrchestrator == true { SourceControlView(runId: run) } else { ChangesView(runId: run) }
+            // Explorer beside Changes (a worker's worktree) or Source Control (an orchestrator's checkout).
+            WorkspacePage(runId: run)
         } else if tab == "term" {
             TerminalTab(runId: run)
         } else if tab.hasPrefix("web-"), let t = model.browserTabs[run]?.first(where: { "web-\($0.id)" == tab }) {

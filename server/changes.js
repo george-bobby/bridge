@@ -185,6 +185,40 @@ async function show(dir, sha) {
   return (await git(["show", "--stat", "--patch", "--format=commit %H%nAuthor: %an <%ae>%nDate:   %ad%n%n%w(0,4,4)%B", sha], dir)).slice(0, 400_000);
 }
 
+/* ---------------------------------------------------------- Explorer */
+
+/** Every file in the folder (git ls-files, so .gitignore holds), for the Explorer tree. */
+const tree = (dir) => require("./files").list(dir);
+
+const READ_BYTES = 512 * 1024;
+const READ_LINES = 5000;
+
+/** One file's text for the read-only viewer: capped, binary files flagged rather than sent. */
+function read(dir, file) {
+  const rel = path.normalize(String(file || ""));
+  const root = fs.realpathSync(dir);
+  const abs = path.resolve(root, rel);
+  if (!abs.startsWith(root + path.sep)) throw new Error("outside the working folder");
+  // A symlink inside the folder must not lead out of it.
+  const real = fs.realpathSync(abs);
+  if (!real.startsWith(root + path.sep)) throw new Error("outside the working folder");
+  const st = fs.statSync(real);
+  if (!st.isFile()) throw new Error("not a file");
+  const fd = fs.openSync(real, "r");
+  const buf = Buffer.alloc(Math.min(st.size, READ_BYTES));
+  try {
+    fs.readSync(fd, buf, 0, buf.length, 0);
+  } finally {
+    fs.closeSync(fd);
+  }
+  if (buf.subarray(0, 8000).includes(0)) return { path: rel, size: st.size, binary: true, text: "", lines: 0, truncated: false };
+  let lines = buf.toString("utf8").split("\n");
+  let truncated = st.size > READ_BYTES;
+  if (truncated) lines.pop(); // the last line was cut mid-way
+  if (lines.length > READ_LINES) (lines = lines.slice(0, READ_LINES)), (truncated = true);
+  return { path: rel, size: st.size, binary: false, text: lines.join("\n"), lines: lines.length, truncated };
+}
+
 /** `gh pr create` for the folder's branch; returns the PR URL. */
 async function openPr(dir, { title, body, draft }) {
   // Non-interactive gh needs a title and a body; --fill supplies whichever is missing.
@@ -286,4 +320,4 @@ async function activity(prUrl, { refresh = false } = {}) {
   return data;
 }
 
-module.exports = { status, diff, commit, push, fetchRemote, pull, sync, graph, shapeCommit, show, openPr, activity, shapeActivity };
+module.exports = { status, diff, tree, read, commit, push, fetchRemote, pull, sync, graph, shapeCommit, show, openPr, activity, shapeActivity };

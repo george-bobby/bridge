@@ -173,7 +173,11 @@ final class RichTextView: NSTextView {
     /// Plain text with list markers as Markdown, ready to paste into a prompt.
     override func copy(_ sender: Any?) {
         guard selectedRange().length > 0 else { return }
-        let t = (string as NSString).substring(with: selectedRange())
+        // Code views' line numbers are marked as gutter: copy leaves them out.
+        var t = ""
+        textStorage?.enumerateAttribute(CodeText.gutter, in: selectedRange()) { v, r, _ in
+            if v == nil { t += (string as NSString).substring(with: r) }
+        }
         copyToPasteboard(t.replacingOccurrences(of: "•\t", with: "- ")
             .replacingOccurrences(of: #"(?m)^(\d+[.)])\t"#, with: "$1 ", options: .regularExpression))
     }

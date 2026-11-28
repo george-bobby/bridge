@@ -1233,7 +1233,7 @@ async function handle(req, res) {
     // commit / push / PR actions you take on them from the app. An
     // orchestrator's is its project's checkout, with the graph, fetch, pull
     // (fast-forward only) and sync of a Source Control view.
-    if (["changes", "diff", "commit", "push", "pr", "graph", "show", "fetch", "pull", "sync"].includes(verb)) {
+    if (["changes", "diff", "commit", "push", "pr", "graph", "show", "fetch", "pull", "sync", "tree", "file"].includes(verb)) {
       const changes = env.demo ? require("./demo").changes : require("./changes");
       try {
         const run = store.loadRun(id);
@@ -1248,6 +1248,8 @@ async function handle(req, res) {
         if (req.method === "GET" && verb === "changes") return sendJson(res, 200, { ok: true, ...(await changes.status(dir)) });
         if (req.method === "GET" && verb === "diff") return sendJson(res, 200, { ok: true, diff: await changes.diff(dir, url.searchParams.get("file")) });
         if (req.method === "GET" && verb === "graph") return sendJson(res, 200, { ok: true, ...(await changes.graph(dir, url.searchParams.get("limit"))) });
+        if (req.method === "GET" && verb === "tree") return sendJson(res, 200, { ok: true, ...(await changes.tree(dir)) });
+        if (req.method === "GET" && verb === "file") return sendJson(res, 200, { ok: true, ...(await changes.read(dir, url.searchParams.get("path"))) });
         if (req.method === "GET" && verb === "show") return sendJson(res, 200, { ok: true, diff: await changes.show(dir, url.searchParams.get("sha")) });
         if (req.method === "POST" && verb === "commit") return sendJson(res, 200, { ok: true, ...(await changes.commit(dir, body.message)) });
         if (req.method === "POST" && verb === "push") return sendJson(res, 200, { ok: true, ...(await changes.push(dir)) });

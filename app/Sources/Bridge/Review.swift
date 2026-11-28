@@ -181,9 +181,23 @@ struct ChangeNode {
     }
 
     /// The visible rows, depth-first, skipping what's inside collapsed folders.
-    static func rows(_ nodes: [ChangeNode], collapsed: Set<String>, depth: Int = 0) -> [(node: ChangeNode, depth: Int)] {
+    static func rows(_ nodes: [ChangeNode], collapsed: Set<String>) -> [(node: ChangeNode, depth: Int)] {
+        rows(nodes, isOpen: { !collapsed.contains($0) })
+    }
+
+    static func rows(_ nodes: [ChangeNode], isOpen: (String) -> Bool, depth: Int = 0) -> [(node: ChangeNode, depth: Int)] {
         nodes.flatMap { n -> [(node: ChangeNode, depth: Int)] in
-            [(n, depth)] + (n.file == nil && !collapsed.contains(n.path) ? rows(n.children, collapsed: collapsed, depth: depth + 1) : [])
+            [(n, depth)] + (n.file == nil && isOpen(n.path) ? rows(n.children, isOpen: isOpen, depth: depth + 1) : [])
+        }
+    }
+
+    /// Only the files whose path contains `q` (lowercased), and their folders.
+    static func filter(_ nodes: [ChangeNode], _ q: String) -> [ChangeNode] {
+        nodes.compactMap { n in
+            if n.file != nil { return n.path.lowercased().contains(q) ? n : nil }
+            var d = n
+            d.children = filter(n.children, q)
+            return d.children.isEmpty ? nil : d
         }
     }
 }
@@ -213,6 +227,9 @@ struct ChangeRow: View {
     let depth: Int
     let selected: Bool
     let folded: Bool
+    /// The Explorer's rows: no counts or stats, the name tinted by git status.
+    var plain = false
+    var tint: Color? = nil
     @StateObject private var hover = Box(false)
 
     var body: some View {
@@ -221,10 +238,12 @@ struct ChangeRow: View {
                 .rotationEffect(.degrees(folded ? 0 : 90)).frame(width: 10)
                 .opacity(node.file == nil ? 1 : 0)
             FileGlyph(name: node.path, folder: node.file == nil, size: 15)
-            Text(node.name).font(T.ui(12.5)).foregroundStyle(node.file?["kind"].string == "deleted" ? T.text3 : T.text)
+            Text(node.name).font(T.ui(12.5)).foregroundStyle(tint ?? (node.file?["kind"].string == "deleted" ? T.text3 : T.text))
                 .strikethrough(node.file?["kind"].string == "deleted", color: T.text3).lineLimit(1).truncationMode(.middle)
             Spacer(minLength: 4)
-            if let f = node.file { stats(f) } else { Text(verbatim: "\(node.count)").font(T.ui(10.5, .medium)).foregroundStyle(T.text3) }
+            if plain {
+                if let tint, node.file != nil { Circle().fill(tint).frame(width: 5, height: 5) }
+            } else if let f = node.file { stats(f) } else { Text(verbatim: "\(node.count)").font(T.ui(10.5, .medium)).foregroundStyle(T.text3) }
         }
         .padding(.leading, 8 + CGFloat(depth) * 14).padding(.trailing, 10)
         .frame(height: 24)

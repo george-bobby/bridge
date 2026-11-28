@@ -1075,6 +1075,42 @@ const demoDiff = (file, kind, add, del) => {
   return lines.join("\n");
 };
 
+const DEMO_FILES = [
+  ".github/workflows/ci.yml", ".gitignore", "CHANGELOG.md", "Dockerfile", "tsconfig.json", "vite.config.ts",
+  "src/main.tsx", "src/App.tsx", "src/api/client.ts", "src/api/orders.ts", "src/cart/Cart.tsx", "src/cart/vat.ts",
+  "src/checkout/Checkout.tsx", "src/checkout/hooks/useWallets.ts", "src/search/rateLimit.ts", "src/search/Search.tsx",
+  "src/export/csv.ts", "src/export/paginate.ts", "public/favicon.svg", "public/logo.png", "scripts/deploy.sh",
+  "test/cart/vat.test.ts", "test/export/csv.test.ts", "docs/architecture.md",
+];
+
+const DEMO_SOURCE = `// __FILE__: the payment step, with Apple Pay behind the wallets flag.
+import { useWallets } from "../hooks/useWallets";
+import { flags } from "../../lib/flags";
+
+/* Wallet buttons render in this order; the first one available wins. */
+const ORDER = ["apple", "google", "link"] as const;
+
+export interface PaymentStepProps {
+  total: number;
+  currency: string;
+  onPaid: (id: string) => void;
+}
+
+export function PaymentStep({ total, currency, onPaid }: PaymentStepProps) {
+  const wallets = useWallets();
+  if (!flags.applePay) return null;
+  const amount = Math.round(total * 100);
+  const label = \`Pay \${currency} \${(amount / 100).toFixed(2)}\`;
+  for (const kind of ORDER) {
+    const w = wallets.find((x) => x.kind === kind);
+    if (w && w.ready) return w.render({ amount, label, onPaid });
+  }
+  return null; // no wallet: the card form below takes over
+}
+
+export default PaymentStep;
+`;
+
 const changes = {
   async status(dir) {
     const checkout = dir === REPO;
@@ -1106,6 +1142,15 @@ const changes = {
   async show(dir, sha) {
     const c = DEMO_COMMITS.find((x) => sha.startsWith(x[0]));
     return c ? `commit ${sha}\nAuthor: ${c[4]}\n\n    ${c[3]}\n\n${demoDiff("src/checkout/payment/PaymentStep.tsx", "modified", 6, 2)}` : "";
+  },
+  // The storefront's files for the Explorer, and a file to read.
+  async tree(dir) {
+    const files = [...new Set([...CHANGED.worker, ...CHANGED.checkout].map((f) => f[0]).concat(DEMO_FILES))].sort();
+    return { root: dir, git: true, files, dirs: [...new Set(files.flatMap((f) => f.split("/").slice(0, -1).map((_, i, a) => a.slice(0, i + 1).join("/"))))].sort(), truncated: false };
+  },
+  async read(dir, file) {
+    const text = DEMO_SOURCE.replace(/__FILE__/g, file);
+    return { path: file, size: text.length, binary: false, text, lines: text.split("\n").length, truncated: false };
   },
   // Nothing in the demo calls out: the actions answer as if they'd worked.
   commit: (dir) => changes.status(dir),

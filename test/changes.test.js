@@ -86,3 +86,26 @@ test("ref names: remote vs a local branch with a slash, tags, other local branch
   assert.deepStrictEqual(c.parents, ["a", "b"]);
   assert.strictEqual(c.head, true);
 });
+
+test("explorer: the tree respects .gitignore; reads are capped, binaries flagged, nothing outside the folder", async () => {
+  const dir = path.join(tmp, "explorer");
+  fs.mkdirSync(path.join(dir, "src"), { recursive: true });
+  git(dir, "init", "-q");
+  fs.writeFileSync(path.join(dir, ".gitignore"), "secret.log\n");
+  fs.writeFileSync(path.join(dir, "secret.log"), "x\n");
+  fs.writeFileSync(path.join(dir, "src", "a.ts"), "const a = 1;\n");
+  fs.writeFileSync(path.join(dir, "big.txt"), Array.from({ length: 6000 }, (_, i) => `line ${i}`).join("\n"));
+  fs.writeFileSync(path.join(dir, "img.bin"), Buffer.from([0x89, 0x50, 0x00, 0x01]));
+  fs.writeFileSync(path.join(tmp, "outside.txt"), "nope\n");
+  fs.symlinkSync(path.join(tmp, "outside.txt"), path.join(dir, "link.txt"));
+
+  const t = await changes.tree(dir);
+  assert.ok(t.files.includes("src/a.ts") && !t.files.includes("secret.log"));
+  assert.strictEqual(changes.read(dir, "src/a.ts").text, "const a = 1;\n");
+  const big = changes.read(dir, "big.txt");
+  assert.strictEqual(big.lines, 5000);
+  assert.strictEqual(big.truncated, true);
+  assert.strictEqual(changes.read(dir, "img.bin").binary, true);
+  assert.throws(() => changes.read(dir, "../outside.txt"), /outside the working folder/);
+  assert.throws(() => changes.read(dir, "link.txt"), /outside the working folder/, "a symlink can't lead out");
+});
