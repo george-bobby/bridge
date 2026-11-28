@@ -581,12 +581,14 @@ async function loadModal() {
   const billing = (args, what) => modal(["billing", ...args]).catch((e) => ((errors[what] = String(e.message || e)), null));
   const [perEnv, month, today] = await Promise.all([
     Promise.all(
-      environments.map((name) =>
-        Promise.all([
-          modal(["app", "list", "-e", name]),
-          modal(["container", "list", "-e", name]).catch((e) => ((errors.containers = String(e.message || e)), [])),
-        ]).then(([apps, containers]) => ({ name, apps, containers })),
-      ),
+      // No environments listed: the profile's default one.
+      (environments.length ? environments : [""]).map((name) => {
+        const e = name ? ["-e", name] : [];
+        return Promise.all([
+          modal(["app", "list", ...e]),
+          modal(["container", "list", ...e]).catch((err) => ((errors.containers = String(err.message || err)), [])),
+        ]).then(([apps, containers]) => ({ name: name || "default", apps, containers }));
+      }),
     ),
     billing(["summary", "--for", "this month"], "billing"),
     billing(["report", "--for", "today", "--show-resources"], "today"),
