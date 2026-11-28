@@ -790,6 +790,7 @@ struct SessionsView: View {
                             HStack(spacing: 10) {
                                 Image(systemName: "sparkles").foregroundStyle(T.purple).frame(width: 14)
                                 Text("Orchestrator").font(T.ui(13, .medium))
+                                if let p = model.orchestratorProject(o) { Text(p).font(T.ui(12.5)).foregroundStyle(T.text3) }
                                 Text("Hand it work; it starts sessions and keeps track of them").font(T.ui(12.5)).foregroundStyle(T.text3)
                                 Spacer()
                                 if model.isLive(o) { LiveIcon(size: 12) }

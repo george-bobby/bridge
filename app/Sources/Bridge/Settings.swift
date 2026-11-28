@@ -151,7 +151,7 @@ struct SettingEntry {
         .init(pane: .notifications, title: "Dock badge", words: "dock badge count", query: "dock badge"),
         .init(pane: .notifications, title: "Banners and sounds", words: "system notification settings sound banner", query: "sound banner"),
         .init(pane: .advanced, title: ".env keys", words: ".env environment keys overrides add key", query: ""),
-        .init(pane: .advanced, title: "Rebuild and relaunch", words: "rebuild relaunch app build bridge", query: ""),
+        .init(pane: .advanced, title: "Relaunch", words: "relaunch update app bridge restart", query: ""),
     ]
 }
 
@@ -207,7 +207,7 @@ struct SettingsView: View {
                     withAnimation(M.snappy) { model.settingsPane = p.rawValue }
                 }
             }
-            RebuildButton().padding(.top, 10)
+            RelaunchButton().padding(.top, 10)
             Spacer()
             HStack(spacing: 6) {
                 Circle().fill(model.connected ? T.green : T.red).frame(width: 6, height: 6)
@@ -292,30 +292,66 @@ struct SettingsNavItem: View {
     }
 }
 
-/// Rebuild Bridge.app from its own checkout and relaunch it, after a confirmation.
-struct RebuildButton: View {
+/// Bring Bridge up to the latest main and reopen it, after a confirmation
+/// spelled out by `relaunch.sh plan`: commits to pull, whether the app
+/// rebuilds and the server restarts, and the chats a restart interrupts.
+struct RelaunchButton: View {
     @Environment(AppModel.self) var model
+    @StateObject private var planning = Box(false)
 
     var body: some View {
-        Button(action: confirm) {
+        Button(action: plan) {
             HStack(spacing: 6) {
-                if model.building { ProgressView().controlSize(.mini) } else { Image(systemName: "hammer") }
-                Text(model.building ? "Building…" : "Rebuild and Relaunch")
+                if model.relaunching || planning.v { ProgressView().controlSize(.mini) } else { Image(systemName: "arrow.clockwise") }
+                Text(model.relaunching ? model.relaunchStep : planning.v ? "Checking…" : "Relaunch")
             }
             .frame(maxWidth: .infinity)
         }
         .buttonStyle(LButton())
-        .disabled(model.building || model.bridgeRoot.isEmpty)
-        .help(model.bridgeRoot.isEmpty ? "Bridge's source folder is unknown" : "Builds \(model.bridgeRoot), swaps the app in ~/Applications and reopens it")
+        .disabled(model.relaunching || planning.v || model.bridgeRoot.isEmpty)
+        .help(model.bridgeRoot.isEmpty ? "Bridge's source folder is unknown" : "Brings \(model.bridgeRoot) up to the latest main, restarts the server and reopens the app")
     }
 
-    func confirm() {
+    func plan() {
+        planning.v = true
+        Task {
+            let plan = await model.relaunchPlan()
+            planning.v = false
+            guard let plan, plan["ok"].bool else {
+                let a = NSAlert()
+                a.messageText = "Couldn't check for updates"
+                a.informativeText = "scripts/relaunch.sh didn't run in \(model.bridgeRoot). The error is in logs/relaunch.log if it got that far."
+                a.alertStyle = .warning
+                a.runModal()
+                return
+            }
+            confirm(plan)
+        }
+    }
+
+    func confirm(_ plan: JSON) {
+        var lines: [String] = []
+        if plan["merge"].bool {
+            let n = plan["behind"].int
+            lines.append("Pulls \(n) new commit\(n == 1 ? "" : "s") into \(model.bridgeRoot).")
+        } else if !plan["reason"].string.isEmpty {
+            lines.append("Git left alone: \(plan["reason"].string).")
+        }
+        lines.append(plan["build"].bool ? "The app will be rebuilt." : "The app is already built from this code.")
+        if plan["restart"].bool {
+            let mid = model.sessions.filter { model.running.contains($0.id) }.map { model.sessionTitle($0.id) }
+            lines.append(mid.isEmpty
+                ? "The server will restart; no chat is mid-turn."
+                : "The server will restart and interrupt \(mid.count) chat\(mid.count == 1 ? "" : "s") mid-turn: \(mid.joined(separator: ", ")). They can be resumed.")
+        } else {
+            lines.append(plan["serverUp"].bool ? "The server keeps running." : "The server stays down.")
+        }
         let a = NSAlert()
-        a.messageText = "Rebuild and relaunch Bridge?"
-        a.informativeText = "Builds the app from \(model.bridgeRoot), replaces Bridge in ~/Applications and reopens it. The window closes while it relaunches; the server and running sessions keep going."
-        a.addButton(withTitle: "Rebuild")
+        a.messageText = "Relaunch Bridge?"
+        a.informativeText = lines.joined(separator: " ")
+        a.addButton(withTitle: "Relaunch")
         a.addButton(withTitle: "Cancel")
-        if a.runModal() == .alertFirstButtonReturn { model.rebuildApp() }
+        if a.runModal() == .alertFirstButtonReturn { model.relaunch(plan) }
     }
 }
 

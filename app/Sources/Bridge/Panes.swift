@@ -407,7 +407,7 @@ extension AppModel {
 
     func sessionTitle(_ run: String) -> String {
         guard let s = sessions.first(where: { $0.id == run }) else { return runData(run)["who"].nonEmpty ?? run }
-        return s.isOrchestrator ? "Orchestrator" : s.title
+        return s.isOrchestrator ? orchestratorTitle(s) : s.title
     }
 }
 
@@ -858,7 +858,7 @@ struct PinnedDock: View {
 
     var header: some View {
         let live = model.isLive(session) && !model.isAwaiting(session)
-        let project = model.projects.count > 1 ? model.project(session.project)?.name : nil
+        let project = model.orchestratorProject(session)
         return HStack(spacing: 8) {
             Image(systemName: "sparkles").font(.system(size: 12)).foregroundStyle(T.purple)
             Text("Orchestrator").font(T.ui(13.5, .semibold)).foregroundStyle(T.text).fixedSize()
@@ -911,7 +911,7 @@ struct DockStrip: View {
                 if session.unread && !model.isLive(session) { Circle().fill(T.accent).frame(width: 6, height: 6).offset(x: 4, y: -3) }
             }
             GeometryReader { g in
-                Text("Orchestrator")
+                Text(model.orchestratorTitle(session))
                     .font(T.ui(12.5, .medium)).foregroundStyle(hover.v ? T.text : T.text2)
                     .lineLimit(1)
                     .frame(width: g.size.height, height: 20, alignment: .leading)

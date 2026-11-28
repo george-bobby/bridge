@@ -694,6 +694,19 @@ final class AppModel {
         return "orchestrator-\(p)"
     }
 
+    /// An orchestrator's project name, when it's worth showing: hidden when
+    /// only Default exists — "Default" would say nothing.
+    func orchestratorProject(_ s: Session) -> String? {
+        guard s.isOrchestrator, projects.count > 1 else { return nil }
+        return project(s.project)?.name
+    }
+
+    /// How an orchestrator is titled where a single string has to do:
+    /// "Orchestrator · storefront".
+    func orchestratorTitle(_ s: Session) -> String {
+        orchestratorProject(s).map { "Orchestrator · \($0)" } ?? "Orchestrator"
+    }
+
     func openOrchestrator(_ projectId: String?) {
         let pid = projectId ?? AppModel.rootId
         let id = orchestratorId(pid)
@@ -925,40 +938,88 @@ final class AppModel {
         say("The server is restarting")
     }
 
-    var building = false
+    var relaunching = false
+    /// The step scripts/relaunch.sh is on ("Building…"), shown on the button.
+    var relaunchStep = ""
 
-    /// Rebuild Bridge.app from its own source, then swap it in and relaunch.
-    func rebuildApp() {
-        guard !bridgeRoot.isEmpty, !building else { return }
-        building = true
+    /// What `relaunch.sh plan` would do: commits to pull, whether the app
+    /// rebuilds and the server restarts. Fills the confirm.
+    func relaunchPlan() async -> JSON? {
         let root = bridgeRoot
+        guard !root.isEmpty else { return nil }
+        return await Task.detached {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/bin/zsh")
+            p.arguments = ["-lc", "cd \"$BRIDGE_ROOT\" && ./scripts/relaunch.sh plan"]
+            p.environment = ProcessInfo.processInfo.environment.merging(["BRIDGE_ROOT": root, "BRIDGE_PORT": API.port]) { $1 }
+            let pipe = Pipe()
+            p.standardOutput = pipe
+            p.standardError = FileHandle.nullDevice
+            try? p.run()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            p.waitUntilExit()
+            return p.terminationStatus == 0 ? JSON.parse(data) : nil
+        }.value
+    }
+
+    /// Update the checkout, rebuild and restart what went stale, swap the app
+    /// in and reopen it: scripts/relaunch.sh does it all and logs to
+    /// logs/relaunch.log. It waits this process out before `open`, so the app
+    /// exits the moment the script reaches "step reopen".
+    /// `plan` is the confirmed `relaunch.sh plan`: the run stops untouched
+    /// if main or the restart decision moved since.
+    func relaunch(_ plan: JSON) {
+        guard !bridgeRoot.isEmpty, !relaunching else { return }
+        relaunching = true
+        relaunchStep = "Updating…"
+        let root = bridgeRoot
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let confirmed = ["BRIDGE_RELAUNCH_HEAD": plan["head"].string, "BRIDGE_RELAUNCH_RESTART": plan["restart"].bool ? "1" : "0"]
         Task.detached {
             let p = Process()
             p.executableURL = URL(fileURLWithPath: "/bin/zsh")
-            p.arguments = ["-lc", "cd \"$BRIDGE_ROOT\" && ./scripts/build.sh 2>&1"]
-            p.environment = ProcessInfo.processInfo.environment.merging(["BRIDGE_ROOT": root]) { $1 }
+            p.arguments = ["-lc", "cd \"$BRIDGE_ROOT\" && ./scripts/relaunch.sh"]
+            p.environment = ProcessInfo.processInfo.environment.merging(["BRIDGE_ROOT": root, "BRIDGE_PORT": API.port, "BRIDGE_APP_PID": String(pid)].merging(confirmed) { $1 }) { $1 }
             let pipe = Pipe()
             p.standardOutput = pipe
             p.standardError = pipe
+            var tail = ""
+            var buffer = ""
             try? p.run()
-            let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            let handle = pipe.fileHandleForReading
+            while true {
+                let data = handle.availableData
+                if data.isEmpty { break }
+                let s = String(data: data, encoding: .utf8) ?? ""
+                tail = (tail + s).split(separator: "\n", omittingEmptySubsequences: false).suffix(12).joined(separator: "\n")
+                buffer += s
+                while let nl = buffer.range(of: "\n") {
+                    let line = String(buffer[..<nl.lowerBound])
+                    buffer = String(buffer[nl.upperBound...])
+                    guard line.hasPrefix("step ") else { continue }
+                    let step = String(line.dropFirst(5))
+                    Task { @MainActor in
+                        self.relaunchStep = ["updating": "Updating…", "building": "Building…", "restarting": "Restarting…", "reopen": "Reopening…"][step] ?? "Relaunching…"
+                        if step == "reopen" { NSApp.terminate(nil) }
+                    }
+                }
+            }
             p.waitUntilExit()
             let ok = p.terminationStatus == 0
+            let tailText = tail.trimmingCharacters(in: .whitespacesAndNewlines)
             await MainActor.run {
-                self.building = false
+                self.relaunching = false
+                self.relaunchStep = ""
                 guard ok else {
                     let a = NSAlert()
-                    a.messageText = "The build failed"
-                    a.informativeText = out.split(separator: "\n").suffix(12).joined(separator: "\n")
+                    a.messageText = "The relaunch failed"
+                    a.informativeText = tailText.isEmpty ? "See \(root)/logs/relaunch.log" : tailText
                     a.alertStyle = .warning
                     a.runModal()
                     return
                 }
-                let swap = Process()
-                swap.executableURL = URL(fileURLWithPath: "/bin/sh")
-                swap.arguments = ["-c", "sleep 1; rm -rf \"$HOME/Applications/Bridge.app\" && mkdir -p \"$HOME/Applications\" && cp -R \"$BRIDGE_ROOT/dist/Bridge.app\" \"$HOME/Applications/\" && open \"$HOME/Applications/Bridge.app\""]
-                swap.environment = ProcessInfo.processInfo.environment.merging(["BRIDGE_ROOT": root]) { $1 }
-                try? swap.run()
+                // The script should have waited this process out and opened
+                // the new build; if it somehow didn't, leave anyway.
                 NSApp.terminate(nil)
             }
         }

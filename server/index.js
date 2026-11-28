@@ -46,6 +46,15 @@ const pipeline = require("./pipeline");
 
 const ROOT = path.join(__dirname, "..");
 const PORT = env.port;
+// The commit this process serves, captured once: relaunch.sh reads it back
+// through /api/state to tell whether a restart is owed after a pull.
+const HEAD = (() => {
+  try {
+    return require("child_process").execFileSync("git", ["rev-parse", "HEAD"], { cwd: ROOT, timeout: 5000, stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+  } catch {
+    return "";
+  }
+})();
 // The old browser UI (legacy/web) is served only with BRIDGE_LEGACY_WEB=1;
 // otherwise the server answers the API alone and the native app is the client.
 const PUBLIC = path.join(ROOT, "legacy", "web");
@@ -232,7 +241,7 @@ function snapshot() {
     inbox: harness.inbox().counts,
     // Only what the page actually draws: the repo a new chat's job would run
     // in, which the composer's picker opens on.
-    meta: { workdir, root: ROOT, projects: projects.withRoot() },
+    meta: { workdir, root: ROOT, head: HEAD, projects: projects.withRoot() },
     now: Date.now(),
   };
 }

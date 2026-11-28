@@ -98,7 +98,7 @@ struct ChatView: View {
 
     var header: some View {
         HStack(spacing: 10) {
-            if let s = session, !s.isOrchestrator, let p = model.project(s.project), model.projects.count > 1 {
+            if let s = session, let p = model.project(s.project), model.projects.count > 1 {
                 Button { model.projectFilter = p.id; model.navigate(.sessions) } label: { Text(p.name).font(T.ui(13.5)).foregroundStyle(T.text2) }.buttonStyle(.plain)
                 Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold)).foregroundStyle(T.text3)
             }
