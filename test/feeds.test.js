@@ -1,8 +1,8 @@
 /**
  * The Vercel and Datadog feeds against a stubbed fetch: a SAML team a token
  * can't read is reported, not silently empty, and Datadog's two halves fail
- * on their own. Model providers report prices, limits and spend, each
- * failing on its own.
+ * on their own. Modal runs a fake `modal` CLI (test/modal.js) on the token
+ * pair from .env, and billing fails on its own.
  */
 
 const test = require("node:test");
@@ -19,9 +19,11 @@ Object.assign(process.env, {
   DD_API_KEY: "k",
   DD_APP_KEY: "a",
   DD_SITE: "us5.datadoghq.com",
-  OPENROUTER_KEY: "or-key",
-  ANTHROPIC_KEY: "an-key",
+  MODAL_TOKEN_ID: "ak-test",
+  MODAL_TOKEN_SECRET: "as-test",
+  BRIDGE_MODAL: path.join(tmp, "modal"),
 });
+fs.writeFileSync(process.env.BRIDGE_MODAL, `#!/bin/sh\nexec "${process.execPath}" "${path.join(__dirname, "modal.js")}" "$@"\n`, { mode: 0o755 });
 const sources = require("../server/sources");
 
 let calls = [];
@@ -86,36 +88,39 @@ test("Datadog: alerting monitors and open issues on the configured site; one fai
   assert.strictEqual(half.errors.issues, "Forbidden");
 });
 
-test("Models: OpenRouter prices per 1M tokens and spend, Anthropic limits; a failing provider keeps the other", async () => {
-  assert.strictEqual(process.env.OPENROUTER_KEY, undefined, "the key never reaches a session's env");
-  stub((u, init) => {
-    if (u.host === "openrouter.ai") {
-      assert.strictEqual(init.headers.Authorization, "Bearer or-key");
-      if (u.pathname === "/api/v1/key") return reply(200, { data: { label: "dev", usage: 12.5, usage_daily: 1, limit: 50, limit_remaining: 37.5, is_free_tier: false } });
-      if (u.pathname === "/api/v1/credits") return reply(200, { data: { total_credits: 20, total_usage: 12.5 } });
-      return reply(200, {
-        data: [
-          { id: "old/m", name: "Old", created: 1, context_length: 8192, pricing: { prompt: "0", completion: "0" } },
-          { id: "openai/x", name: "X", created: 2, context_length: 400000, top_provider: { max_completion_tokens: 128000 }, pricing: { prompt: "0.00000125", completion: "0.00001" }, architecture: { modality: "text->text" } },
-          { id: "openrouter/auto", name: "Auto", created: 0, pricing: { prompt: "-1", completion: "-1" } },
-        ],
-      });
-    }
-    assert.strictEqual(init.headers["x-api-key"], "an-key");
-    return reply(200, { data: [{ id: "claude-x", display_name: "Claude X", created_at: "2026-01-01T00:00:00Z", max_input_tokens: 1000000, max_tokens: 128000, capabilities: { vision: { supported: true }, batch: false } }] });
-  });
-  const m = await sources.models({ refresh: true });
-  const [or, an] = m.providers;
-  assert.deepStrictEqual(or.models.map((x) => [x.id, x.input, x.output, x.context, x.maxOutput]), [
-    ["openai/x", 1.25, 10, 400000, 128000],
-    ["old/m", 0, 0, 8192, 0],
-    ["openrouter/auto", null, null, 0, 0],
-  ], "newest first; a variable price is null, not negative");
-  assert.deepStrictEqual([or.account.spent, or.account.remaining, or.account.balance], [12.5, 37.5, 7.5]);
-  assert.deepStrictEqual([an.models[0].context, an.models[0].maxOutput, an.models[0].capabilities], [1000000, 128000, ["vision"]]);
+test("Modal: apps per environment with today's cost and GPUs, live containers, the month's bill; billing fails on its own", async () => {
+  assert.strictEqual(process.env.MODAL_TOKEN_ID, undefined, "the token never reaches a session's env");
+  const m = await sources.modal({ refresh: true });
+  assert.deepStrictEqual([m.configured, m.workspace, m.user, m.environments], [true, "acme", "alex", ["main", "dev"]]);
+  assert.deepStrictEqual(m.apps.map((a) => [a.id, a.env, a.state, a.tasks, a.costToday, a.gpus]), [
+    ["ap-llm", "main", "deployed", 3, 11, ["GPU H100"]],
+    ["ap-idle", "main", "deployed", 0, 0.5, []],
+    ["ap-dev", "dev", "stopped", 0, null, []],
+  ], "busiest first; an app with no cost today has null, not 0");
+  assert.strictEqual(m.apps[0].createdAt, Date.parse("2026-11-20T10:00:00+05:30"));
+  assert.strictEqual(m.apps[0].url, "https://modal.com/id/ap-llm");
+  assert.deepStrictEqual(m.containers.map((c) => c.id), ["ta-3", "ta-2", "ta-1"], "newest first");
+  assert.deepStrictEqual([m.spend.metered, m.spend.billed, m.spend.credits, m.spend.today, m.spend.breakdown.deployed_apps], [120.5, 90.5, 30, 11.5, 100.25]);
+  assert.deepStrictEqual(m.gpus, [{ type: "GPU H100", cost: 10 }]);
+  assert.strictEqual(m.dashboard, "https://modal.com/apps/acme");
 
-  stub((u) => (u.host === "openrouter.ai" ? reply(401, { error: { message: "No auth credentials found" } }) : reply(200, { data: [] })));
-  const half = await sources.models({ refresh: true });
-  assert.strictEqual(half.providers[0].error, "No auth credentials found");
-  assert.strictEqual(half.providers[1].error, undefined);
+  const app = await sources.modalApp("ap-llm", "main");
+  assert.deepStrictEqual([app.version, app.deployedBy, app.history[0].commit], [7, "github-actions", "abc1234"]);
+  assert.deepStrictEqual(app.functions.map((f) => [f.name, f.web, f.webUrl, f.schedule, f.gpus, f.stats.failed]), [
+    ["generate", false, "", "", ["H100"], 2],
+    ["web", true, "https://acme--llm-serve-web.modal.run", "", [], 0],
+    ["warm", false, "", "*/10 * * * *", [], 0],
+  ]);
+  await assert.rejects(sources.modalApp("ap-nope", "main"), /No App with name 'ap-nope' found/, "the CLI's boxed error comes back as its words");
+  await assert.rejects(sources.modalApp("../etc", "main"), /bad app id/);
+
+  process.env.FAKE_MODAL_BILLING = "deny";
+  try {
+    const half = await sources.modal({ refresh: true });
+    assert.strictEqual(half.spend, null);
+    assert.strictEqual(half.errors.billing, "Workspace manager permissions required");
+    assert.strictEqual(half.apps.length, 3, "apps still load");
+  } finally {
+    delete process.env.FAKE_MODAL_BILLING;
+  }
 });

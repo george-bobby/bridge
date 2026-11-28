@@ -876,39 +876,68 @@ function datadog() {
   };
 }
 
-function models() {
-  const or = (id, name, context, maxOutput, input, output, ago, modality = "text+image->text") => ({
-    id, name, context, maxOutput, input, output, modality, created: (now() - ago) * 1000, url: `https://openrouter.ai/${id}`,
-  });
-  const an = (id, name, context, maxOutput, ago) => ({
-    id, name, context, maxOutput, input: null, output: null, capabilities: ["vision", "thinking"], created: (now() - ago) * 1000,
-    url: "https://docs.claude.com/en/docs/about-claude/models",
-  });
+// Modal: a fictional "storefront" workspace with GPU inference apps.
+const MODAL_APPS = [
+  // id, name, env, state, tasks, created ago, cost today, gpus
+  ["ap-Dm0LlmServe01", "llm-serve", "main", "deployed", 6, 40 * DAY, 182.4, ["H100"]],
+  ["ap-Dm0Embed00002", "embeddings", "main", "deployed", 3, 25 * DAY, 41.75, ["L4"]],
+  ["ap-Dm0Rerank0003", "search-rerank", "main", "deployed", 1, 18 * DAY, 9.12, ["A10G"]],
+  ["ap-Dm0ImgGen0004", "image-gen", "main", "deployed", 0, 60 * DAY, 3.4, ["A100-80GB"]],
+  ["ap-Dm0Nightly005", "nightly-eval", "main", "deployed", 0, 90 * DAY, 0.82, []],
+  ["ap-Dm0Finetune06", "finetune-lora-ab12", "dev", "ephemeral (detached)", 2, 0.2 * DAY, 27.6, ["H100"]],
+  ["ap-Dm0Notebook07", "scratch-notebook", "dev", "stopped", 0, 2 * DAY, 0, []],
+];
+
+function modal() {
+  const apps = MODAL_APPS.map(([id, name, env, state, tasks, ago, cost, gpus]) => ({
+    id, name, env, state, tasks, createdAt: (now() - ago) * 1000, stoppedAt: state === "stopped" ? (now() - DAY) * 1000 : 0,
+    costToday: cost, gpus, url: `https://modal.com/id/${id}`,
+  }));
+  const containers = apps.flatMap((a) =>
+    Array.from({ length: a.tasks }, (_, i) => ({
+      id: `ta-01DEMO${a.id.slice(-4).toUpperCase()}${i}`, appId: a.id, app: a.name, env: a.env,
+      startedAt: (now() - 600 * (i + 1) - a.name.length * 37) * 1000, url: `https://modal.com/id/ta-01DEMO${a.id.slice(-4).toUpperCase()}${i}`,
+    })),
+  ).sort((x, y) => y.startedAt - x.startedAt);
   return {
-    configured: true,
-    providers: [
-      {
-        id: "openrouter", name: "OpenRouter",
-        account: { label: "storefront-dev", spent: 41.27, spentDay: 1.84, spentWeek: 9.3, spentMonth: 27.65, limit: 100, remaining: 58.73, balance: 58.73, freeTier: false },
-        models: [
-          or("anthropic/claude-opus-5.5", "Anthropic: Claude Opus 5.5", 1000000, 128000, 4, 20, 20 * DAY),
-          or("openai/gpt-5.2", "OpenAI: GPT-5.2", 400000, 128000, 1.25, 10, 35 * DAY),
-          or("google/gemini-3-pro", "Google: Gemini 3 Pro", 1048576, 65536, 2, 12, 50 * DAY),
-          or("anthropic/claude-sonnet-5.5", "Anthropic: Claude Sonnet 5.5", 1000000, 128000, 2, 10, 20 * DAY),
-          or("deepseek/deepseek-v4", "DeepSeek: V4", 163840, 32768, 0.27, 1.1, 70 * DAY, "text->text"),
-          or("meta-llama/llama-5-70b:free", "Meta: Llama 5 70B (free)", 131072, 8192, 0, 0, 90 * DAY, "text->text"),
-        ],
-      },
-      {
-        id: "anthropic", name: "Anthropic", account: null,
-        models: [
-          an("claude-opus-5-5", "Claude Opus 5.5", 1000000, 128000, 20 * DAY),
-          an("claude-sonnet-5-5", "Claude Sonnet 5.5", 1000000, 128000, 20 * DAY),
-          an("claude-haiku-5-5", "Claude Haiku 5.5", 1000000, 64000, 25 * DAY),
-        ],
-      },
-    ],
+    configured: true, workspace: "storefront", user: "alex", environments: ["main", "dev"],
+    apps, containers,
+    spend: { metered: 4182.37, billed: 4052.37, credits: 30, plan: 100, breakdown: { deployed_apps: 3611.2, ephemeral_apps: 402.15, network_egress: 169.02, llm_tokens: 0 }, today: 265.09 },
+    gpus: [{ type: "H100", cost: 198.3 }, { type: "L4", cost: 34.2 }, { type: "A10G", cost: 6.1 }, { type: "A100-80GB", cost: 2.9 }],
+    errors: {},
+    dashboard: "https://modal.com/apps/storefront", usage: "https://modal.com/settings/storefront/usage",
     at: Date.now(),
+  };
+}
+
+function modalApp(id) {
+  const a = MODAL_APPS.find((x) => x[0] === id);
+  if (!a) throw new Error("no such app");
+  const f = (name, o = {}) => {
+    const fid = `fu-${a[0].slice(3, 12)}${name.replace(/\W/g, "")}`;
+    return {
+      name, id: fid, web: !!o.url, webUrl: o.url || "", schedule: o.schedule || "", gpus: o.gpus || [],
+      stats: { ok: o.ok || 0, failed: o.failed || 0, timedOut: o.timedOut || 0, running: o.running || 0, containerErrors: o.containerErrors || 0 },
+      url: `https://modal.com/id/${fid}`,
+    };
+  };
+  const fns = {
+    "llm-serve": [f("Model.generate", { gpus: ["H100"], ok: 18342, failed: 12, timedOut: 3, running: 41 }), f("web", { url: "https://storefront--llm-serve-web.modal.run", ok: 18360, failed: 2 }), f("warm", { schedule: "*/10 * * * *", ok: 6 })],
+    embeddings: [f("embed", { gpus: ["L4"], ok: 9120, running: 8 }), f("web", { url: "https://storefront--embeddings-web.modal.run", ok: 9120 })],
+    "search-rerank": [f("rerank", { gpus: ["A10G"], ok: 2210, failed: 48, containerErrors: 2 })],
+    "image-gen": [f("Diffusion.generate", { gpus: ["A100-80GB"], ok: 14 }), f("web", { url: "https://storefront--image-gen-web.modal.run", ok: 14 })],
+    "nightly-eval": [f("run_suite", { schedule: "0 3 * * *" }), f("report", {})],
+    "finetune-lora-ab12": [f("train", { gpus: ["2×H100"], running: 1 })],
+    "scratch-notebook": [f("main", {})],
+  }[a[1]];
+  const by = a[3] === "deployed" ? "github-actions" : "alex";
+  return {
+    id, name: a[1], state: a[3], version: a[3] === "deployed" ? 42 : 0, createdBy: by,
+    deployedAt: a[3] === "deployed" ? (now() - 5 * 3600) * 1000 : 0, deployedBy: a[3] === "deployed" ? by : "",
+    stoppedAt: a[3] === "stopped" ? (now() - DAY) * 1000 : 0, stoppedBy: a[3] === "stopped" ? "alex" : "",
+    functions: fns,
+    history: a[3] === "deployed" ? [[42, 5 * 3600, "9f3c2e1"], [41, 2 * DAY, "71ab0d4"], [40, 6 * DAY, "c08e5f2"]].map(([v, ago, commit]) => ({ version: `v${v}`, at: (now() - ago) * 1000, by, commit })) : [],
+    url: `https://modal.com/id/${id}`,
   };
 }
 
@@ -1215,4 +1244,4 @@ function permissions() {
   ];
 }
 
-module.exports = { REPO, changes, archive, seed, writeSessions, seedSkills, plugins, pulls, linear, ports, stopServer, slack, usage, agents, prActivity, mcp, git, history, vercel, incidents, granola, granolaNote, datadog, tokens, models, permissions };
+module.exports = { REPO, changes, archive, seed, writeSessions, seedSkills, plugins, pulls, linear, ports, stopServer, slack, usage, agents, prActivity, mcp, git, history, vercel, incidents, granola, granolaNote, datadog, tokens, modal, modalApp, permissions };

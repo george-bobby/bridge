@@ -61,7 +61,7 @@ final class TermSession: ObservableObject, @preconcurrency LocalProcessTerminalV
     /// for a 256-colour terminal; `path` goes in front of PATH.
     nonisolated static func environment(path: String = "") -> [String] {
         var env = ProcessInfo.processInfo.environment
-        for k in ["ACP_BACKEND", "LINEAR_API_KEY", "SLACK_USER_TOKEN", "VERCEL_TOKEN", "INCIDENT_API_KEY", "GRANOLA_API_KEY", "DD_API_KEY", "DD_APP_KEY", "OPENROUTER_KEY", "ANTHROPIC_KEY", "BRIDGE_APPEARANCE"] { env[k] = nil }
+        for k in ["ACP_BACKEND", "LINEAR_API_KEY", "SLACK_USER_TOKEN", "VERCEL_TOKEN", "INCIDENT_API_KEY", "GRANOLA_API_KEY", "DD_API_KEY", "DD_APP_KEY", "MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET", "BRIDGE_APPEARANCE"] { env[k] = nil }
         for k in env.keys where k.hasPrefix("BRIDGE_SNAPSHOT") { env[k] = nil }
         if !path.isEmpty { env["PATH"] = path + ":" + (env["PATH"] ?? "/usr/bin:/bin") }
         env["TERM"] = "xterm-256color"
