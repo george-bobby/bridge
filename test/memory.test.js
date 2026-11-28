@@ -86,3 +86,14 @@ test("connect points every agent at the shared memory and keeps what was already
   assert.match(fs.readFileSync(path.join(HOME, ".cursor", "rules", "bridge-memory.mdc"), "utf8"), /alwaysApply: true/);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(HOME, ".claude", "settings.json"), "utf8")), { theme: "dark", autoMemoryEnabled: false });
 });
+
+test("a server on a scratch data dir never writes the pointers into your real home", () => {
+  const home = path.join(tmp, "real-home");
+  fs.mkdirSync(home, { recursive: true });
+  const env = { ...process.env, HOME: home, BRIDGE_DATA_DIR: path.join(tmp, "blank-data") };
+  for (const k of ["BRIDGE_MCP_HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME"]) delete env[k];
+  const run = (extra) => execFileSync(process.execPath, ["-e", `require(${JSON.stringify(path.join(__dirname, "..", "server", "memory"))}).connect()`], { env: { ...env, ...extra } });
+  run({});
+  run({ BRIDGE_DEMO: "1" });
+  assert.deepEqual(fs.readdirSync(home), []);
+});
