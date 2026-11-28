@@ -39,7 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 pages.append(("collapsed", last.1))
                 if browser != nil { pages.append(("browser", last.1)) }
                 pages.append(("preview", last.1))
-                pages += [("split", last.1), ("split-details", last.1), ("split-wide", last.1), ("split4", last.1), ("messages", last.1), ("messages-split", last.1), ("messages-list", last.1), ("drop", last.1), ("terminal", last.1), ("console", last.1), ("task", last.1), ("task-live", last.1), ("task-bash", last.1), ("pinned", last.1), ("pinned-collapsed", last.1)]
+                pages += [("split", last.1), ("split-details", last.1), ("split-wide", last.1), ("split4", last.1), ("messages", last.1), ("messages-split", last.1), ("messages-list", last.1), ("drop", last.1), ("terminal", last.1), ("console", last.1), ("task", last.1), ("task-live", last.1), ("task-bash", last.1), ("pinned", last.1), ("pinned-collapsed", last.1), ("pinned-props", last.1), ("split-props", last.1)]
             }
             // The Changes tree in a worker's chat; Source Control in an orchestrator's.
             if let last = pages.first(where: { $0.0 == "chat" }) { pages.append(("changes", last.1)) }
@@ -61,9 +61,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 if name == "preview", case .session(let id) = route, let s = model.sessions.first(where: { $0.id == id }), let p = model.previews(for: s).first {
                     model.openPreview(p.url, run: id); model.openPreview(p.url, run: id)   // twice: the second reuses the tab
                 }
-                if name.hasPrefix("split") || name.hasPrefix("messages"), case .session(let id) = route { model.panes = [Pane(run: id)]; model.focusedPane = 0 }
+                if name.hasPrefix("split") || name.hasPrefix("messages") || name.hasPrefix("pinned"), case .session(let id) = route { model.panes = [Pane(run: id)]; model.focusedPane = 0 }
                 // The orchestrator pinned beside a worker's chat, open and folded.
                 if name.hasPrefix("pinned") { model.pinnedRun = model.orchestrator?.id ?? "orchestrator"; model.pinnedCollapsed = name == "pinned-collapsed" }
+                model.pinnedDetails = name == "pinned-props"
+                // + › Properties in the second of two panes.
+                if name == "split-props", case .session(let id) = route { model.open(id); model.splitRight(); model.toggleProperties(model.panes.last?.id) }
                 if case .session(let id) = route { model.open(id) } else { model.route = route }
                 if name == "split" { model.splitRight(); model.splitRight() }
                 if name == "split4" { for _ in 0..<3 { model.splitRight() } }

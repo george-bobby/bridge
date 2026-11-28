@@ -227,6 +227,9 @@ struct SessionTabs: View {
             }
             Section {
                 Button { model.openTerminalTab(runId) } label: { Label("Terminal", systemImage: "terminal") }
+                Button { model.toggleProperties(pane?.id) } label: {
+                    Label(model.propertiesShown(pane?.id) ? "Hide Properties" : "Properties", systemImage: "sidebar.right")
+                }
                 Button { model.splitRight() } label: { Label("Split Right", systemImage: "rectangle.split.2x1") }
             }
         }

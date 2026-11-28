@@ -126,6 +126,31 @@ extension AppModel {
         }
     }
 
+    /// The tab strip's + › Properties: that pane's details (one pane: the
+    /// column), on its chat when the pane shows a browser or terminal.
+    func toggleProperties(_ paneId: String?) {
+        guard let j = paneId.flatMap(pane) ?? (panes.indices.contains(focusedPane) ? focusedPane : nil) else { return }
+        var p = panes[j]
+        if p.tab != "chat" && p.tab != "changes" {
+            // The chat may already be in another pane: its details open there.
+            if let k = panes.firstIndex(where: { $0.run == p.run && ($0.tab == "chat" || $0.tab == "changes") }) {
+                focusPane(k)
+                p = panes[k]
+            } else {
+                withAnimation(M.snappy) { showTab("chat", of: p.run, in: isSplit ? p.id : nil) }
+                guard let k = pane(p.id) else { return }
+                p = panes[k]
+            }
+            if paneShowsDetails(p) { return }
+        }
+        toggleDetails(isSplit ? p.id : nil)
+    }
+
+    func propertiesShown(_ paneId: String?) -> Bool {
+        guard let j = paneId.flatMap(pane) ?? (panes.indices.contains(focusedPane) ? focusedPane : nil) else { return false }
+        return paneShowsDetails(panes[j])
+    }
+
     func toggleDrawer(_ paneId: String) {
         guard let j = pane(paneId) else { return }
         withAnimation(M.snappy) { panes[j].drawerFolded.toggle() }
@@ -820,9 +845,15 @@ struct PinnedDock: View {
             header
             PaneContent(run: session.id, tab: "chat")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if model.pinnedDetails {
+                DetailsDrawer(id: session.id, open: !model.pinnedDrawerFolded) { withAnimation(M.snappy) { model.pinnedDrawerFolded.toggle() } }
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
         }
         .background(T.panel)
         .clipped()
+        .animation(M.snappy, value: model.pinnedDetails)
+        .task(id: model.pinnedDetails ? session.id : "") { if model.pinnedDetails { await model.loadTask(session.id) } }
     }
 
     var header: some View {
@@ -848,6 +879,9 @@ struct PinnedDock: View {
                     }
                     Divider()
                 }
+                Button {
+                    withAnimation(M.snappy) { model.pinnedDetails.toggle(); model.pinnedDrawerFolded = false }
+                } label: { Label(model.pinnedDetails ? "Hide Properties" : "Properties", systemImage: "sidebar.right") }
                 Button { model.unpinOrchestrator() } label: { Label("Unpin", systemImage: "pin.slash") }
             }
             IconButton(icon: "arrow.right.to.line", help: "Collapse (⌥⌘O): it stays pinned", size: 24) { model.toggleDock() }
