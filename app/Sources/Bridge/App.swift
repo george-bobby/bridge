@@ -38,9 +38,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 pages.append(("collapsed", last.1))
                 if browser != nil { pages.append(("browser", last.1)) }
                 pages.append(("preview", last.1))
-                pages += [("split", last.1), ("split-details", last.1), ("split-wide", last.1), ("split4", last.1), ("messages", last.1), ("messages-split", last.1), ("messages-list", last.1), ("drop", last.1), ("terminal", last.1), ("console", last.1), ("task", last.1), ("task-live", last.1), ("task-bash", last.1)]
+                pages += [("split", last.1), ("split-details", last.1), ("split-wide", last.1), ("split4", last.1), ("messages", last.1), ("messages-split", last.1), ("messages-list", last.1), ("drop", last.1), ("terminal", last.1), ("console", last.1), ("task", last.1), ("task-live", last.1), ("task-bash", last.1), ("pinned", last.1), ("pinned-collapsed", last.1)]
             }
             let hidden = model.sidebarHidden
+            let pin = (model.pinnedRun, model.pinnedCollapsed)
             if let only = ProcessInfo.processInfo.environment["BRIDGE_SNAPSHOT_PAGES"]?.split(separator: ",").map(String.init) {
                 pages = pages.filter { only.contains($0.0) }
             }
@@ -57,6 +58,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                     model.openPreview(p.url, run: id); model.openPreview(p.url, run: id)   // twice: the second reuses the tab
                 }
                 if name.hasPrefix("split") || name.hasPrefix("messages"), case .session(let id) = route { model.panes = [Pane(run: id)]; model.focusedPane = 0 }
+                // The orchestrator pinned beside a worker's chat, open and folded.
+                if name.hasPrefix("pinned") { model.pinnedRun = model.orchestrator?.id ?? "orchestrator"; model.pinnedCollapsed = name == "pinned-collapsed" }
                 if case .session(let id) = route { model.open(id) } else { model.route = route }
                 if name == "split" { model.splitRight(); model.splitRight() }
                 if name == "split4" { for _ in 0..<3 { model.splitRight() } }
@@ -120,6 +123,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: "\(dir)/\(name).png"))
             }
             model.sidebarHidden = hidden
+            (model.pinnedRun, model.pinnedCollapsed) = pin
             // The sidebar's usage popover lives in its own window: render it directly.
             let dark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
             let card = ImageRenderer(content: UsageCard(providers: model.usageProviders) {}.background(T.raised).environment(\.colorScheme, dark ? .dark : .light))
@@ -340,7 +344,7 @@ struct RootView: View {
         case .memory: MemoryView()
         case .settings: SettingsView()
         case .compose: ComposeSheet()
-        case .session(let id): ChatView(id: id)
+        case .session(let id): DockedChat(id: id)
         }
     }
 }

@@ -59,8 +59,13 @@ extension AppModel {
     }
 
     var isSplit: Bool { panes.count > 1 }
-    /// Sessions shown in a pane other than the focused one.
-    var paneRuns: Set<String> { Set(panes.map(\.run).filter { !$0.isEmpty && $0 != openId }) }
+    /// Sessions shown in a pane other than the focused one, and the pinned
+    /// orchestrator (kept current off the chat page too, so it's never stale).
+    var paneRuns: Set<String> {
+        var runs = Set(panes.map(\.run))
+        if pinnedSession != nil { runs.insert(pinnedRun) }
+        return runs.filter { !$0.isEmpty && $0 != openId }
+    }
 
     func pane(_ id: String) -> Int? { panes.firstIndex { $0.id == id } }
 
@@ -292,6 +297,55 @@ extension AppModel {
             for run in todo { g.addTask { await self.fetchRun(run) } }
         }
         for p in panes where p.details && isSplit && todo.contains(p.run) { await loadTask(p.run) }
+    }
+
+    // MARK: pinned orchestrator
+
+    static let pinShareRange: ClosedRange<CGFloat> = 0.2...0.6
+
+    /// The pinned orchestrator, while it's a live session.
+    var pinnedSession: Session? {
+        pinnedRun.isEmpty ? nil : sessions.first { $0.id == pinnedRun && $0.isOrchestrator && !$0.archived }
+    }
+
+    /// On every chat page, unless a pane already shows it (no chat twice).
+    var dockShown: Bool { isChatRoute && pinnedSession != nil && !panes.contains { $0.run == pinnedRun } }
+
+    /// Pin an orchestrator to the right. Shown in a pane, it moves out of it:
+    /// the pane goes back to the last worker chat.
+    func pinOrchestrator(_ id: String) {
+        withAnimation(M.snappy) {
+            pinnedRun = id
+            pinnedCollapsed = false
+            for p in panes where p.run == id && isSplit { closePane(p.id) }
+        }
+        if panes.contains(where: { $0.run == id }), let next = lastWorker(besides: id) { open(next) }
+        Task { await refreshPanes() }
+    }
+
+    /// A project's orchestrator, started first when it has none yet.
+    func pinOrchestrator(project pid: String) {
+        let id = orchestratorId(pid)
+        if sessions.contains(where: { $0.id == id }) { return pinOrchestrator(id) }
+        Task { await act { self.pinOrchestrator(try await API.post("/api/projects/\(API.q(pid))/orchestrator")["runId"].nonEmpty ?? id) } }
+    }
+
+    func unpinOrchestrator() { withAnimation(M.snappy) { pinnedRun = "" } }
+
+    func toggleDock() { withAnimation(M.snappy) { pinnedCollapsed.toggle() } }
+
+    /// Pane › Pin Orchestrator: this chat's orchestrator (the one on screen,
+    /// else its project's), or unpin the one that's pinned.
+    func togglePin() {
+        if pinnedSession != nil { return unpinOrchestrator() }
+        guard case .session(let id) = route, let s = sessions.first(where: { $0.id == id }) else { return pinOrchestrator(project: AppModel.rootId) }
+        s.isOrchestrator ? pinOrchestrator(id) : pinOrchestrator(project: s.project)
+    }
+
+    private func lastWorker(besides id: String) -> String? {
+        let live = Set(boardSessions.map(\.id))
+        for case .session(let r) in backStack.reversed() where r != id && live.contains(r) { return r }
+        return chatOrder.first { $0 != id && live.contains($0) }
     }
 
     // MARK: terminal tabs
@@ -652,6 +706,9 @@ struct PaneHeader: View {
                 if let s {
                     Button { Task { await model.setPinned(s.id, !s.pinned) } } label: { Label(s.pinned ? "Unpin" : "Pin to the Sidebar", systemImage: s.pinned ? "star.slash" : "star") }
                 }
+                if let s, s.isOrchestrator {
+                    Button { model.pinOrchestrator(s.id) } label: { Label("Pin to the Right", systemImage: "pin") }
+                }
                 Button { model.splitRight() } label: { Label("Split Right", systemImage: "rectangle.split.2x1") }
                 Button { model.collapsePane(pane.id) } label: { Label("Minimize Pane", systemImage: "arrow.right.and.line.vertical.and.arrow.left") }
                     .disabled(model.panes.filter { !$0.collapsed }.count < 2)
@@ -715,6 +772,157 @@ struct CollapsedPane: View {
     }
 }
 
+
+// MARK: - Pinned orchestrator
+
+/// The chat page with the pinned orchestrator on its right: its own column,
+/// outside the panes, so opening chats, stepping them (⌥⌘↑/↓) and splitting
+/// never replace it. Drag its edge to resize (a share of the page, kept),
+/// fold it to a strip, or pick another project's orchestrator from its menu.
+struct DockedChat: View {
+    @Environment(AppModel.self) var model
+    let id: String
+
+    static let minWidth: CGFloat = 320
+    /// What the chat beside it keeps, at least; narrower, the dock is a strip.
+    static let chatMin: CGFloat = 420
+
+    var body: some View {
+        GeometryReader { g in
+            let room = g.size.width - Self.chatMin >= Self.minWidth
+            let w = min(max(g.size.width * model.pinnedShare, Self.minWidth), g.size.width - Self.chatMin)
+            HStack(spacing: 0) {
+                ChatView(id: id).frame(maxWidth: .infinity)
+                if model.dockShown, let s = model.pinnedSession {
+                    if model.pinnedCollapsed || !room {
+                        Rectangle().fill(T.line).frame(width: 1)
+                        DockStrip(session: s).frame(width: PaneArea.stripWidth)
+                            .transition(.move(edge: .trailing).combined(with: .opacity))
+                    } else {
+                        DockDivider(total: g.size.width)
+                        PinnedDock(session: s).frame(width: w)
+                            .transition(.move(edge: .trailing).combined(with: .opacity))
+                    }
+                }
+            }
+            .animation(M.snappy, value: model.dockShown)
+            .animation(M.snappy, value: model.pinnedCollapsed)
+        }
+    }
+}
+
+struct PinnedDock: View {
+    @Environment(AppModel.self) var model
+    let session: Session
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            PaneContent(run: session.id, tab: "chat")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .background(T.panel)
+        .clipped()
+    }
+
+    var header: some View {
+        let live = model.isLive(session) && !model.isAwaiting(session)
+        let project = model.projects.count > 1 ? model.project(session.project)?.name : nil
+        return HStack(spacing: 8) {
+            Image(systemName: "sparkles").font(.system(size: 12)).foregroundStyle(T.purple)
+            Text("Orchestrator").font(T.ui(13.5, .semibold)).foregroundStyle(T.text).fixedSize()
+            if let project { Text(project).font(T.ui(12.5)).foregroundStyle(T.text3).lineLimit(1) }
+            if live { LiveBadge().fixedSize().transition(.scale.combined(with: .opacity)) }
+            Spacer(minLength: 6)
+            if model.isLive(session) {
+                IconButton(icon: "stop.fill", help: "Stop the running turn", size: 24, tint: T.red) { Task { await model.stop(session.id) } }
+                    .transition(.scale.combined(with: .opacity))
+            }
+            MoreMenu(size: B.small) {
+                if model.projects.count > 1 {
+                    Section("Pinned orchestrator") {
+                        ForEach(model.projects) { p in
+                            Toggle(p.name, isOn: Binding(get: { model.orchestratorId(p.id) == session.id },
+                                                         set: { if $0 { model.pinOrchestrator(project: p.id) } }))
+                        }
+                    }
+                    Divider()
+                }
+                Button { model.unpinOrchestrator() } label: { Label("Unpin", systemImage: "pin.slash") }
+            }
+            IconButton(icon: "arrow.right.to.line", help: "Collapse (⌥⌘O): it stays pinned", size: 24) { model.toggleDock() }
+        }
+        .padding(.leading, 14).padding(.trailing, 8)
+        .frame(height: T.headerHeight)
+        .overlay(alignment: .bottom) { Rectangle().fill(T.line).frame(height: 1) }
+        .animation(M.snappy, value: live)
+    }
+}
+
+/// The folded dock: a strip with the orchestrator's mark; click to unfold.
+struct DockStrip: View {
+    @Environment(AppModel.self) var model
+    let session: Session
+    @StateObject private var hover = Box(false)
+
+    var body: some View {
+        VStack(spacing: 10) {
+            IconButton(icon: "arrow.left.to.line", help: "Expand the orchestrator (⌥⌘O)", size: 24) { model.toggleDock() }
+                .padding(.top, 10)
+            ZStack {
+                if model.isLive(session) && !model.isAwaiting(session) { LiveIcon(size: 11) }
+                else { Image(systemName: "sparkles").font(.system(size: 12)).foregroundStyle(T.purple) }
+            }
+            .overlay(alignment: .topTrailing) {
+                if session.unread && !model.isLive(session) { Circle().fill(T.accent).frame(width: 6, height: 6).offset(x: 4, y: -3) }
+            }
+            GeometryReader { g in
+                Text("Orchestrator")
+                    .font(T.ui(12.5, .medium)).foregroundStyle(hover.v ? T.text : T.text2)
+                    .lineLimit(1)
+                    .frame(width: g.size.height, height: 20, alignment: .leading)
+                    .rotationEffect(.degrees(90))
+                    .frame(width: g.size.width, height: g.size.height)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(hover.v ? T.hover.opacity(0.5) : T.bg.opacity(0.35))
+        .contentShape(Rectangle())
+        .onTapGesture { model.toggleDock() }
+        .hoverBox(hover)
+        .help("Expand the orchestrator (⌥⌘O)")
+    }
+}
+
+/// The dock's leading hairline: drag to resize, double-click for the default.
+struct DockDivider: View {
+    @Environment(AppModel.self) var model
+    let total: CGFloat
+    @StateObject private var hover = Box(false)
+    @StateObject private var start = Box<CGFloat?>(nil)
+
+    var body: some View {
+        Rectangle().fill(hover.v || start.v != nil ? T.accent.opacity(0.7) : T.line)
+            .frame(width: 1)
+            .overlay {
+                Color.clear.frame(width: 9).contentShape(Rectangle())
+                    .onHover { inside in
+                        withAnimation(M.hover) { hover.v = inside }
+                        if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+                    }
+                    .gesture(DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                        .onChanged { v in
+                            if start.v == nil { start.v = model.pinnedShare }
+                            let r = AppModel.pinShareRange
+                            model.pinnedShare = min(max((start.v ?? 0.35) - v.translation.width / max(total, 1), r.lowerBound), r.upperBound)
+                        }
+                        .onEnded { _ in start.v = nil })
+                    .onTapGesture(count: 2) { withAnimation(M.snappy) { model.pinnedShare = 0.35 } }
+            }
+            .help("Drag to resize; double-click to reset")
+            .zIndex(1)
+    }
+}
 
 /// One pane's content: the same views the single chat always showed.
 struct PaneContent: View {
@@ -854,6 +1062,15 @@ struct PaneCommands: Commands {
             Button { model.stepPane(1) } label: { Label("Focus Next Pane", systemImage: "arrow.right.to.line") }
                 .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
                 .disabled(!model.isSplit || !model.isChatRoute)
+            Divider()
+            Button { model.togglePin() } label: {
+                Label(model.pinnedSession == nil ? "Pin Orchestrator to the Right" : "Unpin Orchestrator", systemImage: model.pinnedSession == nil ? "pin" : "pin.slash")
+            }
+            Button { model.toggleDock() } label: {
+                Label(model.pinnedCollapsed ? "Expand Pinned Orchestrator" : "Collapse Pinned Orchestrator", systemImage: "sidebar.right")
+            }
+            .keyboardShortcut("o", modifiers: [.command, .option])
+            .disabled(!model.dockShown)
             Divider()
             Button { if case .session(let id) = model.route { model.openTerminalTab(id) } } label: { Label("Session Terminal Tab", systemImage: "terminal") }
                 .disabled(!model.isChatRoute)
