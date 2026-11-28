@@ -130,10 +130,18 @@ extension AppModel {
     /// column), on its chat when the pane shows a browser or terminal.
     func toggleProperties(_ paneId: String?) {
         guard let j = paneId.flatMap(pane) ?? (panes.indices.contains(focusedPane) ? focusedPane : nil) else { return }
-        let p = panes[j]
+        var p = panes[j]
         if p.tab != "chat" && p.tab != "changes" {
-            withAnimation(M.snappy) { showTab("chat", of: p.run, in: isSplit ? p.id : nil) }
-            if let k = pane(p.id), paneShowsDetails(panes[k]) { return }
+            // The chat may already be in another pane: its details open there.
+            if let k = panes.firstIndex(where: { $0.run == p.run && ($0.tab == "chat" || $0.tab == "changes") }) {
+                focusPane(k)
+                p = panes[k]
+            } else {
+                withAnimation(M.snappy) { showTab("chat", of: p.run, in: isSplit ? p.id : nil) }
+                guard let k = pane(p.id) else { return }
+                p = panes[k]
+            }
+            if paneShowsDetails(p) { return }
         }
         toggleDetails(isSplit ? p.id : nil)
     }
