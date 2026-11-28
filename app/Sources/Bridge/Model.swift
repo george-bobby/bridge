@@ -966,17 +966,20 @@ final class AppModel {
     /// in and reopen it: scripts/relaunch.sh does it all and logs to
     /// logs/relaunch.log. It waits this process out before `open`, so the app
     /// exits the moment the script reaches "step reopen".
-    func relaunch() {
+    /// `plan` is the confirmed `relaunch.sh plan`: the run stops untouched
+    /// if main or the restart decision moved since.
+    func relaunch(_ plan: JSON) {
         guard !bridgeRoot.isEmpty, !relaunching else { return }
         relaunching = true
         relaunchStep = "Updating…"
         let root = bridgeRoot
         let pid = ProcessInfo.processInfo.processIdentifier
+        let confirmed = ["BRIDGE_RELAUNCH_HEAD": plan["head"].string, "BRIDGE_RELAUNCH_RESTART": plan["restart"].bool ? "1" : "0"]
         Task.detached {
             let p = Process()
             p.executableURL = URL(fileURLWithPath: "/bin/zsh")
             p.arguments = ["-lc", "cd \"$BRIDGE_ROOT\" && ./scripts/relaunch.sh"]
-            p.environment = ProcessInfo.processInfo.environment.merging(["BRIDGE_ROOT": root, "BRIDGE_PORT": API.port, "BRIDGE_APP_PID": String(pid)]) { $1 }
+            p.environment = ProcessInfo.processInfo.environment.merging(["BRIDGE_ROOT": root, "BRIDGE_PORT": API.port, "BRIDGE_APP_PID": String(pid)].merging(confirmed) { $1 }) { $1 }
             let pipe = Pipe()
             p.standardOutput = pipe
             p.standardError = pipe

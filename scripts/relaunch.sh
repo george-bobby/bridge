@@ -17,7 +17,10 @@
 # LAUNCHD_LABEL (the dashboard job's name; default .env's, then local.bridge),
 # BRIDGE_APP_DST (where the app installs; default ~/Applications/Bridge.app),
 # BRIDGE_APP_PID (a running Bridge.app to wait out before `open`; the app
-# passes its own pid and exits when it reads "step reopen").
+# passes its own pid and exits when it reads "step reopen"),
+# BRIDGE_RELAUNCH_HEAD / BRIDGE_RELAUNCH_RESTART (the head and restart the
+# user confirmed from `plan`; the run stops before touching anything if a
+# fresh plan disagrees).
 #
 # "step <name>" lines mark the phases for the app's progress label.
 
@@ -120,22 +123,26 @@ want_build() {
   [[ -n "$ours" && "$ours" != "$theirs" ]]
 }
 
-# Restart when the server is down, or it isn't serving the head we'll be on.
-# A merge that only touched the app doesn't earn a restart; a server on a
-# different commit for any other reason does.
+# Restart when the server is down, or what it serves differs from the head
+# we'll be on in a file it runs. Commits that only touched the app don't earn
+# a restart; a server whose commit is unknown always gets one.
 want_restart() {
   (( SERVER_UP )) || return 0
-  [[ -n "$SERVER_HEAD" && "$SERVER_HEAD" == "$NEW_HEAD" ]] && return 1
-  if (( MERGE )); then
-    gitrepo diff --name-only "$OLD_HEAD" "$NEW_HEAD" | server_files || return 1
-  fi
-  return 0
+  [[ -n "$SERVER_HEAD" && -n "$NEW_HEAD" ]] || return 0
+  [[ "$SERVER_HEAD" == "$NEW_HEAD" ]] && return 1
+  local files
+  files="$(gitrepo diff --name-only "$SERVER_HEAD" "$NEW_HEAD" 2>/dev/null)" || return 0
+  server_files <<<"$files"
+}
+
+decide() {
+  BUILD=0; want_build && BUILD=1
+  RESTART=0; want_restart && RESTART=1
 }
 
 if [[ "${1:-}" == "plan" ]]; then
   collect
-  BUILD=0; want_build && BUILD=1
-  RESTART=0; want_restart && RESTART=1
+  decide
   ROOT="$ROOT" PORT="$PORT" BEHIND="$BEHIND" AHEAD="$AHEAD" BRANCH="$BRANCH" MERGE="$MERGE" REASON="$REASON" \
     BUILD="$BUILD" RESTART="$RESTART" SERVER_UP="$SERVER_UP" NEW_HEAD="$NEW_HEAD" \
     node -e 'const e=process.env,b=(k)=>e[k]==="1";
@@ -148,6 +155,11 @@ exec > >(tee -a "$LOG") 2>&1
 say "--- relaunch $(date '+%Y-%m-%d %H:%M:%S') on $ROOT"
 
 collect
+decide
+
+if [[ -n "${BRIDGE_RELAUNCH_HEAD+x}" ]] && [[ "$NEW_HEAD" != "$BRIDGE_RELAUNCH_HEAD" || "$RESTART" != "${BRIDGE_RELAUNCH_RESTART:-$RESTART}" ]]; then
+  die "main moved since you confirmed; nothing was changed, press Relaunch again"
+fi
 
 if (( MERGE )); then
   step updating
@@ -158,16 +170,14 @@ else
   say "leaving git alone: ${REASON:-nothing to pull}"
 fi
 
-BUILT=0
-if want_build; then
+if (( BUILD )); then
   step building
   (cd "$ROOT" && ./scripts/build.sh) || die "the app build failed"
-  BUILT=1
 else
   say "the app is already built from this code"
 fi
 
-if want_restart; then
+if (( RESTART )); then
   step restarting
   if [[ -f "$ROOT/.env" ]]; then
     "$ROOT/scripts/install.sh" start || die "the server didn't restart (install.sh failed)"
@@ -187,13 +197,24 @@ else
   say "the server keeps running"
 fi
 
-step reopen
-if (( BUILT )); then
-  mkdir -p "$HOME/Applications"
-  rm -rf "$APP_DST"
-  cp -R "$ROOT/dist/Bridge.app" "$APP_DST" || die "couldn't copy the app into ~/Applications"
+# Copy beside the installed app first and swap only once the copy is whole,
+# so a failed install leaves the running app and its bundle as they were.
+if (( BUILD )); then
+  APPS="$(dirname "$APP_DST")"
+  NEXT="$APPS/.$(basename "$APP_DST").next"
+  PREV="$APPS/.$(basename "$APP_DST").prev"
+  mkdir -p "$APPS"
+  rm -rf "$NEXT" "$PREV"
+  cp -R "$ROOT/dist/Bridge.app" "$NEXT" || { rm -rf "$NEXT"; die "couldn't copy the app into $APPS; the installed one is untouched"; }
+  if [[ -d "$APP_DST" ]]; then mv "$APP_DST" "$PREV" || { rm -rf "$NEXT"; die "couldn't move the installed app aside"; }; fi
+  if ! mv "$NEXT" "$APP_DST"; then
+    [[ -d "$PREV" ]] && mv "$PREV" "$APP_DST"
+    die "couldn't swap in the new build; the previous one is back"
+  fi
+  rm -rf "$PREV"
   say "swapped in the new build"
 fi
+step reopen
 # `open` only focuses a running instance, so the old app has to be gone first:
 # the app exits on "step reopen"; a stray pid gets a moment, then a push.
 if [[ -n "${BRIDGE_APP_PID:-}" ]]; then

@@ -351,7 +351,7 @@ struct RelaunchButton: View {
         a.informativeText = lines.joined(separator: " ")
         a.addButton(withTitle: "Relaunch")
         a.addButton(withTitle: "Cancel")
-        if a.runModal() == .alertFirstButtonReturn { model.relaunch() }
+        if a.runModal() == .alertFirstButtonReturn { model.relaunch(plan) }
     }
 }
 
