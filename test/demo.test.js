@@ -140,3 +140,26 @@ test("slack connector routes answer from the demo workspace", async () => {
   const t = await get(`/api/slack/thread?url=${encodeURIComponent(mentions[0].permalink)}`);
   assert.ok(t.messages.length >= 1 && t.channel);
 });
+
+test("demo serves a worker's Changes and the orchestrator's Source Control without touching git", async () => {
+  const { runs } = await get("/api/runs");
+  const orch = runs.find((r) => r.kind === "orchestrator");
+  const worker = runs.find((r) => r.runId.includes("web-124"));
+  const scm = await get(`/api/runs/${orch.runId}/changes`);
+  assert.strictEqual(scm.branch, "main");
+  assert.ok(scm.behind > 0);
+  const graph = await get(`/api/runs/${orch.runId}/graph`);
+  assert.ok(graph.commits.length >= 10 && graph.commits.some((c) => c.parents.length === 2), "the graph has merges to draw");
+  const wt = await get(`/api/runs/${worker.runId}/changes`);
+  assert.ok(wt.files.some((f) => f.path.includes("/")), "nested paths for the folder tree");
+  assert.match((await get(`/api/runs/${worker.runId}/diff?file=${encodeURIComponent(wt.files[0].path)}`)).diff, /^\+\+\+ b\//m);
+});
+
+test("demo serves the Explorer's tree and a file to read", async () => {
+  const orch = (await get("/api/runs")).runs.find((r) => r.kind === "orchestrator");
+  const tree = await get(`/api/runs/${orch.runId}/tree`);
+  assert.ok(tree.files.includes("src/App.tsx") && tree.dirs.includes("src"));
+  const f = await get(`/api/runs/${orch.runId}/file?path=src%2FApp.tsx`);
+  assert.match(f.text, /export function PaymentStep/);
+  assert.ok(f.lines > 10 && !f.binary);
+});

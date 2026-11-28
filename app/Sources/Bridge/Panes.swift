@@ -368,7 +368,7 @@ extension AppModel {
     func tabLabel(_ tab: String, of run: String) -> (icon: String, label: String) {
         switch tab {
         case "chat": return ("bubble.left", "Chat")
-        case "changes": return ("plusminus", "Changes")
+        case "changes": return sessions.first(where: { $0.id == run })?.isOrchestrator == true ? ("arrow.triangle.branch", "Source Control") : ("plusminus", "Changes")
         case "term": return ("terminal", "Terminal")
         case _ where tab.hasPrefix("task-"):
             let t = agentTask(run, String(tab.dropFirst(5)))
@@ -934,7 +934,8 @@ struct PaneContent: View {
         if run.isEmpty {
             Color.clear
         } else if tab == "changes" {
-            ChangesView(runId: run)
+            // Explorer beside Changes (a worker's worktree) or Source Control (an orchestrator's checkout).
+            WorkspacePage(runId: run)
         } else if tab == "term" {
             TerminalTab(runId: run)
         } else if tab.hasPrefix("web-"), let t = model.browserTabs[run]?.first(where: { "web-\($0.id)" == tab }) {

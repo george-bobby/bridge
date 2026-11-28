@@ -271,6 +271,8 @@ struct AttachmentChip: View {
             Group {
                 if isImage, let img = thumb.v {
                     Image(nsImage: img).resizable().scaledToFill()
+                } else if item.kind == .file {
+                    FileGlyph(name: item.name, size: 20).frame(maxWidth: .infinity, maxHeight: .infinity).background(T.hover)
                 } else {
                     Image(systemName: isImage ? "photo" : item.kind == .text ? "text.alignleft" : item.kind == .session ? "number" : "doc").font(.system(size: 13)).foregroundStyle(T.text2)
                         .frame(maxWidth: .infinity, maxHeight: .infinity).background(T.hover)

@@ -13,6 +13,7 @@ struct ChangesView: View {
     @StateObject private var diff = Box("")
     @StateObject private var message = Box("")
     @StateObject private var busy = Box("")
+    @StateObject private var collapsed = Box(Set<String>())
 
     var body: some View {
         let s = status.v
@@ -21,6 +22,7 @@ struct ChangesView: View {
                 Image(systemName: "arrow.triangle.branch").foregroundStyle(T.text3)
                 Text(s["branch"].nonEmpty ?? "—").font(T.mono(12)).foregroundStyle(T.text2)
                 if s["unpushed"].int > 0 { Chip(text: "\(s["unpushed"].int) unpushed", icon: "arrow.up", tint: T.orange) }
+                if s["behind"].int > 0 { Chip(text: "\(s["behind"].int) behind", icon: "arrow.down", tint: T.accent) }
                 Text(verbatim: "\(s["files"].array.count) changed").font(T.ui(12)).foregroundStyle(T.text3)
                 Spacer()
                 IconButton(icon: "arrow.clockwise", help: "Refresh") { load() }
@@ -53,10 +55,9 @@ struct ChangesView: View {
         let s = status.v
         return VStack(spacing: 0) {
             ScrollView {
-                LazyVStack(spacing: 0) {
-                    if s["files"].array.isEmpty { Text("Nothing uncommitted").font(T.ui(12)).foregroundStyle(T.text3).padding(14) }
-                    ForEach(s["files"].array, id: \.self) { f in fileRow(f) }
-                }
+                if s["files"].array.isEmpty { Text("Nothing uncommitted").font(T.ui(12)).foregroundStyle(T.text3).padding(14).frame(maxWidth: .infinity, alignment: .leading) }
+                ChangeList(files: s["files"].array, selected: selected.v, collapsed: collapsed) { open($0) }
+                    .padding(.vertical, 4)
             }
             Hairline()
             actions
@@ -67,23 +68,6 @@ struct ChangesView: View {
         ScrollView(.vertical) { DiffText(diff: diff.v).padding(12) }
             .defaultScrollAnchor(.topLeading)
             .background(T.bg)
-    }
-
-    func fileRow(_ f: JSON) -> some View {
-        let path = f["path"].string
-        let kind = f["kind"].string
-        return HoverRow(selected: selected.v == path, height: 30) {
-            HStack(spacing: 6) {
-                Text(kind == "added" ? "A" : kind == "deleted" ? "D" : kind == "renamed" ? "R" : "M")
-                    .font(T.mono(10.5, .bold)).foregroundStyle(kind == "added" ? T.green : kind == "deleted" ? T.red : T.yellow).frame(width: 12)
-                Text(URL(fileURLWithPath: path).lastPathComponent).font(T.ui(12.5)).foregroundStyle(T.text).lineLimit(1)
-                Text(URL(fileURLWithPath: path).deletingLastPathComponent().relativePath).font(T.ui(11)).foregroundStyle(T.text3).lineLimit(1).truncationMode(.head)
-                Spacer(minLength: 4)
-                if f["additions"].int > 0 { Text(verbatim: "+\(f["additions"].int)").font(T.mono(10.5)).foregroundStyle(T.green) }
-                if f["deletions"].int > 0 { Text(verbatim: "−\(f["deletions"].int)").font(T.mono(10.5)).foregroundStyle(T.red) }
-            }
-        }
-        .onTapGesture { open(path) }
     }
 
     var actions: some View {
@@ -154,6 +138,139 @@ struct ChangesView: View {
             }
             busy.v = ""
             load()
+        }
+    }
+}
+
+// MARK: - Changed files as a folder tree
+
+/// A folder or a changed file in the tree. Folders that hold only one folder
+/// fold into one row ("app/Sources/Bridge"), the way VS Code compacts them.
+struct ChangeNode {
+    let path: String
+    let name: String
+    var file: JSON? = nil
+    var children: [ChangeNode] = []
+    var count = 0
+
+    /// Folders first, then files, each by name.
+    static func tree(_ files: [JSON]) -> [ChangeNode] {
+        final class Dir { var dirs: [String: Dir] = [:]; var files: [JSON] = [] }
+        let root = Dir()
+        for f in files {
+            var d = root
+            for part in f["path"].string.split(separator: "/").dropLast() {
+                let k = String(part)
+                if d.dirs[k] == nil { d.dirs[k] = Dir() }
+                d = d.dirs[k]!
+            }
+            d.files.append(f)
+        }
+        func nodes(_ d: Dir, _ prefix: String) -> [ChangeNode] {
+            let folders = d.dirs.keys.sorted { $0.localizedStandardCompare($1) == .orderedAscending }.map { k -> ChangeNode in
+                var name = k, path = prefix + k, sub = d.dirs[k]!
+                while sub.files.isEmpty, sub.dirs.count == 1, let (k2, d2) = sub.dirs.first { name += "/" + k2; path += "/" + k2; sub = d2 }
+                let kids = nodes(sub, path + "/")
+                return ChangeNode(path: path, name: name, children: kids, count: kids.reduce(0) { $0 + ($1.file == nil ? $1.count : 1) })
+            }
+            let leaves = d.files.sorted { $0["path"].string.localizedStandardCompare($1["path"].string) == .orderedAscending }
+                .map { ChangeNode(path: $0["path"].string, name: URL(fileURLWithPath: $0["path"].string).lastPathComponent, file: $0) }
+            return folders + leaves
+        }
+        return nodes(root, "")
+    }
+
+    /// The visible rows, depth-first, skipping what's inside collapsed folders.
+    static func rows(_ nodes: [ChangeNode], collapsed: Set<String>) -> [(node: ChangeNode, depth: Int)] {
+        rows(nodes, isOpen: { !collapsed.contains($0) })
+    }
+
+    static func rows(_ nodes: [ChangeNode], isOpen: (String) -> Bool, depth: Int = 0) -> [(node: ChangeNode, depth: Int)] {
+        nodes.flatMap { n -> [(node: ChangeNode, depth: Int)] in
+            [(n, depth)] + (n.file == nil && isOpen(n.path) ? rows(n.children, isOpen: isOpen, depth: depth + 1) : [])
+        }
+    }
+
+    /// Only the files whose path contains `q` (lowercased), and their folders.
+    static func filter(_ nodes: [ChangeNode], _ q: String) -> [ChangeNode] {
+        nodes.compactMap { n in
+            if n.file != nil { return n.path.lowercased().contains(q) ? n : nil }
+            var d = n
+            d.children = filter(n.children, q)
+            return d.children.isEmpty ? nil : d
+        }
+    }
+}
+
+/// The Changes tree: chevrons, indent guides, file icons, +/− and the status letter.
+struct ChangeList: View {
+    let files: [JSON]
+    let selected: String
+    @ObservedObject var collapsed: Box<Set<String>>
+    let open: (String) -> Void
+
+    var body: some View {
+        let rows = ChangeNode.rows(ChangeNode.tree(files), collapsed: collapsed.v)
+        LazyVStack(spacing: 0) {
+            ForEach(rows, id: \.node.path) { r in
+                ChangeRow(node: r.node, depth: r.depth, selected: r.node.file != nil && r.node.path == selected, folded: collapsed.v.contains(r.node.path))
+                    .onTapGesture {
+                        if r.node.file != nil { open(r.node.path) } else { withAnimation(M.snappy) { collapsed.v.formSymmetricDifference([r.node.path]) } }
+                    }
+            }
+        }
+    }
+}
+
+struct ChangeRow: View {
+    let node: ChangeNode
+    let depth: Int
+    let selected: Bool
+    let folded: Bool
+    /// The Explorer's rows: no counts or stats, the name tinted by git status.
+    var plain = false
+    var tint: Color? = nil
+    @StateObject private var hover = Box(false)
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "chevron.right").font(.system(size: 8.5, weight: .bold)).foregroundStyle(T.text3)
+                .rotationEffect(.degrees(folded ? 0 : 90)).frame(width: 10)
+                .opacity(node.file == nil ? 1 : 0)
+            FileGlyph(name: node.path, folder: node.file == nil, size: 15)
+            Text(node.name).font(T.ui(12.5)).foregroundStyle(tint ?? (node.file?["kind"].string == "deleted" ? T.text3 : T.text))
+                .strikethrough(node.file?["kind"].string == "deleted", color: T.text3).lineLimit(1).truncationMode(.middle)
+            Spacer(minLength: 4)
+            if plain {
+                if let tint, node.file != nil { Circle().fill(tint).frame(width: 5, height: 5) }
+            } else if let f = node.file { stats(f) } else { Text(verbatim: "\(node.count)").font(T.ui(10.5, .medium)).foregroundStyle(T.text3) }
+        }
+        .padding(.leading, 8 + CGFloat(depth) * 14).padding(.trailing, 10)
+        .frame(height: 24)
+        .background(alignment: .leading) { guides }
+        .background(selected ? T.selected : hover.v ? T.hover : Color.clear)
+        .contentShape(Rectangle())
+        .hoverBox(hover)
+        .help(node.path)
+    }
+
+    /// VS Code's indent guides: a hairline under each ancestor's chevron.
+    var guides: some View {
+        HStack(spacing: 0) {
+            ForEach(0..<depth, id: \.self) { _ in
+                Rectangle().fill(T.line).frame(width: 1).padding(.leading, 12.5).frame(width: 14, alignment: .leading)
+            }
+        }
+        .padding(.leading, 0)
+    }
+
+    func stats(_ f: JSON) -> some View {
+        let kind = f["kind"].string
+        return HStack(spacing: 5) {
+            if f["additions"].int > 0 { Text(verbatim: "+\(f["additions"].int)").font(T.mono(10.5)).foregroundStyle(T.green) }
+            if f["deletions"].int > 0 { Text(verbatim: "−\(f["deletions"].int)").font(T.mono(10.5)).foregroundStyle(T.red) }
+            Text(kind == "added" ? "A" : kind == "deleted" ? "D" : kind == "renamed" ? "R" : "M")
+                .font(T.mono(10.5, .bold)).foregroundStyle(kind == "added" ? T.green : kind == "deleted" ? T.red : T.yellow).frame(width: 12)
         }
     }
 }
