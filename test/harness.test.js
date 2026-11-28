@@ -145,7 +145,7 @@ test("spawn → worker in its own worktree → report → relayed, main checkout
   assert.equal(mine.env.BRIDGE_GUARD, "1");
 
   const inbox = await api("GET", "/api/inbox");
-  assert.ok(inbox.todos.some((x) => x.key === `review:${t.taskId}`), "review to-do");
+  assert.ok(!inbox.todos.some((x) => x.taskId === t.taskId), "no review to-do: the chat shows the PR");
 
   // Its project's orchestrator got a relay turn about it (Default's is `orchestrator`).
   const project = (await api("GET", "/api/projects")).projects.find((p) => !p.root);
@@ -171,6 +171,40 @@ test("needs-input → decision → answer goes back to the worker → ready", as
   const run = (await api("GET", `/api/runs/${t.taskId}`)).run;
   assert.ok(run.messages.some((m) => m.role === "harness" && m.text.includes("CSV, as you recommended")));
   assert.ok(!(await api("GET", "/api/inbox")).decisions.some((x) => x.id === d.id), "decision closed");
+});
+
+test("a report's options reach the Inbox; For you items are to-dos", async () => {
+  const t = await spawnTask("needs a token", "stub:report=needs-input\nstub:you=Add FOO_TOKEN to .env\nstub:question=Which region?\\nA) EU (recommended)\\nB) US");
+  await waitFor(statusIs(t.taskId, "needs-input"), 15000, "needs-input");
+  const inbox = await api("GET", "/api/inbox");
+  const mine = inbox.decisions.filter((x) => x.taskId === t.taskId);
+  assert.deepEqual(mine.map((x) => x.kind), ["question"], "no fallback question on top of the real one");
+  assert.equal(mine[0].question, "Which region?");
+  assert.deepEqual(mine[0].options.map((o) => [o.key, o.recommended]), [["A", true], ["B", false]]);
+  const todo = inbox.todos.find((x) => x.taskId === t.taskId && x.key.startsWith("you:"));
+  assert.equal(todo && todo.text, "Add FOO_TOKEN to .env");
+});
+
+test("a rewritten report files nothing twice; what you closed stays closed", async () => {
+  const t = await spawnTask("refile", "stub:report=needs-input\nstub:question=Q-refile?\nstub:question=Q-keep?\nstub:you=Add FOO_TOKEN");
+  await waitFor(statusIs(t.taskId, "needs-input"), 15000, "needs-input");
+  await waitFor(idle(t.taskId), 5000, "idle");
+  const first = await api("GET", "/api/inbox");
+  const q = first.decisions.find((x) => x.taskId === t.taskId && x.text === "Q-refile?");
+  const keep = first.decisions.find((x) => x.taskId === t.taskId && x.text === "Q-keep?");
+  const todo = first.todos.find((x) => x.taskId === t.taskId);
+  assert.equal(cli("dismiss", q.id).code, 0);
+  assert.equal(cli("todo", "done", todo.key).code, 0);
+  const hash = meta(t.taskId).reportHash;
+  // Same asks, new report bytes (the status line changes).
+  assert.equal(cli("followup", t.taskId, "stub:report=blocked").code, 0);
+  await waitFor(() => meta(t.taskId).reportHash !== hash, 15000, "report rewritten");
+  await waitFor(idle(t.taskId), 5000, "idle");
+  const after = await api("GET", "/api/inbox");
+  assert.deepEqual(after.decisions.filter((x) => x.taskId === t.taskId).map((x) => x.id), [keep.id], "the open ask kept its id; the dismissed one stayed dismissed");
+  assert.ok(!after.todos.some((x) => x.taskId === t.taskId), "a ticked-off For you item stays ticked off");
+  const all = JSON.parse(fs.readFileSync(path.join(DATA, "tasks", "decisions.json"), "utf8"));
+  assert.equal(all.filter((x) => x.taskId === t.taskId && x.text === "Q-refile?").length, 1);
 });
 
 test("defer hides a decision until its day; duplicate to-dos are refused", async () => {
@@ -654,13 +688,13 @@ test("deleting a chat clears its to-dos and decisions", async () => {
     const i = await api("GET", "/api/inbox");
     return [...i.decisions, ...i.todos].filter((x) => x.taskId === id);
   };
-  const done = await spawnTask("delete me", "stub:report=ready-for-review");
+  const done = await spawnTask("delete me", "stub:report=ready-for-review\nstub:you=Merge it");
   const asking = await spawnTask("delete me too", "stub:report=needs-input\nstub:question=Keep it?");
   await waitFor(statusIs(done.taskId, "ready-for-review"), 15000);
   await waitFor(statusIs(asking.taskId, "needs-input"), 15000);
   await waitFor(idle(done.taskId), 5000);
   await waitFor(idle(asking.taskId), 5000);
-  assert.equal((await mine(done.taskId)).length, 1, "review to-do");
+  assert.equal((await mine(done.taskId)).length, 1, "For you to-do");
   assert.ok((await mine(asking.taskId)).length >= 1, "open decision");
 
   assert.equal((await api("DELETE", `/api/runs/${done.taskId}`)).ok, true);
@@ -680,10 +714,10 @@ test("archiving a chat clears its Inbox items and hides it; unarchiving brings i
     return [...i.decisions, ...i.todos].filter((x) => x.taskId === id);
   };
   const summary = async (id) => (await api("GET", "/api/runs")).runs.find((r) => r.runId === id);
-  const t = await spawnTask("archive me", "stub:report=ready-for-review");
+  const t = await spawnTask("archive me", "stub:report=ready-for-review\nstub:you=Merge it");
   await waitFor(statusIs(t.taskId, "ready-for-review"), 15000);
   await waitFor(idle(t.taskId), 5000);
-  assert.equal((await mine(t.taskId)).length, 1, "review to-do");
+  assert.equal((await mine(t.taskId)).length, 1, "For you to-do");
 
   assert.equal((await api("POST", `/api/runs/${t.taskId}/archive`, {})).archived, true);
   assert.deepEqual(await mine(t.taskId), []);

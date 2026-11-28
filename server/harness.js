@@ -109,21 +109,25 @@ function outcome(taskId, name, info = {}) {
   tasks.writeMeta(taskId, { status, lastOutcome: name, lastOutcomeAt: now() });
   tasks.appendEvent({ taskId, name, status, text });
 
-  // The Inbox. A new report supersedes everything the old one was waiting on.
+  // The Inbox. One ask is one item: a rewritten report keeps what it still
+  // asks (answered or dismissed ones stay closed) and drops what it no longer does.
   const created = [];
   if (name === "report" && parsed) {
-    tasks.closeTaskDecisions(taskId, ["question", "action", "resume"]);
-    for (const q of parsed.questions) created.push(tasks.addDecision({ taskId, kind: "question", text: q }).decision);
-    for (const a of parsed.actions) created.push(tasks.addDecision({ taskId, kind: "action", text: a }).decision);
-    if ((status === "needs-input" || status === "blocked") && !parsed.questions.length) {
-      created.push(tasks.addDecision({ taskId, kind: "question", text: `${status}: ${parsed.tldr || "see the report"}` }).decision);
+    const mine = new Set(parsed.yours.map(tasks.askText));
+    const asks = [...parsed.questions.map((t) => ["question", t]), ...parsed.actions.map((t) => ["action", t])].filter(([, t]) => !mine.has(tasks.askText(t)));
+    if ((status === "needs-input" || status === "blocked") && !asks.length && !parsed.yours.length) asks.push(["question", `${status}: ${parsed.tldr || "see the report"}`]);
+    const still = new Set(asks.map(([k, t]) => `${k}:${tasks.askText(t)}`));
+    tasks.closeTaskDecisions(taskId, ["question", "action", "resume"], "superseded", (d) => still.has(`${d.kind}:${tasks.askText(d.text)}`));
+    for (const [kind, t] of asks) {
+      const r = tasks.addDecision({ taskId, kind, text: t, fromReport: true });
+      if (!r.duplicate) created.push(r.decision);
     }
-    if (status === "ready-for-review" || status === "pushed-follow-up") {
-      // Workers write `pr: none` too; only a URL is a PR.
-      const pr = [parsed.fields.pr, (tasks.readMeta(taskId) || {}).prUrl].find((u) => /^https?:\/\//.test(u || "")) || "";
-      tasks.addTodo({ key: `review:${taskId}`, text: `Review ${pr ? "the PR for" : ""} ${title}`.replace(/\s+/g, " ").trim(), taskId, url: pr });
-      if (pr) tasks.writeMeta(taskId, { prUrl: pr });
-    }
+    // "For you": things only the user can do, as to-dos. Ticked off stays ticked off.
+    const yours = parsed.yours.map((y) => ({ key: `you:${taskId}:${tasks.hash(tasks.askText(y)).slice(0, 8)}`, text: y }));
+    tasks.closeTaskTodos(taskId, `you:${taskId}:`, new Set(yours.map((y) => y.key)));
+    for (const y of yours) tasks.addTodo({ ...y, taskId, once: true });
+    // Workers write `pr: none` too; only a URL is a PR. The chat shows it; no review to-do.
+    if (/^https?:\/\//.test(parsed.fields.pr || "")) tasks.writeMeta(taskId, { prUrl: parsed.fields.pr });
   } else if (NEEDS_YOU.has(name)) {
     tasks.closeTaskDecisions(taskId, ["resume"]);
     created.push(tasks.addDecision({ taskId, kind: "resume", text: `${name}: ${text}` }).decision);
@@ -138,7 +142,7 @@ function outcome(taskId, name, info = {}) {
     bus.broadcast("message", { runId: taskId, message: msg });
   }
 
-  const needsYou = NEEDS_YOU.has(name) || NEEDS_YOU.has(status) || (parsed && parsed.actions.length > 0);
+  const needsYou = NEEDS_YOU.has(name) || NEEDS_YOU.has(status) || (parsed && (parsed.actions.length > 0 || parsed.yours.length > 0));
   bus.broadcast("outcome", { taskId, name, status, text, title, needsYou });
   bus.broadcast("inbox", inbox());
   bus.broadcast("runs", { runs: store.listRunSummaries() });
@@ -184,6 +188,7 @@ function relayText(taskId, name, { status, text, title, parsed, decisions }) {
     if (/^https?:\/\//.test(parsed.fields.pr || "")) lines.push(`PR: ${parsed.fields.pr}`);
     if (parsed.questions.length) lines.push(`open questions: ${parsed.questions.length}`);
     if (parsed.actions.length) lines.push(`action requests: ${parsed.actions.length}`);
+    if (parsed.yours.length) lines.push(`for ${USER} to do: ${parsed.yours.length} (in To-dos)`);
   }
   if (decisions && decisions.length) lines.push(`Inbox: ${decisions.map((d) => `${d.id} (${d.kind})`).join(", ")}`);
   lines.push(`Report: ${tasks.paths(taskId).report}`);
@@ -730,7 +735,7 @@ function inbox() {
     if (!titles.has(id)) titles.set(id, titleOf(id));
     return titles.get(id);
   };
-  const decisions = tasks.openDecisions().map((d) => ({ ...d, title: t(d.taskId) }));
+  const decisions = tasks.openDecisions().map((d) => ({ ...d, ...tasks.parseAsk(d.text), title: t(d.taskId) }));
   const todos = tasks.todos().filter((x) => !x.done).map((x) => ({ ...x, title: x.taskId ? t(x.taskId) : "" }));
   // Required here, not at the top: watch.js starts pipelines through this module.
   const slack = require("./watch").open();
@@ -785,6 +790,7 @@ function brief({ since = "8h", orchestrator = "" } = {}) {
  */
 function recover() {
   ensureOrchestrator();
+  tasks.closeTodos("review:"); // "Review the PR" to-dos are no longer made; clear what's left
   for (const m of tasks.list()) {
     if (GONE.has(m.status) || m.archived) continue;
     const r = tasks.readReport(m.id);

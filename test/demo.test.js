@@ -65,7 +65,8 @@ test("demo sessions cover the board, and the pending question survives boot", as
   assert.ok(runs.some((r) => r.kind === "task" && r.task && r.task.status === "ready-for-review"));
   assert.ok(runs.some((r) => r.action === "skipped"));
   const inbox = await get("/api/inbox");
-  assert.strictEqual(inbox.counts.decisions, 1);
+  assert.strictEqual(inbox.counts.decisions, 3);
+  assert.deepEqual(inbox.decisions.find((d) => d.id === "d-demo1").options.map((o) => o.key), ["A", "B", "C"]);
 });
 
 const post = (p, body) => fetch(URL_ + p, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) }).then(async (r) => ({ status: r.status, ...(await r.json()) }));

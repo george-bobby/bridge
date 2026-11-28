@@ -5,7 +5,8 @@
  * `stub:` directives, so every watcher outcome can be forced for free:
  *
  *   stub:report=<status>      write report.md with that status, then end the turn
- *   stub:question=<text>      (with report) add an open question
+ *   stub:question=<text>      (with report) add an open question ("\n" for its next line)
+ *   stub:you=<text>           (with report) add a "For you" item
  *   stub:action=<text>        (with report) add an action request
  *   stub:noreport             end the turn without a report
  *   stub:report-on-nudge      write a ready-for-review report when nudged
@@ -80,8 +81,10 @@ function briefText(prompt) {
 }
 
 function writeReport(status, d = {}) {
-  const q = [].concat(d.question || []).filter((x) => x !== true);
+  // A literal "\n" in a question starts its next line (context, options).
+  const q = [].concat(d.question || []).filter((x) => x !== true).map((x) => x.replace(/\\n/g, "\n  "));
   const a = [].concat(d.action || []).filter((x) => x !== true);
+  const y = [].concat(d.you || []).filter((x) => x !== true);
   const text = `---
 status: ${status}
 branch: stub-branch
@@ -103,6 +106,9 @@ ${q.length ? q.map((x) => `- ${x}`).join("\n") : "None"}
 
 ## Action requests
 ${a.length ? a.map((x) => `- ${x}`).join("\n") : "None"}
+
+## For you
+${y.length ? y.map((x) => `- ${x}`).join("\n") : "None"}
 
 ## Proposed commit/PR text
 stub
