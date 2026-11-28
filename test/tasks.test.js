@@ -2,6 +2,16 @@ const test = require("node:test");
 const assert = require("node:assert");
 const { parseReport } = require("../server/tasks");
 
+test("a report's pr field is just its URL, whatever follows it", () => {
+  const { firstUrl } = require("../server/tasks");
+  const pr = (v) => parseReport(`---\nstatus: ready-for-review\npr: ${v}\n---\n## TL;DR\nx\n`).fields.pr;
+  assert.equal(pr("https://github.com/o/r/pull/58 (merged)"), "https://github.com/o/r/pull/58");
+  assert.equal(pr("<https://github.com/o/r/pull/7>."), "https://github.com/o/r/pull/7");
+  assert.equal(pr("https://github.com/o/r/pull/9"), "https://github.com/o/r/pull/9");
+  assert.equal(pr("none yet"), "none yet");
+  assert.equal(firstUrl(""), "");
+});
+
 test("parseReport reads the contract and is lenient about the rest", () => {
   const r = parseReport(`---
 status: needs-input

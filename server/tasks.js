@@ -157,6 +157,12 @@ function readReport(id) {
  * Lenient on purpose: a report a worker got slightly wrong is still a report,
  * and the watcher would rather relay it with `status: unknown` than drop it.
  */
+/** The first http(s) URL in a value: `pr: <url> (merged)` is still just the URL. */
+function firstUrl(v) {
+  const m = /https?:\/\/[^\s<>"'`)\]]+/.exec(String(v || ""));
+  return m ? m[0].replace(/[.,;:]+$/, "") : "";
+}
+
 function parseReport(text) {
   const src = String(text || "");
   const fields = {};
@@ -168,6 +174,8 @@ function parseReport(text) {
       const m = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(line.trim());
       if (m) fields[m[1].toLowerCase()] = m[2].replace(/^["']|["']$/g, "").trim();
     }
+    // A note after the link ("(merged)") would make the app open a wrong page and miss the PR's state.
+    if (fields.pr) fields.pr = firstUrl(fields.pr) || fields.pr;
   }
   const sections = {};
   let cur = "_lead";
@@ -670,6 +678,7 @@ function titleFrom(text) {
 const shownTitle = (title, brief) => (fileLine(String(title || "").trim()) && brief ? titleFrom(brief) : title || "");
 
 module.exports = {
+  firstUrl,
   titleFrom,
   shownTitle,
   DIR,
