@@ -267,6 +267,29 @@ async function loadPorts() {
   return { servers, at: Date.now() };
 }
 
+const alive = (pid) => {
+  try { process.kill(pid, 0); return true; } catch (e) { return e.code === "EPERM"; }
+};
+
+/** Stop one dev server from the app: only a pid in `listed` (the fresh
+ *  listing), never Bridge itself. SIGTERM, then SIGKILL if it outlives `graceMs`. */
+async function stopListed(pid, listed, graceMs = 4000) {
+  if (!Number.isInteger(pid) || pid <= 1 || pid === process.pid || pid === process.ppid) return { ok: false, status: 403, error: "That process isn't a dev server Bridge can stop." };
+  if (!listed.some((s) => s.pid === pid)) return { ok: false, status: 404, error: "No dev server with that pid is listening in your folders." };
+  try { process.kill(pid, "SIGTERM"); } catch (e) { if (e.code !== "ESRCH") return { ok: false, status: 500, error: String(e.message || e) }; }
+  const end = Date.now() + graceMs;
+  while (alive(pid) && Date.now() < end) await new Promise((r) => setTimeout(r, 100));
+  if (!alive(pid)) return { ok: true, signal: "SIGTERM" };
+  try { process.kill(pid, "SIGKILL"); } catch {}
+  return { ok: true, signal: "SIGKILL" };
+}
+
+async function stopServer(pid) {
+  const out = await stopListed(pid, (await loadPorts()).servers);
+  cache.delete("ports");
+  return out;
+}
+
 
 /* ---------------------------------- Vercel, incident.io, Granola, Datadog */
 
@@ -480,9 +503,11 @@ async function loadDatadog() {
 const demo = env.demo ? require("./demo") : null;
 
 module.exports = demo
-  ? { pulls: async () => demo.pulls(), linear: async () => demo.linear(), ports: async () => demo.ports(), vercel: async () => demo.vercel(), incidents: async () => demo.incidents(), granola: async () => demo.granola(), datadog: async () => demo.datadog(), granolaNote }
+  ? { pulls: async () => demo.pulls(), linear: async () => demo.linear(), ports: async () => demo.ports(), vercel: async () => demo.vercel(), incidents: async () => demo.incidents(), granola: async () => demo.granola(), datadog: async () => demo.datadog(), granolaNote, stopServer: async (pid) => demo.stopServer(pid), stopListed }
   : {
   ports: () => cached("ports", loadPorts, { refresh: true }),
+  stopServer,
+  stopListed,
   pulls: (o) => cached("pulls", loadPulls, o),
   linear: (o) => cached("linear", loadLinear, o),
   vercel: (o) => cached("vercel", loadVercel, o),

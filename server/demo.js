@@ -182,14 +182,22 @@ function linear() {
   };
 }
 
+// Fixture pids: stopping one only drops it from the list, never signals a real process.
+const stoppedPids = new Set();
 function ports() {
   return {
     servers: [
       { pid: 41210, command: "node", cwd: `${WT}/alex-web-124-apple-pay/web`, ports: [3000] },
       { pid: 41388, command: "python3.12", cwd: `${WT}/alex-web-131-rate-limit-search/api`, ports: [8000] },
-    ],
+    ].filter((s) => !stoppedPids.has(s.pid)),
     at: Date.now(),
   };
+}
+
+function stopServer(pid) {
+  if (!ports().servers.some((s) => s.pid === pid)) return { ok: false, status: 404, error: "No dev server with that pid is listening in your folders." };
+  stoppedPids.add(pid);
+  return { ok: true, signal: "SIGTERM" };
 }
 
 /* ------------------------------------------------------------ sessions */
@@ -900,4 +908,4 @@ function plugins() {
   };
 }
 
-module.exports = { seed, writeSessions, seedSkills, plugins, pulls, linear, ports, slack, usage, agents, prActivity, mcp, git, history, vercel, incidents, granola, granolaNote, datadog };
+module.exports = { seed, writeSessions, seedSkills, plugins, pulls, linear, ports, stopServer, slack, usage, agents, prActivity, mcp, git, history, vercel, incidents, granola, granolaNote, datadog };
