@@ -7,7 +7,7 @@ import SwiftUI
 // save bar. Secrets are write-only: the server only says whether one is set.
 
 enum SettingsPane: String, CaseIterable, Identifiable {
-    case general, agents, rules, pipeline, mcp, plugins, tokens, integrations, notifications, advanced
+    case general, agents, rules, pipeline, mcp, plugins, tokens, integrations, projects, notifications, advanced
     var id: String { rawValue }
     var label: String {
         switch self {
@@ -19,6 +19,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .plugins: return "Plugins"
         case .tokens: return "Tokens"
         case .integrations: return "Integrations"
+        case .projects: return "Projects"
         case .notifications: return "Notifications"
         case .advanced: return "Advanced"
         }
@@ -33,6 +34,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .plugins: return "puzzlepiece.extension"
         case .tokens: return "flame"
         case .integrations: return "square.stack.3d.up"
+        case .projects: return "folder"
         case .notifications: return "bell"
         case .advanced: return "slider.horizontal.3"
         }
@@ -47,6 +49,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .plugins: return "Plugins for every agent on this Mac, by agent. Changes go through each agent's own CLI."
         case .tokens: return "What the agents on this Mac spent, from CodeBurn, and the token savers you can switch on for them."
         case .integrations: return "Connect your tools. Bridge works out who you are and which repo from each connection; nothing else to type. Keys are stored in .env and never shown again."
+        case .projects: return "Default and your repositories, each with its own orchestrator, and what workers in each may do on their own."
         case .notifications: return "When Bridge interrupts you, on this Mac."
         case .advanced: return "Every key set in your .env. Values stay hidden until you reveal them; secrets can only be replaced."
         }
@@ -127,7 +130,8 @@ struct SettingEntry {
         .init(pane: .agents, title: "Opening skill", words: "opening skill worker skill fetch new session", query: "opening skill"),
         .init(pane: .agents, title: "Stalled after", words: "stalled silence minutes stall", query: "stalled"),
         .init(pane: .agents, title: "Auto-archive merged chats", words: "auto archive merged days pr", query: "auto archive"),
-        .init(pane: .agents, title: "Automation", words: "automation auto merge review resolve rebase decide workers project github account linear team", query: "automation"),
+        .init(pane: .projects, title: "Projects", words: "project projects repository default add orchestrator", query: ""),
+        .init(pane: .projects, title: "Automation", words: "automation auto merge review resolve rebase decide workers project github account linear team", query: "automation"),
         .init(pane: .rules, title: "Common rules", words: "common rules house rules instructions prompt worktree rebase branch pr markdown edit", query: "common rules"),
         .init(pane: .mcp, title: "MCP servers", words: "mcp server tools customize", query: ""),
         .init(pane: .plugins, title: "Plugins", words: "plugins plugin claude code codex cursor devin marketplace install remove", query: ""),
@@ -252,6 +256,7 @@ struct SettingsView: View {
         case .plugins: PluginsSettings(q: q)
         case .tokens: TokensSettings(q: q)
         case .integrations: IntegrationSettings(env: env, q: q)
+        case .projects: ProjectSettings(q: q)
         case .notifications: NotificationSettings(q: q)
         case .advanced: AdvancedSettings(env: env, q: q)
         }
@@ -737,7 +742,6 @@ struct AgentSettings: View {
             DefaultsSettings(q: q)
             FailoverSettings(q: q)
             WorkerSettings(q: q)
-            ProjectAutomation(q: q)
         }
     }
 
@@ -1216,6 +1220,34 @@ struct SlackWatchSettings: View {
     func name(_ id: String) -> String { channels.v["channels"].array.first { $0["id"].string == id }?["name"].string ?? id }
 
     func save(_ patch: [String: Any]) { Task { await model.saveConfig(["harness": patch]) } }
+}
+
+// MARK: - Projects
+
+/// One row per project (its ⋯ is the sidebar's `ProjectMenu`), then each
+/// project's own settings below the list.
+struct ProjectSettings: View {
+    @Environment(AppModel.self) var model
+    let q: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SSection(title: "Projects", detail: "Default holds sessions outside any repo") {
+                ForEach(model.projects.filter { Prefs.hit(q, $0.name, $0.path, "project projects repository default orchestrator") }) { p in
+                    SRow(title: p.name, detail: p.path, icon: AnyView(ProjectBadge(project: p, size: 24))) {
+                        HStack(spacing: 6) {
+                            Button("Orchestrator") { model.openOrchestrator(p.id) }.buttonStyle(LButton(small: true))
+                            MoreMenu(size: B.small) { ProjectMenu(project: p) }
+                        }
+                    }
+                }
+            } trailing: {
+                if q.isEmpty { Button { model.addProject() } label: { Label("Add project", systemImage: "plus") }.buttonStyle(LButton(small: true)) }
+            }
+            // Per-project settings: pick the project in the section's header.
+            ProjectAutomation(q: q)
+        }
+    }
 }
 
 // MARK: - Notifications

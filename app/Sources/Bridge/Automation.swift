@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Settings › Agents › Automation: how far workers go on their own in one
+/// Settings › Projects › Automation: how far workers go on their own in one
 /// project (`auto` on /api/projects). The server renders the enabled ones into
 /// each worker's prompt; auto-merge also relaxes the guard's merge gate.
 struct ProjectAutomation: View {
