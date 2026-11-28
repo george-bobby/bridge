@@ -371,6 +371,9 @@ final class AppModel {
     var pinnedCollapsed = UserDefaults.standard.bool(forKey: "pin.collapsed") {
         didSet { UserDefaults.standard.set(pinnedCollapsed, forKey: "pin.collapsed") }
     }
+    /// The pinned orchestrator's properties: a drawer under its chat, and folded to its strip.
+    var pinnedDetails = false
+    var pinnedDrawerFolded = false
     /// A session or tab is being dragged: panes show their drop zones.
     var paneDragActive = false
     /// The pane and edge a drag would land on, for the highlight.
