@@ -705,6 +705,14 @@ async function handle(req, res) {
       return sendJson(res, 502, { ok: false, error: String(e.message || e) });
     }
   }
+  const mapp = req.method === "GET" && p.match(/^\/api\/sources\/modal\/(ap-[A-Za-z0-9]+)$/);
+  if (mapp) {
+    try {
+      return sendJson(res, 200, { ok: true, app: await sources.modalApp(mapp[1], url.searchParams.get("env") || "") });
+    } catch (e) {
+      return sendJson(res, 502, { ok: false, error: String(e.message || e) });
+    }
+  }
   // Stop a listed dev server. The app's own action: deliberately not in policy.js
   // BRIDGE_WRITES, so a session can't call it.
   const stop = req.method === "POST" && p.match(/^\/api\/servers\/(\d+)\/stop$/);
@@ -712,7 +720,7 @@ async function handle(req, res) {
     const r = await sources.stopServer(Number(stop[1]));
     return sendJson(res, r.ok ? 200 : r.status || 500, r.ok ? { ok: true, signal: r.signal } : { ok: false, error: r.error });
   }
-  const src = req.method === "GET" && p.match(/^\/api\/sources\/(pulls|linear|ports|vercel|incidents|granola|datadog|models)$/);
+  const src = req.method === "GET" && p.match(/^\/api\/sources\/(pulls|linear|ports|vercel|incidents|granola|datadog|modal)$/);
   if (src) {
     try {
       const data = await sources[src[1]]({ refresh: url.searchParams.get("refresh") === "1" });

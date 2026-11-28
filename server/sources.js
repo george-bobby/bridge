@@ -17,9 +17,9 @@ const ROOT = path.join(__dirname, "..");
 const TTL = 60_000;
 const cache = new Map();
 
-function cached(key, load, { refresh = false } = {}) {
+function cached(key, load, { refresh = false, ttl = TTL } = {}) {
   const c = cache.get(key) || {};
-  if (!refresh && c.data && Date.now() - c.at < TTL) return Promise.resolve(c.data);
+  if (!refresh && c.data && Date.now() - c.at < ttl) return Promise.resolve(c.data);
   if (c.inflight) return c.inflight;
   const inflight = load()
     .then((data) => {
@@ -515,96 +515,207 @@ async function loadDatadog() {
   return { configured: true, site: app.replace(/^https:\/\//, ""), monitors, issues, errors, at: Date.now() };
 }
 
-/* ------------------------------------------------- model providers */
+/* ------------------------------------------------------------------ Modal */
 
-// OpenRouter: the whole catalog with context and per-token prices, plus the
-// key's spend and credits. Anthropic: the models an API key can call, with
-// their context window and output cap (its API lists no prices).
+// Modal has no public REST API (its clients speak gRPC), so the feed runs the
+// official `modal` CLI with --json. Auth: MODAL_TOKEN_ID + MODAL_TOKEN_SECRET
+// from .env when set, else the CLI's own ~/.modal.toml profile.
 
-const perMillion = (x) => {
-  const n = Number(x);
-  return Number.isFinite(n) && n >= 0 ? Math.round(n * 1e6 * 1000) / 1000 : null;
+const modalBin = () => process.env.BRIDGE_MODAL || "modal"; // the tests' fake
+const modalAuth = () => (env.modalTokenId && env.modalTokenSecret ? { MODAL_TOKEN_ID: env.modalTokenId, MODAL_TOKEN_SECRET: env.modalTokenSecret } : {});
+const modalProfile = () => {
+  try {
+    return require("fs").statSync(path.join(require("os").homedir(), ".modal.toml")).isFile();
+  } catch {
+    return false;
+  }
 };
+const modalConfigured = () => !!(env.modalTokenId && env.modalTokenSecret) || modalProfile();
+const modalUrl = (id) => `https://modal.com/id/${id}`; // Modal's own redirect for any object id
 
-async function openrouter(key) {
-  const auth = { Authorization: `Bearer ${key}` };
-  const base = "https://openrouter.ai/api/v1";
-  const [k, credits, list] = await Promise.all([
-    getJson(`${base}/key`, auth, "OpenRouter"),
-    getJson(`${base}/credits`, auth, "OpenRouter").catch(() => null), // some keys can't read credits
-    getJson(`${base}/models`, auth, "OpenRouter"),
+function modal(args, { json = true, timeout = 60_000 } = {}) {
+  return new Promise((resolve, reject) => {
+    execFile(
+      modalBin(),
+      json ? [...args, "--json"] : args,
+      { maxBuffer: 40e6, timeout, env: { ...process.env, ...modalAuth(), NO_COLOR: "1", TERM: "dumb", PATH: `${env.extraPath}:${process.env.PATH || "/usr/bin:/bin"}` } },
+      (err, stdout, stderr) => {
+        if (err && err.code === "ENOENT") return reject(new Error("The modal CLI isn't installed: `uv tool install modal` (or pip install modal)"));
+        if (err) {
+          // Its errors come in a box: keep the words.
+          const line = String(stderr || err.message).split("\n").map((l) => l.replace(/[│╭╮╰╯─]/g, "").replace(/^\s*Error\s*$/, "").trim()).filter(Boolean)[0];
+          return reject(new Error(line || "modal failed"));
+        }
+        if (!json) return resolve(String(stdout));
+        try {
+          resolve(JSON.parse(stdout));
+        } catch {
+          reject(new Error(`modal ${args.slice(0, 2).join(" ")}: not JSON`));
+        }
+      },
+    );
+  });
+}
+
+const modalTime = (s) => (s ? Date.parse(String(s).replace(" ", "T")) || 0 : 0);
+const money = (x) => {
+  const n = Number(x);
+  return Number.isFinite(n) ? Math.round(n * 100) / 100 : null;
+};
+const BASE_RESOURCES = new Set(["CPU", "Memory", "Network Egress"]);
+
+/**
+ * Apps per environment (with running containers and today's cost), live
+ * containers, this month's bill and today's GPU spend by type. Read-only;
+ * billing needs a workspace manager, so it reports its own error.
+ */
+async function loadModal() {
+  if (!modalConfigured()) return { configured: false, apps: [], containers: [], at: Date.now() };
+  const errors = {};
+  const [who, envs] = await Promise.all([
+    modal(["token", "info"], { json: false }).catch(() => ""),
+    modal(["environment", "list"]),
   ]);
-  const d = k.data || {};
-  const c = (credits && credits.data) || null;
-  const models = (list.data || [])
-    .map((m) => ({
-      id: m.id,
-      name: m.name || m.id,
-      context: m.context_length || (m.top_provider && m.top_provider.context_length) || 0,
-      maxOutput: (m.top_provider && m.top_provider.max_completion_tokens) || 0,
-      input: perMillion(m.pricing && m.pricing.prompt),
-      output: perMillion(m.pricing && m.pricing.completion),
-      modality: (m.architecture && m.architecture.modality) || "",
-      created: (m.created || 0) * 1000,
-      url: `https://openrouter.ai/${m.id}`,
-    }))
-    .sort((a, b) => b.created - a.created);
+  const field = (k) => ((who.match(new RegExp(`^${k}:\\s*(\\S+)`, "m")) || [])[1] || "");
+  const environments = (Array.isArray(envs) ? envs : []).map((e) => e.name).filter(Boolean).slice(0, 10);
+  const billing = (args, what) => modal(["billing", ...args]).catch((e) => ((errors[what] = String(e.message || e)), null));
+  const [perEnv, month, today] = await Promise.all([
+    Promise.all(
+      environments.map((name) =>
+        Promise.all([
+          modal(["app", "list", "-e", name]),
+          modal(["container", "list", "-e", name]).catch((e) => ((errors.containers = String(e.message || e)), [])),
+        ]).then(([apps, containers]) => ({ name, apps, containers })),
+      ),
+    ),
+    billing(["summary", "--for", "this month"], "billing"),
+    billing(["report", "--for", "today", "--show-resources"], "today"),
+  ]);
+
+  // Today's cost per app, split by resource; GPU types are any resource that
+  // isn't CPU, memory or egress.
+  const costs = new Map();
+  const gpus = new Map();
+  for (const r of Array.isArray(today) ? today : []) {
+    const c = costs.get(r.object_id) || { total: 0, resources: {} };
+    const n = Number(r.cost) || 0;
+    c.total += n;
+    c.resources[r.resource] = (c.resources[r.resource] || 0) + n;
+    costs.set(r.object_id, c);
+    if (r.resource && !BASE_RESOURCES.has(r.resource)) gpus.set(r.resource, (gpus.get(r.resource) || 0) + n);
+  }
+
+  const apps = [];
+  const containers = [];
+  for (const e of perEnv) {
+    for (const a of e.apps || []) {
+      const c = costs.get(a.app_id);
+      apps.push({
+        id: a.app_id,
+        name: a.description || a.app_id,
+        env: e.name,
+        state: a.state || "",
+        tasks: Number(a.tasks) || 0,
+        createdAt: modalTime(a.created_at),
+        stoppedAt: modalTime(a.stopped_at),
+        costToday: c ? money(c.total) : null,
+        gpus: c ? Object.keys(c.resources).filter((k) => !BASE_RESOURCES.has(k)) : [],
+        url: modalUrl(a.app_id),
+      });
+    }
+    for (const c of e.containers || []) {
+      containers.push({ id: c.container_id, appId: c.app_id, app: c.app_name || "", env: e.name, startedAt: modalTime(c.start_time), url: modalUrl(c.container_id) });
+    }
+  }
+  apps.sort((a, b) => b.tasks - a.tasks || (b.costToday || 0) - (a.costToday || 0) || b.createdAt - a.createdAt);
+  containers.sort((a, b) => b.startedAt - a.startedAt);
+  const workspace = field("Workspace");
+  const adj = (month && month.adjustments) || {};
   return {
-    id: "openrouter",
-    name: "OpenRouter",
-    account: {
-      label: d.label || "",
-      spent: d.usage ?? null,
-      spentDay: d.usage_daily ?? null,
-      spentWeek: d.usage_weekly ?? null,
-      spentMonth: d.usage_monthly ?? null,
-      limit: d.limit ?? null,
-      remaining: d.limit_remaining ?? null,
-      balance: c ? Math.round((Number(c.total_credits || 0) - Number(c.total_usage || 0)) * 100) / 100 : null,
-      freeTier: !!d.is_free_tier,
-    },
-    models,
+    configured: true,
+    workspace,
+    user: field("User"),
+    environments,
+    apps,
+    containers,
+    spend: month
+      ? {
+          metered: money(month.metered_cost),
+          billed: money(month.billed_cost),
+          credits: money(-(Number(adj.credits) || 0)),
+          plan: money(adj.plan_cost),
+          breakdown: Object.fromEntries(Object.entries(month.metered_cost_breakdown || {}).map(([k, v]) => [k, money(v)])),
+          today: today ? money([...costs.values()].reduce((s, c) => s + c.total, 0)) : null,
+        }
+      : null,
+    gpus: [...gpus].map(([type, cost]) => ({ type, cost: money(cost) })).sort((a, b) => b.cost - a.cost),
+    errors,
+    dashboard: workspace ? `https://modal.com/apps/${workspace}` : "https://modal.com/apps",
+    usage: workspace ? `https://modal.com/settings/${workspace}/usage` : "https://modal.com/settings",
+    at: Date.now(),
   };
 }
 
-async function anthropic(key) {
-  const list = await getJson("https://api.anthropic.com/v1/models?limit=1000", { "x-api-key": key, "anthropic-version": "2023-06-01" }, "Anthropic");
-  const caps = (c) => (c && typeof c === "object" ? Object.entries(c).filter(([, v]) => v === true || (v && v.supported === true)).map(([k]) => k) : []);
-  return {
-    id: "anthropic",
-    name: "Anthropic",
-    account: null,
-    models: (list.data || []).map((m) => ({
-      id: m.id,
-      name: m.display_name || m.id,
-      context: m.max_input_tokens || 0,
-      maxOutput: m.max_tokens || 0,
-      input: null,
-      output: null,
-      capabilities: caps(m.capabilities),
-      created: Date.parse(m.created_at || "") || 0,
-      url: "https://docs.claude.com/en/docs/about-claude/models",
-    })),
-  };
-}
-
-/** Every provider with a key; each reports its own error. */
-async function loadModels() {
-  const want = [
-    ["openrouter", "OpenRouter", env.openrouterKey, openrouter],
-    ["anthropic", "Anthropic", env.anthropicKey, anthropic],
-  ].filter(([, , key]) => key);
-  if (!want.length) return { configured: false, providers: [], at: Date.now() };
-  const providers = await Promise.all(
-    want.map(([id, name, key, load]) => load(key).catch((e) => ({ id, name, account: null, models: [], error: String(e.message || e) }))),
-  );
-  return { configured: true, providers, at: Date.now() };
+/** One app: who deployed it and when, its functions (web URL, schedule, GPU)
+ *  with the last hour's calls and failures, and its recent deploys. */
+async function modalApp(id, envName) {
+  if (env.demo) return require("./demo").modalApp(id);
+  if (!modalConfigured()) throw new Error("Modal isn't connected");
+  if (!/^ap-[A-Za-z0-9]+$/.test(String(id))) throw new Error("bad app id");
+  const e = /^[A-Za-z0-9_.-]{1,64}$/.test(String(envName || "")) ? ["-e", envName] : [];
+  for (const [k, v] of cache) if (k.startsWith("modal:") && !v.inflight && !(v.data && Date.now() - v.at < TTL)) cache.delete(k);
+  return cached(`modal:${id}`, async () => {
+    const [info, history] = await Promise.all([modal(["app", "info", id, ...e]), modal(["app", "history", id, ...e]).catch(() => [])]);
+    const fns = Object.entries(info.functions || {}).slice(0, 16);
+    const functions = await Promise.all(
+      fns.map(async ([name, f]) => {
+        const [fi, st] = await Promise.all([modal(["function", "info", f.id]).catch(() => null), modal(["function", "stats", f.id]).catch(() => null)]);
+        const sum = f.summary || {};
+        const sch = sum.schedule || (fi && fi.schedule) || null;
+        const cron = sch && sch.cron ? sch.cron.cron_string : "";
+        const period = sch && sch.period ? Object.entries(sch.period).map(([k, v]) => `every ${v} ${k}`).join(" ") : "";
+        return {
+          name,
+          id: f.id,
+          web: !!sum.web_function || !!(fi && fi.web_info),
+          webUrl: (fi && fi.web_info && fi.web_info.web_url) || "",
+          schedule: cron || period,
+          gpus: ((fi && fi.gpus) || []).map((g) => (typeof g === "string" ? g : [g.count > 1 ? `${g.count}×` : "", g.type || g.gpu_type || ""].join(""))).filter(Boolean),
+          stats: st
+            ? {
+                ok: st.input_success_count || 0,
+                failed: st.input_failure_count || 0,
+                timedOut: st.input_timeout_count || 0,
+                running: st.input_running_at_end_count || 0,
+                containerErrors: st.container_error_count || 0,
+              }
+            : null,
+          url: modalUrl(f.id),
+        };
+      }),
+    );
+    const l = info.lifecycle || {};
+    return {
+      id,
+      name: info.description || id,
+      state: l.state || "",
+      version: l.version || 0,
+      createdBy: l.created_by || "",
+      deployedAt: modalTime(l.deployed_at),
+      deployedBy: l.deployed_by || "",
+      stoppedAt: modalTime(l.stopped_at),
+      stoppedBy: l.stopped_by || "",
+      functions,
+      history: (Array.isArray(history) ? history : []).slice(0, 8).map((h) => ({ version: h.version || "", at: modalTime(h.time_deployed), by: h.deployed_by || "", commit: h.commit || "" })),
+      url: modalUrl(id),
+    };
+  });
 }
 
 const demo = env.demo ? require("./demo") : null;
 
 module.exports = demo
-  ? { pulls: async () => demo.pulls(), linear: async () => demo.linear(), ports: async () => demo.ports(), vercel: async () => demo.vercel(), incidents: async () => demo.incidents(), granola: async () => demo.granola(), datadog: async () => demo.datadog(), models: async () => demo.models(), granolaNote, stopServer: async (pid) => demo.stopServer(pid), stopListed }
+  ? { pulls: async () => demo.pulls(), linear: async () => demo.linear(), ports: async () => demo.ports(), vercel: async () => demo.vercel(), incidents: async () => demo.incidents(), granola: async () => demo.granola(), datadog: async () => demo.datadog(), modal: async () => demo.modal(), granolaNote, modalApp, stopServer: async (pid) => demo.stopServer(pid), stopListed }
   : {
   ports: () => cached("ports", loadPorts, { refresh: true }),
   stopServer,
@@ -615,6 +726,8 @@ module.exports = demo
   incidents: (o) => cached("incidents", loadIncidents, o),
   granola: (o) => cached("granola", loadGranola, o),
   datadog: (o) => cached("datadog", loadDatadog, o),
-  models: (o) => cached("models", loadModels, o),
+  // Each load is ~8 CLI processes and a billing report: every 3 minutes is plenty.
+  modal: (o) => cached("modal", loadModal, { ttl: 180_000, ...o }),
   granolaNote,
+  modalApp,
     };

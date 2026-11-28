@@ -97,7 +97,7 @@ enum Prefs {
 
     /// The connection keys: edited in Integrations. Everything else in .env is
     /// an override for something Bridge works out itself, under Advanced.
-    static let connectionKeys = ["SLACK_USER_TOKEN", "LINEAR_API_KEY", "VERCEL_TOKEN", "INCIDENT_API_KEY", "GRANOLA_API_KEY", "DD_API_KEY", "DD_APP_KEY", "DD_SITE", "OPENROUTER_KEY", "ANTHROPIC_KEY"]
+    static let connectionKeys = ["SLACK_USER_TOKEN", "LINEAR_API_KEY", "VERCEL_TOKEN", "INCIDENT_API_KEY", "GRANOLA_API_KEY", "DD_API_KEY", "DD_APP_KEY", "DD_SITE", "MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET"]
     static var placed: Set<String> { Set(connectionKeys) }
 }
 
@@ -143,7 +143,7 @@ struct SettingEntry {
         .init(pane: .integrations, title: "Vercel", words: "vercel deployments token", query: "vercel"),
         .init(pane: .integrations, title: "incident.io", words: "incident.io incidents api key", query: "incidents"),
         .init(pane: .integrations, title: "Granola", words: "granola meeting notes api key", query: "granola"),
-        .init(pane: .integrations, title: "Models", words: "models model providers openrouter anthropic api key pricing context", query: "models"),
+        .init(pane: .integrations, title: "Modal", words: "modal apps containers gpu inference billing spend token", query: "modal"),
         .init(pane: .integrations, title: "Only my Granola notes", words: "granola only my notes private shared public hide", query: "granola"),
         .init(pane: .notifications, title: "When a session needs you", words: "notify session needs you question ask", query: "notify ask"),
         .init(pane: .notifications, title: "When a worker reports", words: "notify worker outcome finished blocked stalled review", query: "notify worker"),
@@ -524,7 +524,7 @@ struct EnvField: View {
         "EXTRA_PATH": "Extra PATH", "MCP_READ_PREFIXES": "Read-only MCP prefixes",
         "VERCEL_TOKEN": "Access token", "VERCEL_TEAM_ID": "Vercel team", "INCIDENT_API_KEY": "API key", "GRANOLA_API_KEY": "API key",
         "DD_API_KEY": "API key", "DD_APP_KEY": "Application key", "DD_SITE": "Site",
-        "OPENROUTER_KEY": "OpenRouter key", "ANTHROPIC_KEY": "Anthropic API key",
+        "MODAL_TOKEN_ID": "Token ID", "MODAL_TOKEN_SECRET": "Token secret",
         "DEFAULT_DIR": "Default folder",
     ]
     static let details: [String: String] = [
@@ -983,7 +983,7 @@ struct IntegrationSettings: View {
             if show("incident.io incidents api key") { incidents }
             if show("granola meeting notes api key only my private shared public") { granola }
             if show("datadog monitors errors error tracking api application key site") { datadog }
-            if show("models model providers openrouter anthropic api key pricing context") { models }
+            if show("modal apps containers gpu inference billing spend token") { modal }
         }
         .task { await model.loadIdentity() }
     }
@@ -1087,11 +1087,10 @@ struct IntegrationSettings: View {
                  link: ("An API key (Organization Settings) and an application key with monitors_read and error_tracking_read (Personal Settings)", "https://app.datadoghq.com/personal-settings/application-keys"))
     }
 
-    var models: some View {
-        let names = model.models["providers"].array.filter { $0["error"].isNull }.map(\.["name"].string)
-        return keyGroup(.models, "Models", "Every model a key can call, with its context window, output cap, prices per million tokens and your spend where the provider's API gives them. Bridge's own key names: agents never pick them up.", ["OPENROUTER_KEY", "ANTHROPIC_KEY"],
-                 on: model.models["configured"].bool, status: names.joined(separator: " · "),
-                 link: ("An OpenRouter key (openrouter.ai › Settings › Keys) or an Anthropic API key (console.anthropic.com › API keys)", "https://openrouter.ai/settings/keys"))
+    var modal: some View {
+        keyGroup(.modal, "Modal", "Apps per environment with their functions and web endpoints, live containers, GPU spend and this month's bill, through the modal CLI. Leave the token blank to use the CLI's own login (~/.modal.toml). Read-only.", ["MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET"],
+                 on: model.modal["configured"].bool, status: model.modal["workspace"].string,
+                 link: ("A token pair from modal.com › Settings › API Tokens, or run `modal setup` once", "https://modal.com/settings/tokens"))
     }
 
     func save(_ patch: [String: Any]) { Task { await model.saveConfig(["harness": patch]); await model.loadIdentity() } }

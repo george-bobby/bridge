@@ -261,7 +261,7 @@ let statusLabels: [String: String] = [
 // MARK: - Routes
 
 enum Route: Hashable {
-    case home, inbox, slack, board, sessions, pulls, linear, vercel, incidents, granola, datadog, models, memory, usage, settings
+    case home, inbox, slack, board, sessions, pulls, linear, vercel, incidents, granola, datadog, modal, memory, usage, settings
     /// New task: the composer as its own page, like a fresh chat.
     case compose
     case session(String)
@@ -280,7 +280,7 @@ enum Route: Hashable {
         case .incidents: return "Incidents"
         case .granola: return "Granola"
         case .datadog: return "Datadog"
-        case .models: return "Models"
+        case .modal: return "Modal"
         case .memory: return "Memory"
         case .settings: return "Settings"
         case .compose: return "New task"
@@ -439,8 +439,8 @@ final class AppModel {
     var incidents: JSON = .null
     var granola: JSON = .null
     var datadog: JSON = .null
-    /// Model providers on their own keys: OpenRouter, Anthropic (Feeds.swift `ModelsView`).
-    var models: JSON = .null
+    /// Modal apps, containers and spend, through the modal CLI (Feeds.swift `ModalView`).
+    var modal: JSON = .null
     /// Sources hidden from the sidebar (Settings › Integrations).
     var hiddenSources = Sources.hidden
     var loading: Set<String> = []
@@ -1097,7 +1097,7 @@ final class AppModel {
         async let e: Void = sourceShown(.incidents) ? load("incidents", refresh: refresh) : ()
         async let f: Void = sourceShown(.granola) ? load("granola", refresh: refresh) : ()
         async let g: Void = sourceShown(.datadog) ? load("datadog", refresh: refresh) : ()
-        async let h: Void = sourceShown(.models) ? load("models", refresh: refresh) : ()
+        async let h: Void = sourceShown(.modal) ? load("modal", refresh: refresh) : ()
         _ = await (a, b, c, d, e, f, g, h)
     }
 
@@ -1115,7 +1115,7 @@ final class AppModel {
             case "incidents": incidents = out
             case "granola": granola = out
             case "datadog": datadog = out
-            case "models": models = out
+            case "modal": modal = out
             default: ports = out
             }
             errors[name] = out["stale"].nonEmpty

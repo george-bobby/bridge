@@ -1,14 +1,14 @@
 import SwiftUI
 
-// MARK: - More sources: Vercel, incident.io, Granola, Datadog, Models
+// MARK: - More sources: Vercel, incident.io, Granola, Datadog, Modal
 //
-// Read-only feeds from server/sources.js (`/api/sources/vercel|incidents|granola|datadog|models`),
-// each on its own key in .env. Which sources the sidebar shows is a Settings
+// Read-only feeds from server/sources.js (`/api/sources/vercel|incidents|granola|datadog|modal`),
+// each on its own key in .env (Modal: the modal CLI, on its token pair or profile). Which sources the sidebar shows is a Settings
 // choice (`SourceKind`, UserDefaults `sources.hidden`); a source that isn't
 // connected yet says which key it needs.
 
 enum SourceKind: String, CaseIterable, Identifiable {
-    case slack, github, linear, vercel, incidents, granola, datadog, models
+    case slack, github, linear, vercel, incidents, granola, datadog, modal
     var id: String { rawValue }
     var label: String {
         switch self {
@@ -19,7 +19,7 @@ enum SourceKind: String, CaseIterable, Identifiable {
         case .incidents: return "Incidents"
         case .granola: return "Granola"
         case .datadog: return "Datadog"
-        case .models: return "Models"
+        case .modal: return "Modal"
         }
     }
     var icon: String {
@@ -31,7 +31,7 @@ enum SourceKind: String, CaseIterable, Identifiable {
         case .incidents: return "flame"
         case .granola: return "note.text"
         case .datadog: return "waveform.path.ecg"
-        case .models: return "cpu"
+        case .modal: return "server.rack"
         }
     }
     var route: Route {
@@ -43,7 +43,7 @@ enum SourceKind: String, CaseIterable, Identifiable {
         case .incidents: return .incidents
         case .granola: return .granola
         case .datadog: return .datadog
-        case .models: return .models
+        case .modal: return .modal
         }
     }
     var detail: String {
@@ -55,7 +55,7 @@ enum SourceKind: String, CaseIterable, Identifiable {
         case .incidents: return "incident.io: live and recent incidents"
         case .granola: return "Granola: your meeting notes"
         case .datadog: return "Datadog: alerting monitors and error issues"
-        case .models: return "OpenRouter and Anthropic: models, context, prices and spend"
+        case .modal: return "Modal: apps, live containers, GPUs and spend"
         }
     }
     /// The .env key that connects it, for the ones that need one.
@@ -65,7 +65,7 @@ enum SourceKind: String, CaseIterable, Identifiable {
         case .incidents: return "INCIDENT_API_KEY"
         case .granola: return "GRANOLA_API_KEY"
         case .datadog: return "DD_API_KEY"
-        case .models: return "OPENROUTER_KEY"
+        case .modal: return "MODAL_TOKEN_ID"
         default: return nil
         }
     }
@@ -89,7 +89,7 @@ extension AppModel {
         case .incidents: feed = incidents
         case .granola: feed = granola
         case .datadog: feed = datadog
-        case .models: feed = models
+        case .modal: feed = modal
         case .github: return true
         }
         return feed["configured"].isNull || feed["configured"].bool
@@ -553,74 +553,77 @@ struct ErrorIssueRow: View {
     }
 }
 
-// MARK: Models
+// MARK: Modal
 
-/// Model providers on their own keys: what each can call, context and output
-/// limits, prices per million tokens where the API gives them, and spend.
-struct ModelsView: View {
+/// Modal (modal.com): apps per environment with their running containers and
+/// today's cost, live containers, and this month's bill. One app's functions,
+/// last hour's calls and deploys load on selection (`/api/sources/modal/:id`).
+struct ModalView: View {
     @Environment(AppModel.self) var model
-    @AppStorage("models.tab") private var tab = ""
+    @AppStorage("modal.tab") private var tab = "apps"
     @StateObject private var query = Box("")
 
-    var providers: [JSON] { model.models["providers"].array }
-    var current: JSON { providers.first { $0["id"].string == tab } ?? providers.first ?? .null }
-    var shown: [JSON] {
+    var feed: JSON { model.modal }
+    var apps: [JSON] {
         let q = query.v.trimmingCharacters(in: .whitespaces).lowercased()
-        let all = current["models"].array
-        return q.isEmpty ? all : all.filter { "\($0["id"].string) \($0["name"].string)".lowercased().contains(q) }
+        let all = feed["apps"].array
+        return q.isEmpty ? all : all.filter { "\($0["name"].string) \($0["id"].string) \($0["env"].string)".lowercased().contains(q) }
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            PageHeader(title: "Models", subtitle: current.isNull ? "" : "\(current["models"].array.count) models", icon: "cpu") {
-                if providers.count > 1 {
-                    SlidingTabs(tabs: providers.map { .init(id: $0["id"].string, label: $0["name"].string, count: $0["models"].array.count) },
-                                selection: Binding(get: { current["id"].string }, set: { tab = $0 }))
-                }
-                if model.models["configured"].bool { SearchField(placeholder: "Filter models", text: $query.v).frame(width: 200) }
-                IconButton(icon: "arrow.clockwise", help: "Refresh", spinning: model.refreshing.contains("models")) { Task { await model.load("models", refresh: true) } }
-            }
-            if let e = model.errors["models"], !e.isEmpty { ErrorBar(text: e) }
-            if let e = current["error"].nonEmpty { ErrorBar(text: "\(current["name"].string): \(e)") }
-            if model.models.isNull {
-                EmptyState(icon: "cpu", title: model.loading.contains("models") ? "Loading models…" : "Nothing loaded")
-            } else if !model.models["configured"].bool {
-                SourceSetup(kind: .models, how: "Paste an OpenRouter key (openrouter.ai › Settings › Keys) as OPENROUTER_KEY for every model with its context, prices and your spend, and an Anthropic API key (console.anthropic.com) as ANTHROPIC_KEY for the Claude models it can call. Either is enough.")
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
-                        if !current["account"].isNull { AccountStrip(a: current["account"]) }
-                        Section {
-                            if shown.isEmpty {
-                                EmptyState(icon: "magnifyingglass", title: query.v.isEmpty ? "No models" : "No model matches").frame(height: 200)
-                            }
-                            ForEach(shown, id: \.self) { ModelRow(m: $0) }
-                        } header: {
-                            GroupHeader(title: current["id"].string == "anthropic" ? "Models · prices aren't in Anthropic's API" : "Models · $ per 1M tokens, in / out", count: shown.count)
-                        }
-                    }
-                }
-            }
+            PageHeader(title: "Modal", subtitle: feed["workspace"].string, icon: SourceKind.modal.icon) { actions }
+            if let e = model.errors["modal"], !e.isEmpty { ErrorBar(text: e) }
+            if let e = feed["errors"]["containers"].nonEmpty, tab == "containers" { ErrorBar(text: e) }
+            content
+        }
+    }
+
+    @ViewBuilder var actions: some View {
+        if feed["configured"].bool {
+            SlidingTabs(tabs: [
+                .init(id: "apps", label: "Apps", count: feed["apps"].array.count),
+                .init(id: "containers", label: "Containers", count: feed["containers"].array.count, hot: true),
+            ], selection: $tab)
+            if tab == "apps" { SearchField(placeholder: "Filter apps", text: $query.v).frame(width: 180) }
+            IconButton(icon: "arrow.up.right", help: "Open the Modal dashboard") { openURL(feed["dashboard"].string) }
+        }
+        IconButton(icon: "arrow.clockwise", help: "Refresh", spinning: model.refreshing.contains("modal")) { Task { await model.load("modal", refresh: true) } }
+    }
+
+    @ViewBuilder var content: some View {
+        if feed.isNull {
+            EmptyState(icon: SourceKind.modal.icon, title: model.loading.contains("modal") ? "Loading from Modal…" : "Nothing loaded")
+        } else if !feed["configured"].bool {
+            SourceSetup(kind: .modal, how: "Bridge reads Modal through the modal CLI. Sign it in once with `modal setup` (it saves ~/.modal.toml), or paste a token pair from modal.com › Settings › API Tokens as MODAL_TOKEN_ID and MODAL_TOKEN_SECRET.")
+        } else {
+            ModalSpend(feed: feed)
+            Hairline()
+            if tab == "containers" { ModalContainers(items: feed["containers"].array) } else { ModalApps(apps: apps, filtered: !query.v.isEmpty) }
         }
     }
 }
 
-/// Spend and limits for one key, as a row of figures.
-struct AccountStrip: View {
-    let a: JSON
+/// This month's bill and today's GPU spend, from Modal's billing API (needs a
+/// workspace manager; otherwise it says so).
+struct ModalSpend: View {
+    let feed: JSON
+    var spend: JSON { feed["spend"] }
     var cells: [(String, String)] {
-        let usd = { (j: JSON) -> String? in j.isNull ? nil : String(format: "$%.2f", j.double) }
+        let usd = { (j: JSON) -> String? in j.isNull ? nil : Burn.money(j.double) }
         var out: [(String, String)] = []
-        if let v = usd(a["spentDay"]) { out.append(("Today", v)) }
-        if let v = usd(a["spentWeek"]) { out.append(("This week", v)) }
-        if let v = usd(a["spentMonth"]) { out.append(("This month", v)) }
-        if let v = usd(a["spent"]) { out.append(("All time", v)) }
-        if let v = usd(a["remaining"]), let l = usd(a["limit"]) { out.append(("Key limit left", "\(v) of \(l)")) }
-        if let v = usd(a["balance"]) { out.append(("Credits", v)) }
+        if let v = usd(spend["billed"]) { out.append(("Billed this month", v)) }
+        if let v = usd(spend["metered"]) { out.append(("Metered", v)) }
+        if spend["credits"].double > 0, let v = usd(spend["credits"]) { out.append(("Credits", v)) }
+        if let v = usd(spend["today"]) { out.append(("Today", v)) }
         return out
     }
     var body: some View {
         HStack(alignment: .top, spacing: 28) {
+            if spend.isNull {
+                Text(feed["errors"]["billing"].nonEmpty.map { "Billing: \($0)" } ?? "No billing data")
+                    .font(T.ui(12)).foregroundStyle(T.text3).lineLimit(2)
+            }
             ForEach(cells, id: \.0) { c in
                 VStack(alignment: .leading, spacing: 3) {
                     Text(c.0).font(T.ui(11.5)).foregroundStyle(T.text3)
@@ -628,42 +631,248 @@ struct AccountStrip: View {
                 }
             }
             Spacer(minLength: 0)
-            if let l = a["label"].nonEmpty { Chip(text: l, icon: "key", mono: true) }
-            if a["freeTier"].bool { Chip(text: "Free tier") }
+            gpus
         }
         .padding(.horizontal, 20).padding(.vertical, 14)
+        .contentShape(Rectangle())
+        .onTapGesture { openURL(feed["usage"].string) }
+        .help("Open usage in Modal")
+    }
+    @ViewBuilder var gpus: some View {
+        let g = feed["gpus"].array
+        if !g.isEmpty {
+            VStack(alignment: .trailing, spacing: 4) {
+                Text("GPU spend today").font(T.ui(11.5)).foregroundStyle(T.text3)
+                HStack(spacing: 2) {
+                    ForEach(g.prefix(4), id: \.self) { Chip(text: "\($0["type"].string) \(Burn.money($0["cost"].double))", icon: "cpu", mono: true) }
+                }
+            }
+        }
     }
 }
 
-struct ModelRow: View {
-    let m: JSON
-    var price: String {
-        guard !m["input"].isNull, !m["output"].isNull else { return "" }
-        if m["input"].double == 0 && m["output"].double == 0 { return "free" }
-        let f = { (d: Double) in d >= 10 || d.rounded() == d ? String(format: "%.0f", d) : String(format: "%.2f", d) }
-        return "$\(f(m["input"].double)) / $\(f(m["output"].double))"
-    }
+/// Apps grouped by environment, with the selected one's details beside them.
+struct ModalApps: View {
+    let apps: [JSON]
+    let filtered: Bool
+    @StateObject private var selected = Box("")
+    var current: JSON { apps.first { $0["id"].string == selected.v } ?? apps.first ?? .null }
+
     var body: some View {
-        HoverRow(height: 44) {
-            HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(m["name"].string).font(T.ui(13, .medium)).foregroundStyle(T.text).lineLimit(1)
-                    Text(m["id"].string).font(T.mono(11)).foregroundStyle(T.text3).lineLimit(1).truncationMode(.middle)
-                }
-                Spacer(minLength: 8)
-                ForEach(m["capabilities"].array.prefix(3), id: \.self) { Chip(text: $0.string) }
-                if let mod = m["modality"].nonEmpty, mod != "text->text" { Chip(text: mod, mono: true) }
-                Text(verbatim: m["context"].int > 0 ? Fmt.tokens(m["context"].int) : "")
-                    .font(T.mono(11.5)).foregroundStyle(T.text2).frame(width: 52, alignment: .trailing).help("Context window, tokens")
-                Text(verbatim: m["maxOutput"].int > 0 ? Fmt.tokens(m["maxOutput"].int) : "")
-                    .font(T.mono(11.5)).foregroundStyle(T.text3).frame(width: 48, alignment: .trailing).help("Most output tokens per reply")
-                Text(verbatim: price).font(T.mono(11.5)).foregroundStyle(T.text2).frame(width: 96, alignment: .trailing).help("$ per million tokens, input / output")
+        if apps.isEmpty {
+            EmptyState(icon: "magnifyingglass", title: filtered ? "No app matches" : "No apps", detail: filtered ? "" : "Nothing deployed or running in any environment.")
+        } else {
+            HStack(spacing: 0) {
+                list.frame(width: 420)
+                Rectangle().fill(T.line).frame(width: 1)
+                ModalAppDetail(app: current).id(current["id"].string).frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .onTapGesture { openURL(m["url"].string) }
+    }
+
+    var list: some View {
+        ScrollView {
+            LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
+                let envs = apps.reduce(into: [String]()) { if !$0.contains($1["env"].string) { $0.append($1["env"].string) } }
+                ForEach(envs, id: \.self) { env in
+                    let items = apps.filter { $0["env"].string == env }
+                    Section {
+                        ForEach(items, id: \.self) { a in
+                            ModalAppRow(a: a, selected: current["id"].string == a["id"].string).onTapGesture { selected.v = a["id"].string }
+                        }
+                    } header: { GroupHeader(title: env, count: items.count) }
+                }
+            }
+        }
+    }
+}
+
+/// deployed + running · deployed idle · ephemeral · stopped.
+func modalStateTint(_ a: JSON) -> Color {
+    let s = a["state"].string
+    if s.hasPrefix("stop") { return T.red }
+    if s.hasPrefix("ephemeral") { return T.orange }
+    return a["tasks"].int > 0 ? T.green : T.text3
+}
+
+struct ModalAppRow: View {
+    let a: JSON
+    let selected: Bool
+    var body: some View {
+        HoverRow(selected: selected, height: 48) {
+            HStack(spacing: 10) {
+                if a["tasks"].int > 0 { PulseDot(color: modalStateTint(a)) } else { Circle().fill(modalStateTint(a)).frame(width: 6, height: 6) }
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(a["name"].string).font(T.ui(13, .medium)).foregroundStyle(T.text).lineLimit(1)
+                    Text(subtitle).font(T.ui(11)).foregroundStyle(T.text3).lineLimit(1)
+                }
+                Spacer(minLength: 6)
+                ForEach(a["gpus"].array.prefix(2), id: \.self) { Chip(text: $0.string, icon: "cpu", mono: true) }
+                Text(verbatim: a["costToday"].isNull ? "" : Burn.money(a["costToday"].double))
+                    .font(T.mono(11.5)).foregroundStyle(T.text2).frame(width: 64, alignment: .trailing).help("Cost today")
+            }
+        }
         .contextMenu {
-            Button { copyToPasteboard(m["id"].string) } label: { Label("Copy Model ID", systemImage: "doc.on.doc") }
-            Button { openURL(m["url"].string) } label: { Label("Open Model Page", systemImage: "arrow.up.right") }
+            Button { openURL(a["url"].string) } label: { Label("Open in Modal", systemImage: "arrow.up.right") }
+            Divider()
+            Button { copyToPasteboard(a["id"].string) } label: { Label("Copy App ID", systemImage: "doc.on.doc") }
+        }
+    }
+    var subtitle: String {
+        var parts = [a["state"].string]
+        if a["tasks"].int > 0 { parts.append(a["tasks"].int == 1 ? "1 container" : "\(a["tasks"].int) containers") }
+        if a["createdAt"].double > 0 { parts.append("created \(Fmt.ago(a["createdAt"].double / 1000))") }
+        return parts.joined(separator: " · ")
+    }
+}
+
+/// One app's lifecycle, functions (web URL, schedule, GPU, last hour's calls)
+/// and recent deploys.
+struct ModalAppDetail: View {
+    let app: JSON
+    @StateObject private var out = Box(JSON.null)
+    var d: JSON { out.v["app"] }
+
+    var body: some View {
+        Group {
+            if out.v.isNull {
+                ProgressView().controlSize(.small)
+            } else if let e = out.v["error"].nonEmpty {
+                EmptyState(icon: "exclamationmark.triangle", title: "Couldn't load the app", detail: e)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        header
+                        functions
+                        deploys
+                    }
+                    .padding(24)
+                    .frame(maxWidth: 760, alignment: .leading)
+                }
+            }
+        }
+        .task(id: app["id"].string) { await load() }
+    }
+
+    var header: some View {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(d["name"].string).font(T.ui(18, .semibold)).foregroundStyle(T.text)
+                Text(lifecycle).font(T.ui(12)).foregroundStyle(T.text3)
+            }
+            Spacer()
+            Button { openURL(d["url"].string) } label: { Label("Open in Modal", systemImage: "arrow.up.right") }.buttonStyle(LButton())
+        }
+    }
+    var lifecycle: String {
+        var parts = [d["state"].string, app["env"].string]
+        if d["version"].int > 0 { parts.append("v\(d["version"].int)") }
+        if d["deployedAt"].double > 0 { parts.append("deployed \(Fmt.ago(d["deployedAt"].double / 1000)) ago by \(d["deployedBy"].string)") }
+        if d["stoppedAt"].double > 0 { parts.append("stopped \(Fmt.ago(d["stoppedAt"].double / 1000)) ago" + (d["stoppedBy"].string.isEmpty ? "" : " by \(d["stoppedBy"].string)")) }
+        return parts.filter { !$0.isEmpty }.joined(separator: " · ")
+    }
+
+    @ViewBuilder var functions: some View {
+        let fns = d["functions"].array
+        VStack(alignment: .leading, spacing: 0) {
+            GroupHeader(title: "Functions · calls in the last hour", count: fns.count)
+            ForEach(fns, id: \.self) { ModalFunctionRow(f: $0) }
+        }
+    }
+
+    @ViewBuilder var deploys: some View {
+        let h = d["history"].array
+        if !h.isEmpty {
+            VStack(alignment: .leading, spacing: 0) {
+                GroupHeader(title: "Deploys", count: h.count)
+                ForEach(h, id: \.self) { v in
+                    HStack(spacing: 10) {
+                        Text(v["version"].string).font(T.mono(11.5, .medium)).foregroundStyle(T.text).frame(width: 44, alignment: .leading)
+                        Text(v["by"].string).font(T.ui(12.5)).foregroundStyle(T.text2)
+                        if !v["commit"].string.isEmpty { Chip(text: v["commit"].string, mono: true) }
+                        Spacer()
+                        Text(Fmt.day(v["at"].double / 1000) + " · " + Fmt.time(v["at"].double / 1000)).font(T.ui(11.5)).foregroundStyle(T.text3)
+                    }
+                    .padding(.horizontal, 12).frame(height: 30)
+                }
+            }
+        }
+    }
+
+    func load() async {
+        out.v = .null
+        let id = app["id"].string
+        guard !id.isEmpty else { return }
+        do { out.v = try await API.get("/api/sources/modal/\(API.q(id))?env=\(API.q(app["env"].string))") } catch { out.v = .obj(["error": .str(error.localizedDescription)]) }
+    }
+}
+
+struct ModalFunctionRow: View {
+    let f: JSON
+    var s: JSON { f["stats"] }
+    var body: some View {
+        HoverRow(height: f["webUrl"].string.isEmpty ? 36 : 48) {
+            HStack(spacing: 10) {
+                Image(systemName: f["web"].bool ? "globe" : f["schedule"].string.isEmpty ? "function" : "clock").font(.system(size: 11)).foregroundStyle(T.text3).frame(width: 14)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(f["name"].string).font(T.mono(12.5, .medium)).foregroundStyle(T.text).lineLimit(1)
+                    if !f["webUrl"].string.isEmpty { Text(f["webUrl"].string).font(T.mono(11)).foregroundStyle(T.accent).lineLimit(1).truncationMode(.middle) }
+                }
+                Spacer(minLength: 6)
+                if !f["schedule"].string.isEmpty { Chip(text: f["schedule"].string, mono: true) }
+                ForEach(f["gpus"].array.prefix(2), id: \.self) { Chip(text: $0.string, icon: "cpu", mono: true) }
+                calls
+            }
+        }
+        .onTapGesture { openURL(f["webUrl"].string.isEmpty ? f["url"].string : f["webUrl"].string) }
+        .contextMenu {
+            Button { openURL(f["url"].string) } label: { Label("Open in Modal", systemImage: "arrow.up.right") }
+            if !f["webUrl"].string.isEmpty {
+                Button { openURL(f["webUrl"].string) } label: { Label("Open Endpoint", systemImage: "globe") }
+                Button { copyToPasteboard(f["webUrl"].string) } label: { Label("Copy Endpoint URL", systemImage: "link") }
+            }
+        }
+    }
+    @ViewBuilder var calls: some View {
+        if !s.isNull {
+            let bad = s["failed"].int + s["timedOut"].int + s["containerErrors"].int
+            HStack(spacing: 8) {
+                if s["running"].int > 0 { Text(verbatim: "\(s["running"].int) running").foregroundStyle(T.green) }
+                Text(verbatim: "\(Burn.count(s["ok"].int)) ok").foregroundStyle(T.text2)
+                if bad > 0 { Text(verbatim: "\(bad) failed").foregroundStyle(T.red).help("\(s["failed"].int) failed, \(s["timedOut"].int) timed out, \(s["containerErrors"].int) container errors") }
+            }
+            .font(T.mono(11.5))
+        }
+    }
+}
+
+struct ModalContainers: View {
+    let items: [JSON]
+    var body: some View {
+        if items.isEmpty {
+            EmptyState(icon: "shippingbox", title: "No containers running", detail: "Containers show up here while an app is serving or working.")
+        } else {
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(items, id: \.self) { c in
+                        HoverRow(height: 40) {
+                            HStack(spacing: 10) {
+                                PulseDot(color: T.green)
+                                Text(c["app"].string).font(T.ui(13, .medium)).foregroundStyle(T.text).lineLimit(1)
+                                Chip(text: c["env"].string)
+                                Spacer(minLength: 6)
+                                Text(c["id"].string).font(T.mono(11)).foregroundStyle(T.text3).lineLimit(1)
+                                Text(Fmt.ago(c["startedAt"].double / 1000)).font(T.ui(11.5)).foregroundStyle(T.text3).frame(width: 34, alignment: .trailing).help("Started")
+                            }
+                        }
+                        .onTapGesture { openURL(c["url"].string) }
+                        .contextMenu {
+                            Button { openURL(c["url"].string) } label: { Label("Open in Modal", systemImage: "arrow.up.right") }
+                            Button { copyToPasteboard(c["id"].string) } label: { Label("Copy Container ID", systemImage: "doc.on.doc") }
+                        }
+                    }
+                }
+            }
         }
     }
 }
