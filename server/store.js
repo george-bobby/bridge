@@ -621,7 +621,7 @@ function summariseRun(run) {
   let meta = {};
   try {
     meta = JSON.parse(fs.readFileSync(path.join(DATA_DIR, "tasks", run.runId, "meta.json"), "utf8"));
-    task = { status: meta.status || "", phase: meta.phase || "", branch: meta.branch || "", declared: meta.declared || null, prUrl: meta.prUrl || "", title: require("./tasks").shownTitle(meta.title, run.text), worktree: meta.worktree || "", plan: Array.isArray(meta.plan) ? meta.plan : [] };
+    task = { status: meta.status || "", phase: meta.phase || "", branch: meta.branch || "", declared: meta.declared || null, prUrl: require("./tasks").firstUrl(meta.prUrl), title: require("./tasks").shownTitle(meta.title, run.text), worktree: meta.worktree || "", plan: Array.isArray(meta.plan) ? meta.plan : [] };
   } catch {}
   return {
     runId: run.runId,
