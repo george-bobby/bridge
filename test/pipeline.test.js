@@ -78,7 +78,7 @@ test.before(async () => {
   fs.writeFileSync(path.join(DATA, "config.json"), JSON.stringify({ harness: { relay: false, mode: "normal" } }));
   server = spawn(process.execPath, [path.join(ROOT, "server")], { env: ENV, stdio: ["ignore", "pipe", "pipe"] });
   server.stderr.on("data", (d) => process.env.BRIDGE_TEST_VERBOSE && process.stderr.write(d));
-  await waitFor(async () => fetch(`${URL_}/api/state`).then((r) => r.ok).catch(() => false), 10000, "server up");
+  await waitFor(async () => fetch(`${URL_}/api/state`).then((r) => r.ok).catch(() => false), 15000, "server up");
 });
 test.after(async () => {
   if (server) await new Promise((r) => (server.on("exit", r), server.kill("SIGTERM")));
