@@ -511,6 +511,8 @@ final class AppModel {
 
     var drafts: [String: String] = [:]
     var attachments: [String: [Attachment]] = [:]
+    /// Messages you queued behind a chat's running turn (server jobs.queueOf).
+    var queues: [String: [JSON]] = [:]
     var browserTabs: [String: [BrowserTab]] = [:]
     /// Subagents and background commands open as tabs: task ids by run (Tasks.swift).
     var taskTabs: [String: [String]] = [:]
@@ -1077,6 +1079,7 @@ final class AppModel {
         case "projects": projects = d["projects"].array.map(Project.init)
         case "mcp": MCPStore.shared.changed(d["agent"].string, live: paneRuns.union([openId]))
         case "identity": identity = d
+        case "queue": withAnimation(M.snappy) { queues[d["runId"].string] = d["queue"].array }
         case "delta":
             // Tokens stream at dozens a second: patched into the chat held
             // here, never a re-fetch, and no badge recount.
@@ -1153,6 +1156,7 @@ final class AppModel {
             deltaLog[id] = log.isEmpty ? nil : log
         }
         setRun(id, run)
+        queues[id] = r["queue"].array
         runOrder.removeAll { $0 == id }
         runOrder.append(id)
         trimRunCache()
@@ -1232,7 +1236,7 @@ final class AppModel {
     }
 
     @discardableResult
-    func send(_ text: String, to id: String) async -> Bool {
+    func send(_ text: String, to id: String, mode: SendMode = .steer) async -> Bool {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return false }
         let orchestrator = sessions.first(where: { $0.id == id })?.isOrchestrator == true
@@ -1245,9 +1249,11 @@ final class AppModel {
         let live = sessions.first { $0.id == id }.map(isLive) ?? false
         var ok = false
         await act {
-            let out = try await API.post("/api/runs/\(API.q(id))/followup", ["text": t, "queue": live || id.hasPrefix("orchestrator")])
+            // Idle: every mode is a plain send (queued if a turn starts first).
+            let m = live ? mode.rawValue : "queue"
+            let out = try await API.post("/api/runs/\(API.q(id))/followup", ["text": t, "mode": m])
             ok = true
-            if out["queued"].bool { self.say("Queued: it's mid-turn.") }
+            if live, mode == .steer, out["queued"].bool { self.say("Queued: this agent can't take a message mid-turn") }
         }
         await refreshOpen()
         return ok

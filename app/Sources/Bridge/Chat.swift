@@ -558,6 +558,8 @@ struct StepView: View, Equatable {
             if !step["text"].string.isEmpty { MarkdownText(text: step["text"].string) }
         case "thinking":
             ThinkingView(step: step)
+        case "steer":
+            SteerStep(step: step)
         case "tool":
             VStack(alignment: .leading, spacing: 8) {
                 if let t = task { TaskCard(task: t, runId: runId) } else { ToolView(step: step) }
@@ -948,8 +950,8 @@ struct Composer: View {
     }
 
     var editor: some View {
-        PromptEditor(text: $text.v, placeholder: live ? "Queue a follow-up for when this turn ends…" : "Reply, paste an image, @ a file, # a session, / a skill…",
-                     source: .run(runId), exclude: runId, focused: $focused) { a in
+        PromptEditor(text: $text.v, placeholder: live ? (model.canSteer(runId) ? "Steer this turn (↩), queue for after it (⌘↩), or stop and send (⌥↩)…" : "Queue a follow-up for when this turn ends…") : "Reply, paste an image, @ a file, # a session, / a skill…",
+                     source: .run(runId), exclude: runId, focused: $focused, onReturn: { send($0) }) { a in
             if !items.contains(where: { $0.id == a.id }) { add(a) }
         }
         .padding(.horizontal, 12).padding(.top, 12)
@@ -966,7 +968,7 @@ struct Composer: View {
             Spacer(minLength: 0)
             ContextButton(runId: runId, run: model.runData(runId), agent: agent, live: live)
             if live && !trimmedEmpty { stopAndSendButton }
-            if barWidth.v > 620 && !(live && trimmedEmpty && items.isEmpty) { Text("⌘↩").font(T.ui(11)).foregroundStyle(T.text3).transition(.opacity) }
+            if barWidth.v > 620 && !(live && trimmedEmpty && items.isEmpty) { Text(keyHint).font(T.ui(11)).foregroundStyle(T.text3).transition(.opacity) }
             if live { stopButton.transition(.scale.combined(with: .opacity)) }
             if !live || !trimmedEmpty || !items.isEmpty { sendButton.transition(.scale.combined(with: .opacity)) }
         }
@@ -988,15 +990,13 @@ struct Composer: View {
     }
 
     var stopAndSendButton: some View {
-        Button {
-            let t = text.v
-            sending.v = true
-            Task {
-                if await model.stopAndSend(t, to: runId), text.v == t { text.v = "" }
-                sending.v = false
-            }
-        } label: { Label("Stop & send", systemImage: "bolt.fill").font(T.ui(11.5, .medium)) }
-        .buttonStyle(LButton()).help("Interrupt the running turn and send this now (⌘↩ queues it instead)")
+        Button { send(.interrupt) } label: { Label("Stop & send", systemImage: "bolt.fill").font(T.ui(11.5, .medium)) }
+            .buttonStyle(LButton()).help("Stop the running turn and send this now (⌥↩)")
+    }
+
+    var keyHint: String {
+        guard live else { return "↩ send" }
+        return model.canSteer(runId) ? "↩ steer · ⌘↩ queue" : "↩ queue"
     }
 
     /// While a turn streams: stop it, like every chat app's stop square (⌘.).
@@ -1016,7 +1016,8 @@ struct Composer: View {
     var sendButton: some View {
         let empty = trimmedEmpty && items.isEmpty
         return Button {
-            send()
+            // ⌘↩ with the editor unfocused lands here: it queues, a click steers.
+            send(NSApp.currentEvent?.type == .keyDown ? .queue : .steer)
         } label: {
             Image(systemName: "arrow.up").font(.system(size: 12, weight: .bold)).foregroundStyle(.white)
                 .frame(width: 26, height: 26)
@@ -1030,6 +1031,7 @@ struct Composer: View {
         // Covered by the New Task sheet or ⌘K: ⌘↩ belongs to them.
         // ⌘↩ belongs to the focused pane's composer when chats are side by side.
         .disabled(sending.v || model.composeOpen || model.importOpen || model.paletteOpen || runId != model.openId)
+        .help(SendKeys.help(live: live, steers: model.canSteer(runId)))
     }
 
     @ViewBuilder var dropOverlay: some View {
@@ -1063,14 +1065,14 @@ struct Composer: View {
 
     /// The draft is cleared only once the server has taken it, and only if
     /// you haven't typed something new in the meantime.
-    func send() {
+    func send(_ mode: SendMode = .steer) {
         let t = text.v
         let attached = items
         let full = Attachment.compose(t, attached)
-        guard !full.isEmpty else { return }
+        guard !full.isEmpty, !sending.v else { return }
         sending.v = true
         Task {
-            if await model.send(full, to: runId) {
+            if await model.send(full, to: runId, mode: mode) {
                 if text.v == t { text.v = "" }
                 model.attachments[runId]?.removeAll { a in attached.contains { $0.id == a.id } }
             }

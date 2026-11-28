@@ -260,6 +260,8 @@ function briefing(run, { meta = {}, report = null, since = 0, title = "", intro 
     if (m.role === "assistant") {
       if (m.kind === "compact") continue;
       const tools = (m.steps || []).filter((s) => s.kind === "tool").map((s) => `${s.name}${s.detail ? ` ${clip(s.detail, 80)}` : ""}`);
+      // Messages steered into the turn were the user's too.
+      for (const s of (m.steps || []).filter((x) => x.kind === "steer")) lines.push(`- User (mid-turn): ${clip(s.text, 1500)}`);
       lines.push(`- ${(AGENTS[m.agent] || { label: m.agent }).label}${tools.length ? ` (used: ${tools.slice(-8).join("; ")})` : ""}: ${clip(m.text, 1200) || "(no reply)"}`);
     } else if (m.role === "user" || m.role === "slack" || m.role === "thread") {
       lines.push(`- ${m.role === "user" ? "User" : m.who || "Slack"}: ${clip(m.text, 1500)}`);

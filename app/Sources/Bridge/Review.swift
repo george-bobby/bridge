@@ -280,13 +280,4 @@ extension AppModel {
     func loadCommands(for runId: String) async {
         commands = (try? await API.get("/api/commands?runId=\(API.q(runId))"))?["commands"].array ?? []
     }
-
-    func stopAndSend(_ text: String, to id: String) async -> Bool {
-        await stop(id)
-        for _ in 0..<20 {
-            try? await Task.sleep(nanoseconds: 300_000_000)
-            if !running.contains(id) { break }
-        }
-        return await send(text, to: id)
-    }
 }
