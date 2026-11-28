@@ -38,6 +38,11 @@ if ! swift "$PROJ/scripts/icon.swift" --iconset "$ICONSET" >/dev/null 2>&1; then
 fi
 iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/$NAME.icns"
 
+# What this build was made from: the app/, scripts/ and package.json trees at
+# HEAD. relaunch.sh compares it with the checkout it's about to run and skips
+# the rebuild when nothing it packages has moved.
+STAMP="$(git -C "$PROJ" rev-parse HEAD:app HEAD:scripts HEAD:package.json 2>/dev/null | paste -sd- -)"
+
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -58,6 +63,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
   <key>BridgeRoot</key><string>$PROJ</string>
   <key>BridgePort</key><string>$PORT</string>
+  <key>BridgeSourceStamp</key><string>${STAMP:-nogit}</string>
 </dict>
 </plist>
 PLIST

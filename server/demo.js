@@ -308,6 +308,22 @@ function sessions() {
     ],
   };
   return [
+    // A project's orchestrator, so the UI can show its project next to the title.
+    run("orchestrator-storefront", {
+      kind: "orchestrator",
+      project: "storefront",
+      who: "Orchestrator",
+      age: 3200,
+      updated: 180,
+      text: "Your second-in-command. Hand it work; it spawns workers and tells you what happened.",
+      action: "acted",
+      phase: "idle",
+      opts: { workdir: "/Users/you/Development/storefront" },
+      messages: [
+        user("Start a worker on the CSV export bug Jordan filed", 800),
+        claude(700, [say("Started `t-241125-web-124-apple-pay` on it — no wait, that's the Apple Pay one. The CSV thread (`1732530001.000100`) is already running and just asked whether to fix only CSV or every export. Want me to answer \"Every export\"?")], { label: "orchestrator" }),
+      ],
+    }),
     run("1732530001.000100", {
       who: "Jordan Lee",
       channel: "#eng-bugs",

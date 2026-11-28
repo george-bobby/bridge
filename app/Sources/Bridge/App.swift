@@ -543,7 +543,7 @@ struct SessionNavItem: View {
         HStack(alignment: twoLine ? .top : .center, spacing: 10) {
             icon.frame(width: 18, height: 18)
             VStack(alignment: .leading, spacing: 2) {
-                Text(session.isOrchestrator ? "Orchestrator" : session.title).font(T.ui(13, on ? .medium : .regular)).foregroundStyle(on ? T.text : T.text2).lineLimit(1)
+                Text(session.isOrchestrator ? model.orchestratorTitle(session) : session.title).font(T.ui(13, on ? .medium : .regular)).foregroundStyle(on ? T.text : T.text2).lineLimit(1)
                 metaLine(pr)
             }
             Spacer(minLength: 4)
