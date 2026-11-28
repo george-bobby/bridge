@@ -866,6 +866,42 @@ function datadog() {
   };
 }
 
+function models() {
+  const or = (id, name, context, maxOutput, input, output, ago, modality = "text+image->text") => ({
+    id, name, context, maxOutput, input, output, modality, created: (now() - ago) * 1000, url: `https://openrouter.ai/${id}`,
+  });
+  const an = (id, name, context, maxOutput, ago) => ({
+    id, name, context, maxOutput, input: null, output: null, capabilities: ["vision", "thinking"], created: (now() - ago) * 1000,
+    url: "https://docs.claude.com/en/docs/about-claude/models",
+  });
+  return {
+    configured: true,
+    providers: [
+      {
+        id: "openrouter", name: "OpenRouter",
+        account: { label: "storefront-dev", spent: 41.27, spentDay: 1.84, spentWeek: 9.3, spentMonth: 27.65, limit: 100, remaining: 58.73, balance: 58.73, freeTier: false },
+        models: [
+          or("anthropic/claude-opus-5.5", "Anthropic: Claude Opus 5.5", 1000000, 128000, 4, 20, 20 * DAY),
+          or("openai/gpt-5.2", "OpenAI: GPT-5.2", 400000, 128000, 1.25, 10, 35 * DAY),
+          or("google/gemini-3-pro", "Google: Gemini 3 Pro", 1048576, 65536, 2, 12, 50 * DAY),
+          or("anthropic/claude-sonnet-5.5", "Anthropic: Claude Sonnet 5.5", 1000000, 128000, 2, 10, 20 * DAY),
+          or("deepseek/deepseek-v4", "DeepSeek: V4", 163840, 32768, 0.27, 1.1, 70 * DAY, "text->text"),
+          or("meta-llama/llama-5-70b:free", "Meta: Llama 5 70B (free)", 131072, 8192, 0, 0, 90 * DAY, "text->text"),
+        ],
+      },
+      {
+        id: "anthropic", name: "Anthropic", account: null,
+        models: [
+          an("claude-opus-5-5", "Claude Opus 5.5", 1000000, 128000, 20 * DAY),
+          an("claude-sonnet-5-5", "Claude Sonnet 5.5", 1000000, 128000, 20 * DAY),
+          an("claude-haiku-5-5", "Claude Haiku 5.5", 1000000, 64000, 25 * DAY),
+        ],
+      },
+    ],
+    at: Date.now(),
+  };
+}
+
 /* ------------------------------------------------- skills and plugins */
 
 /** A fake home with a few skills, for Settings › Customize (server/customize.js). */
@@ -981,4 +1017,4 @@ function tokens() {
   };
 }
 
-module.exports = { seed, writeSessions, seedSkills, plugins, pulls, linear, ports, stopServer, slack, usage, agents, prActivity, mcp, git, history, vercel, incidents, granola, granolaNote, datadog, tokens };
+module.exports = { seed, writeSessions, seedSkills, plugins, pulls, linear, ports, stopServer, slack, usage, agents, prActivity, mcp, git, history, vercel, incidents, granola, granolaNote, datadog, tokens, models };
