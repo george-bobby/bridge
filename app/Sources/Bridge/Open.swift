@@ -179,11 +179,10 @@ struct OpenInButton: View {
                 Rectangle().fill(T.line).frame(width: 1, height: 16)
                 Menu {
                     Section("Open in") {
-                        ForEach(OpenTarget.allCases) { t in
+                        ForEach(targets) { t in
                             Button { places.open(t, model: model) } label: {
                                 Label { Text(t.label) } icon: { Image(nsImage: t.icon) }
                             }
-                            .disabled(!places.available(t))
                         }
                     }
                     if !places.folder.isEmpty {
@@ -216,9 +215,8 @@ struct OpenInMenu: View {
         let places = OpenPlaces(session: session, model: model)
         if !places.targets.isEmpty {
             Menu {
-                ForEach(OpenTarget.allCases) { t in
+                ForEach(places.targets) { t in
                     Button { places.open(t, model: model) } label: { Label { Text(t.label) } icon: { Image(nsImage: t.icon) } }
-                        .disabled(!places.available(t))
                 }
                 if !places.folder.isEmpty {
                     Divider()

@@ -477,7 +477,6 @@ struct AgentServers: View {
                 .frame(width: 48, height: 48).background(Circle().fill(T.raised))
             Text("\(agent.label) has no MCP servers").font(T.ui(13, .medium)).foregroundStyle(T.text2)
             Text("Add one to give its sessions more tools: a database, a browser, your issue tracker.").font(T.ui(12)).foregroundStyle(T.text3).multilineTextAlignment(.center)
-            Button { model.mcpSheet = .add(agent) } label: { Label("Add server", systemImage: "plus") }.buttonStyle(LButton())
         }
         .frame(maxWidth: .infinity).padding(32).card(radius: 10).padding(.bottom, 28)
     }

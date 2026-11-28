@@ -30,9 +30,7 @@ struct InboxView: View {
                 .init(id: "away", label: "Away", icon: "airplane"),
             ], selection: Binding(get: { model.inbox["mode"].nonEmpty ?? "normal" }, set: { m in Task { await model.setMode(m) } }))
             .help("Normal relays everything to the orchestrator; quiet only what needs you; away holds it all for one catch-up")
-            Button { Task { await model.brief(since: since.v) } } label: { Label("Brief me", systemImage: "sparkles") }
-                .buttonStyle(LButton())
-                .help("The orchestrator catches you up on the last \(since.v)")
+            BriefButton(orchestrator: model.orchestrator?.id ?? "orchestrator")
         }
     }
 
