@@ -42,7 +42,29 @@ function rootDir() {
   }
   return os.homedir();
 }
-const rootProject = () => ({ id: DEFAULT, name: rootPrefs().name || "Default", path: rootDir(), root: true, auto: automation(rootPrefs().auto) });
+const rootProject = () => {
+  const r = rootPrefs();
+  return { id: DEFAULT, name: r.name || "Default", path: rootDir(), root: true, auto: automation(r.auto), ...(r.github ? { github: r.github } : {}), ...(r.linear ? { linear: r.linear } : {}) };
+};
+
+/**
+ * A project's GitHub account ({login, host, name, email}: the route checks it
+ * with gh and fills the commit identity) and Linear team key ("RLS"). Empty
+ * clears either. Applied in place to the stored object.
+ */
+function applyIdentity(target, patch) {
+  if (patch.github !== undefined) {
+    const g = patch.github;
+    if (g && g.login) target.github = { login: String(g.login), host: String(g.host || "github.com"), name: String(g.name || g.login), email: String(g.email || "") };
+    else delete target.github;
+  }
+  if (patch.linear !== undefined) {
+    const key = String(patch.linear || "").trim().toUpperCase();
+    if (key && !/^[A-Z][A-Z0-9]{0,9}$/.test(key)) throw new Error(`not a Linear team key: ${patch.linear}`);
+    if (key) target.linear = key;
+    else delete target.linear;
+  }
+}
 
 /**
  * How autonomous workers are in a project (Settings › Agents › Automation). Only
@@ -68,6 +90,7 @@ function updateRoot(patch) {
   const next = { ...rootPrefs() };
   if (patch.name !== undefined) next.name = String(patch.name).trim().slice(0, 60) || undefined;
   if (patch.auto !== undefined) next.auto = packAuto(next.auto, patch.auto);
+  applyIdentity(next, patch);
   if (patch.path !== undefined) {
     const dir = expand(patch.path);
     if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) throw new Error(`not a folder: ${dir}`);
@@ -144,6 +167,7 @@ function update(id, patch) {
   const p = all.find((x) => x.id === id);
   if (!p) throw new Error(`no such project: ${id}`);
   if (patch.name) p.name = String(patch.name).slice(0, 60);
+  applyIdentity(p, patch);
   if (patch.auto !== undefined) {
     const packed = packAuto(p.auto, patch.auto);
     if (packed) p.auto = packed;

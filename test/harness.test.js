@@ -57,6 +57,7 @@ const ENV = {
   BRIDGE_MCP_HOME: path.join(tmp, "home"),
   BRIDGE_URL: URL_,
   BRIDGE_TASK_ID: "",
+  BRIDGE_GH: path.join(tmp, "gh"),
 };
 
 let server = null;
@@ -115,6 +116,7 @@ async function spawnTask(title, brief, extra = {}) {
 
 test.before(async () => {
   makeRepo();
+  fs.writeFileSync(ENV.BRIDGE_GH, `#!/bin/sh\nexec "${process.execPath}" "${path.join(__dirname, "gh.js")}" "$@"\n`, { mode: 0o755 });
   fs.mkdirSync(DATA, { recursive: true });
   fs.writeFileSync(path.join(DATA, "config.json"), JSON.stringify({ harness: { relay: true, mode: "normal" } }));
   await startServer();
@@ -194,6 +196,44 @@ test("per-project automation: saved per project, rendered for its workers, expor
   await api("POST", "/api/projects/default", { auto: { decide: false } });
   assert.equal((await api("POST", `/api/projects/${project.id}`, { auto: { merge: false, resolve: false, rebase: true } })).project.auto.merge, false);
   assert.equal(JSON.parse(fs.readFileSync(path.join(DATA, "projects.json"), "utf8")).find((p) => p.id === project.id).auto, undefined);
+});
+
+test("a project's GitHub account and Linear team reach its workers", async () => {
+  const project = (await api("GET", "/api/projects")).projects.find((p) => !p.root);
+  assert.deepEqual((await api("GET", "/api/github/accounts")).accounts.map((a) => a.login), ["alex", "alex-work"]);
+  assert.equal((await api("POST", `/api/projects/${project.id}`, { github: "stranger" })).ok, false, "an account gh doesn't know");
+  assert.equal((await api("POST", `/api/projects/${project.id}`, { linear: "R-LS!" })).ok, false, "not a team key");
+
+  const saved = (await api("POST", `/api/projects/${project.id}`, { github: "alex-work", linear: "rls" })).project;
+  assert.deepEqual(saved.github, { login: "alex-work", host: "github.com", name: "alex-work", email: "42+alex-work@users.noreply.github.com" });
+  assert.equal(saved.linear, "RLS");
+
+  const t = await spawnTask("as work", "Commit as work.\nstub:report=ready-for-review");
+  await waitFor(idle(t.taskId), 15000, "idle");
+  const line = fs.readFileSync(ENV.STUB_LOG, "utf8").trim().split("\n").map(JSON.parse).filter((l) => l.argv && l.env.BRIDGE_TASK_ID === t.taskId).pop();
+  assert.equal(line.env.GIT_AUTHOR_EMAIL, "42+alex-work@users.noreply.github.com");
+  assert.equal(line.env.GH_TOKEN, "tok-work");
+  const sys = fs.readFileSync(line.argv[line.argv.indexOf("--append-system-prompt-file") + 1], "utf8");
+  assert.equal(sys.match(/^- This project: .*$/gm).length, 1, "one line");
+  assert.match(sys, /GitHub `alex-work`/);
+  assert.match(sys, /Linear team is `RLS`/);
+
+  // Linear keys are checked against the teams Bridge resolved, when it has some.
+  const idFile = path.join(DATA, "identity.json");
+  const before = fs.existsSync(idFile) ? fs.readFileSync(idFile, "utf8") : null;
+  fs.writeFileSync(idFile, JSON.stringify({ ...(before ? JSON.parse(before) : {}), linear: { teams: [{ key: "RLS", name: "Studio" }] } }));
+  assert.equal((await api("POST", `/api/projects/${project.id}`, { linear: "DEEP" })).ok, false, "not one of your teams");
+  if (before == null) fs.rmSync(idFile);
+  else fs.writeFileSync(idFile, before);
+
+  const cleared = (await api("POST", `/api/projects/${project.id}`, { github: "", linear: "" })).project;
+  assert.equal(cleared.github, undefined);
+  assert.equal(cleared.linear, undefined);
+  const plain = await spawnTask("as me", "Back to normal.\nstub:report=ready-for-review");
+  await waitFor(idle(plain.taskId), 15000, "idle");
+  const l2 = fs.readFileSync(ENV.STUB_LOG, "utf8").trim().split("\n").map(JSON.parse).filter((l) => l.argv && l.env.BRIDGE_TASK_ID === plain.taskId).pop();
+  assert.equal(l2.env.GH_TOKEN, process.env.GH_TOKEN, "no account: the server's own env");
+  assert.doesNotMatch(fs.readFileSync(l2.argv[l2.argv.indexOf("--append-system-prompt-file") + 1], "utf8"), /- This project:/);
 });
 
 test("needs-input → decision → answer goes back to the worker → ready", async () => {
