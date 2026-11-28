@@ -702,6 +702,24 @@ test("modes: quiet relays only what needs you; away holds and briefs on return",
   }, 10000, "catch-up relay");
 });
 
+test("a report rewritten with nothing new isn't relayed again; a new status is", async () => {
+  const t = await spawnTask("dedupe", "stub:report=ready-for-review", { by: "orchestrator" });
+  const orch = `orchestrator-${(await api("GET", "/api/projects")).projects.find((p) => !p.root).id}`;
+  const relays = async () => (((await api("GET", `/api/runs/${orch}`)).run || {}).messages || []).filter((m) => m.role === "relay" && m.text.includes(t.taskId)).length;
+  await waitFor(async () => (await relays()) === 1, 15000, "first relay");
+  await waitFor(idle(orch), 15000, "orchestrator idle");
+
+  // Same status, TL;DR and asks, different body: an OUTCOME, but no relay turn.
+  const hash = meta(t.taskId).reportHash;
+  assert.equal((await api("POST", `/api/runs/${t.taskId}/followup`, { text: "stub:note=Again." })).ok, true);
+  await waitFor(() => meta(t.taskId).reportHash !== hash, 15000, "rewritten report seen");
+  await new Promise((r) => setTimeout(r, 800));
+  assert.equal(await relays(), 1, "rewritten report not relayed");
+
+  assert.equal((await api("POST", `/api/runs/${t.taskId}/followup`, { text: "stub:report=blocked" })).ok, true);
+  await waitFor(async () => (await relays()) === 2, 15000, "new status relayed");
+});
+
 test("restart: a worker lost mid-turn is reported and resumable; reports written while down are caught up", async () => {
   const lost = await spawnTask("long", "stub:stall=60");
   await waitFor(async () => (await api("GET", "/api/state")).jobs.running.includes(lost.taskId), 5000);

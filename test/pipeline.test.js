@@ -159,7 +159,10 @@ test("the orchestrator's prompt carries the roster of every session, rebuilt eac
   const sys = fs.readFileSync(line.argv[line.argv.indexOf("--append-system-prompt-file") + 1], "utf8");
   assert.match(sys, /## Every session in all projects/);
   for (const s of before.sessions.filter((x) => x.id !== "orchestrator")) assert.ok(sys.includes(`\`${s.id}\``), `roster lists ${s.id}`);
-  assert.ok(sys.includes(t.transcript), "transcript path");
+  // File paths are one pattern, given once, not repeated per session.
+  assert.ok(sys.includes(t.transcript.replace(t.id, "<id>")), "transcript path pattern");
+  assert.ok(sys.includes(t.report.replace(t.id, "<id>")), "report path pattern");
+  assert.ok(!sys.includes(t.transcript), "no per-session transcript path");
   assert.ok(sys.includes(LINEAR), "Linear link");
   assert.ok(fs.existsSync(path.join(DATA, "tasks", "orchestrator.sessions.md")));
 
