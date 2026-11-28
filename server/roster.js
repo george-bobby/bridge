@@ -85,4 +85,21 @@ function forOrchestrator(run, opts = {}) {
   return { sessions, scope: all ? "all projects" : `project ${p ? p.name || p.id : run.project}`, all };
 }
 
-module.exports = { list, markdown, forOrchestrator, MAX };
+/**
+ * Why orchestrator `by` may not act on chat `id` (archive, stop, rename), or
+ * "" when it may: the chat must be in its scope (its project, or any for the
+ * default one), and never itself or another orchestrator.
+ */
+function refuse(by, id) {
+  const orch = store.loadRun(by);
+  if (!orch || orch.kind !== "orchestrator") return `${by} is not an orchestrator`;
+  if (id === by) return "an orchestrator can't do that to its own chat";
+  if (projects.isOrchestrator(id)) return "that's another orchestrator's chat";
+  const s = store.runSummary(id);
+  if (!s) return `no such chat: ${id}`;
+  const all = !orch.project || orch.project === projects.DEFAULT;
+  if (!all && s.project !== orch.project) return `${id} is in project ${s.project || "Default"}, outside this orchestrator's (${orch.project})`;
+  return "";
+}
+
+module.exports = { list, markdown, forOrchestrator, refuse, MAX };

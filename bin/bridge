@@ -21,6 +21,9 @@
  *   bridge triage <slack-item-id> actionable|skip "<reason>"   (start one with `bridge slack <permalink>`)
  *   bridge todo add <key> "<text>" [--url u] | bridge todo done <key>
  *   bridge cleanup <id> [--force]
+ *   bridge archive <id> [--delete-worktree] | bridge unarchive <id>   (orchestrator only, like stop and rename)
+ *   bridge stop <id>                          stop a chat's running turn
+ *   bridge rename <id> "<title>"
  *
  * The dashboard's address comes from $BRIDGE_URL (set in every harness session),
  * else BRIDGE_PORT in .env, else 4319.
@@ -292,6 +295,29 @@ async function main() {
       if (!pos[0]) die("cleanup <id> [--force]");
       const out = await call("POST", `/api/tasks/${encodeURIComponent(pos[0])}/cleanup`, { force: !!flags.force });
       console.log(`${out.removed ? "worktree removed" : out.note || "nothing to remove"}${out.branch ? `; branch ${out.branch} kept` : ""}${out.killed && out.killed.length ? `; stopped pids ${out.killed.join(", ")}` : ""}`);
+      return;
+    }
+    case "archive":
+    case "unarchive":
+    case "stop":
+    case "rename": {
+      // The orchestrator's hands on other chats; the server checks they're in its scope.
+      if (process.env.BRIDGE_ROLE !== "orchestrator" || !process.env.BRIDGE_TASK_ID) die(`${cmd} is the orchestrator's: ask the user to do it from the app`);
+      const usage = { archive: "archive <id> [--delete-worktree]", unarchive: "unarchive <id>", stop: "stop <id>", rename: 'rename <id> "<title>"' }[cmd];
+      if (!pos[0] || (cmd === "rename" && !pos[1])) die(usage);
+      const at = `/api/runs/${encodeURIComponent(pos[0])}`;
+      const by = process.env.BRIDGE_TASK_ID;
+      if (cmd === "stop") {
+        const out = await call("POST", `${at}/stop`, { by });
+        return console.log(out.ok ? "stopped" : "nothing running");
+      }
+      if (cmd === "rename") {
+        const out = await call("POST", `${at}/title`, { by, title: pos.slice(1).join(" ") });
+        return console.log(`renamed: ${out.title}`);
+      }
+      const out = await call("POST", `${at}/archive`, { by, archived: cmd === "archive", deleteWorktree: !!flags["delete-worktree"] });
+      const wt = out.worktree;
+      console.log(`${out.archived ? "archived" : "unarchived"}${wt ? (wt.removed ? `; worktree removed${wt.branch ? `, branch ${wt.branch} kept` : ""}` : `; ${wt.note || "worktree kept"}`) : flags["delete-worktree"] ? "; worktree kept (not one Bridge made, or already gone)" : ""}`);
       return;
     }
     default:

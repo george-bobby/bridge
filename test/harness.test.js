@@ -850,6 +850,69 @@ test("archive can delete the worktree Bridge made: refuses on unpushed work unle
   assert.ok(fs.existsSync(path.join(REPO, "README.md")), "the main checkout stays");
 });
 
+test("bridge archive|unarchive|stop|rename: an orchestrator's, within its scope; archive deletes only a safe worktree", async () => {
+  const proj = (await api("GET", "/api/projects")).projects.find((p) => p.path === REPO);
+  const orchId = (await api("POST", `/api/projects/${proj.id}/orchestrator`, {})).runId;
+  const defaultOrch = (await api("POST", "/api/projects/default/orchestrator", {})).runId;
+  const other = path.join(tmp, "other-repo");
+  fs.mkdirSync(other, { recursive: true });
+  git(["init", "-q", "-b", "main"], other);
+  const otherProj = (await api("POST", "/api/projects", { path: other })).project;
+  const otherOrch = (await api("POST", `/api/projects/${otherProj.id}/orchestrator`, {})).runId;
+  const as = (role, id, ...args) => {
+    const r = spawnSync(process.execPath, [path.join(ROOT, "bin", "bridge"), ...args], { env: { ...ENV, BRIDGE_ROLE: role, BRIDGE_TASK_ID: id }, encoding: "utf8" });
+    return { code: r.status, out: r.stdout, err: r.stderr };
+  };
+  const summary = async (id) => (await api("GET", "/api/runs")).runs.find((r) => r.runId === id);
+
+  const t = await spawnTask("orchestrated chat", "x", { start: false });
+  // A worker can't; another project's orchestrator can't; nor can one act on itself or another orchestrator.
+  assert.match(as("task", t.taskId, "archive", t.taskId).err, /orchestrator's/);
+  const far = as("orchestrator", otherOrch, "archive", t.taskId);
+  assert.notEqual(far.code, 0);
+  assert.match(far.err, /outside this orchestrator's/);
+  assert.match(as("orchestrator", otherOrch, "stop", t.taskId).err, /outside/);
+  assert.match(as("orchestrator", otherOrch, "rename", t.taskId, "nope").err, /outside/);
+  assert.match(as("orchestrator", orchId, "archive", orchId).err, /its own chat/);
+  assert.match(as("orchestrator", orchId, "archive", defaultOrch).err, /another orchestrator/);
+  assert.equal((await api("POST", `/api/runs/${t.taskId}/archive`, { by: t.taskId })).status, 403, "`by` must be an orchestrator");
+  assert.ok(!(await summary(t.taskId)).archived);
+
+  // Rename: its project's orchestrator and the default one (every project) both can.
+  let r = as("orchestrator", orchId, "rename", t.taskId, "Renamed", "by", "orchestrator");
+  assert.equal(r.code, 0, r.err);
+  assert.equal((await summary(t.taskId)).task.title, "Renamed by orchestrator");
+  assert.equal(as("orchestrator", defaultOrch, "rename", t.taskId, "Renamed again").code, 0);
+  assert.equal((await summary(t.taskId)).task.title, "Renamed again");
+
+  // Archive with --delete-worktree refuses on uncommitted work (no force from an orchestrator).
+  fs.writeFileSync(path.join(t.worktree, "wip.txt"), "wip\n");
+  r = as("orchestrator", orchId, "archive", t.taskId, "--delete-worktree");
+  assert.equal(r.code, 3, r.err);
+  assert.match(r.err, /refusing/);
+  assert.equal((await api("POST", `/api/runs/${t.taskId}/archive`, { by: orchId, deleteWorktree: true, force: true })).status, 409, "force is the app's");
+  assert.ok(fs.existsSync(t.worktree), "worktree kept");
+  assert.ok(!(await summary(t.taskId)).archived, "not archived either");
+  fs.rmSync(path.join(t.worktree, "wip.txt"));
+  r = as("orchestrator", orchId, "archive", t.taskId, "--delete-worktree");
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.out, /archived; worktree removed/);
+  assert.ok(!fs.existsSync(t.worktree), "worktree removed");
+  assert.ok(git(["rev-parse", "--verify", "--quiet", `refs/heads/${t.branch}`]), "branch kept");
+  assert.equal((await summary(t.taskId)).archived, true, "the chat is kept, archived");
+  r = as("orchestrator", orchId, "unarchive", t.taskId);
+  assert.equal(r.code, 0, r.err);
+  assert.equal((await summary(t.taskId)).archived, false);
+
+  // Stop ends a running turn.
+  const live = await spawnTask("long turn", "stub:stall=20");
+  await waitFor(async () => (await api("GET", "/api/state")).jobs.running.includes(live.taskId), 10000, "running");
+  r = as("orchestrator", orchId, "stop", live.taskId);
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.out, /stopped/);
+  await waitFor(idle(live.taskId), 10000, "stopped");
+});
+
 test("bridge plan: a worker's task list, set, ticked and shown on its session", async () => {
   const t = await spawnTask("planny", "stub:report=ready-for-review");
   await waitFor(statusIs(t.taskId, "ready-for-review"), 15000, "report");

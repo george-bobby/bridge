@@ -89,6 +89,17 @@ test("Bridge's own API: a session writes only what bin/bridge sends; reads pass"
   assert.equal(verdict("curl -X POST http://localhost:39999/api/login -d x"), "ask", "another local server's API asks");
 });
 
+test("archive, stop and rename (bridge archive|unarchive|stop|rename) are an orchestrator's writes only", () => {
+  const port = require("../server/env").port;
+  const as = (role, p) => (check("Bash", { command: `curl -X POST http://127.0.0.1:${port}${p} -d '{}'` }, { ...P, role }) || { decision: "pass" }).decision;
+  for (const p of ["/api/runs/t-1/archive", "/api/runs/t-1/stop", "/api/runs/t-1/title"]) {
+    assert.equal(as("orchestrator", p), "pass", `orchestrator ${p}`);
+    assert.equal(as("task", p), "deny", `worker ${p}`);
+    assert.equal(as("", p), "deny", `no role ${p}`);
+  }
+  assert.equal(as("orchestrator", "/api/runs/t-1/answer"), "deny", "the rest of the API stays the app's");
+});
+
 test("gh: PR workflow passes, merges and issue writes ask, review replies follow policy", () => {
   for (const ok of ["gh pr create --fill", "gh pr edit 12 --body x", "gh pr view 12", "gh api repos/o/r/pulls/12", "gh pr comment 12 -b hi", "gh api -X POST repos/o/r/pulls/12/comments/9/replies -f body=x"]) {
     assert.equal(verdict(ok), "pass", ok);

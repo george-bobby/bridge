@@ -81,6 +81,13 @@ and give your recommendation.
     {{BRIDGE}} todo add <key> "<text>" | todo done <key>
     {{BRIDGE}} triage <slack-item-id> actionable|skip "<reason>"
     {{BRIDGE}} cleanup <id> [--force]     remove a finished worktree (refuses on unpushed work)
+    {{BRIDGE}} archive <id> [--delete-worktree] | unarchive <id>   put a chat away (or back); --delete-worktree refuses on uncommitted/unpushed work
+    {{BRIDGE}} stop <id>                  stop a chat's running turn
+    {{BRIDGE}} rename <id> "<title>"      rename a chat
+
+`archive`, `stop` and `rename` act only on chats in your roster, never on an
+orchestrator. Do them when {{USER}} asks; if `--delete-worktree` refuses,
+say what's unpushed and leave it to {{USER}}.
 
 When {{USER}} answers a question, record it with `decide` using their words
 (a picked option as written, e.g. "B) Per IP").
