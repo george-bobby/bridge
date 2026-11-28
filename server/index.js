@@ -37,6 +37,7 @@ const tasks = require("./tasks");
 const sources = require("./sources");
 const projects = require("./projects");
 const identity = require("./identity");
+const accounts = require("./accounts");
 const dotenv = require("./dotenv");
 const slack = env.demo ? require("./demo").slack : require("./slack");
 const watcher = require("./watch");
@@ -247,6 +248,26 @@ const server = http.createServer((req, res) => {
     else res.end();
   });
 });
+
+/**
+ * A project patch's GitHub account (a login, or {login, host}) checked with gh
+ * and turned into its commit identity; its Linear team key checked against the
+ * teams Bridge resolved (any key passes when none are known).
+ */
+async function projectIdentity(body) {
+  const out = { ...body };
+  if (body.github) {
+    const g = typeof body.github === "string" ? { login: body.github } : body.github;
+    out.github = await accounts.profile(String(g.login || ""), String(g.host || "github.com"));
+  }
+  if (body.linear) {
+    const key = String(body.linear).trim().toUpperCase();
+    const teams = ((identity.cached().linear || {}).teams || []).map((t) => t.key);
+    if (teams.length && !teams.includes(key)) throw new Error(`no Linear team ${key} (yours: ${teams.join(", ")})`);
+    out.linear = key;
+  }
+  return out;
+}
 
 async function handle(req, res) {
   const url = new URL(req.url, `http://localhost:${PORT}`);
@@ -644,6 +665,11 @@ async function handle(req, res) {
     }
   }
 
+  // --- the GitHub accounts gh is logged in to (a project's commit identity) ---
+  if (req.method === "GET" && p === "/api/github/accounts") {
+    return sendJson(res, 200, { ok: true, accounts: await accounts.list({ refresh: url.searchParams.get("refresh") === "1" }) });
+  }
+
   // --- projects: the repos in the sidebar, each with its own orchestrator ---
   if (p === "/api/projects" || p.startsWith("/api/projects/")) {
     try {
@@ -654,7 +680,7 @@ async function handle(req, res) {
       if (req.method === "GET" && p === "/api/projects") out = { projects: all() };
       else if (req.method === "POST" && p === "/api/projects") out = { project: projects.add(body) };
       else if (m && req.method === "POST" && m[2]) out = { runId: harness.ensureOrchestrator(m[1]).runId };
-      else if (m && req.method === "POST") out = { project: projects.update(m[1], body) };
+      else if (m && req.method === "POST") out = { project: projects.update(m[1], await projectIdentity(body)) };
       else if (m && req.method === "DELETE") out = (projects.remove(m[1]), {});
       else return sendJson(res, 404, { ok: false, error: `no project route for ${req.method} ${p}` });
       if (req.method !== "GET") {

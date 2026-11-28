@@ -127,7 +127,7 @@ struct SettingEntry {
         .init(pane: .agents, title: "Opening skill", words: "opening skill worker skill fetch new session", query: "opening skill"),
         .init(pane: .agents, title: "Stalled after", words: "stalled silence minutes stall", query: "stalled"),
         .init(pane: .agents, title: "Auto-archive merged chats", words: "auto archive merged days pr", query: "auto archive"),
-        .init(pane: .agents, title: "Automation", words: "automation auto merge review resolve rebase decide workers project", query: "automation"),
+        .init(pane: .agents, title: "Automation", words: "automation auto merge review resolve rebase decide workers project github account linear team", query: "automation"),
         .init(pane: .rules, title: "Common rules", words: "common rules house rules instructions prompt worktree rebase branch pr markdown edit", query: "common rules"),
         .init(pane: .mcp, title: "MCP servers", words: "mcp server tools customize", query: ""),
         .init(pane: .plugins, title: "Plugins", words: "plugins plugin claude code codex cursor devin marketplace install remove", query: ""),

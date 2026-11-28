@@ -53,6 +53,7 @@ const crypto = require("crypto");
 const path = require("path");
 const fs = require("fs");
 const projects = require("./projects");
+const accounts = require("./accounts");
 const agents = require("./agents");
 
 const { EventEmitter } = require("events");
@@ -264,6 +265,18 @@ function automationBlock(auto) {
   return `## This project's automation\n\n${lines.join("\n")}\n- None of this extends to Slack, Linear or new threads anywhere: those stay drafts for {{USER}}.\n`;
 }
 
+/** One line for a project's GitHub account and Linear team, or "". */
+function identityLine(project) {
+  const g = project && project.github;
+  const li = project && project.linear;
+  if (!g && !li) return "";
+  const parts = [
+    g && `commits, \`gh\` and pushes already run as GitHub \`${g.login}\` (don't switch gh accounts or set git user)`,
+    li && `its Linear team is \`${li}\` (issues, keys and branch names)`,
+  ].filter(Boolean);
+  return `- This project: ${parts.join("; ")}.`;
+}
+
 /** The appended system prompt for a session: worker contract or orchestrator. */
 function systemPrompt(run, config) {
   const role = roleOf(run);
@@ -281,6 +294,8 @@ function systemPrompt(run, config) {
   }
   const p = tasks.paths(run.runId);
   const meta = tasks.readMeta(run.runId) || {};
+  const project = projects.get(projectOf(run));
+  const ident = identityLine(project);
   const where =
     role === "task"
       ? [
@@ -288,6 +303,7 @@ function systemPrompt(run, config) {
           `- Your worktree (you are in it): ${meta.worktree || "(none)"}`,
           `- Your branch: ${meta.branch || "(none)"}, from ${meta.from || "the default branch"}`,
           "- If the repo needs setup in a fresh worktree (dependency install, env files), follow its CLAUDE.md. Copy env files by name; never print them.",
+          ...(ident ? [ident] : []),
           "",
           memory.block(projects.of(run, meta)),
         ].join("\n")
@@ -295,10 +311,10 @@ function systemPrompt(run, config) {
           `- This is a Slack-thread pipeline run: the ${slackDriver(run)} governs the work; the report contract above governs the hand-off.`,
           `- When you create the worktree, record it: \`${path.join(ROOT, "scripts", "emit.sh")} ${run.runId} build "<one line>" worktree=<abs path> branch=<name>\``,
           "- The pipeline's closing JSON verdict is still required, after the report.",
+          ...(ident ? [ident] : []),
           "",
           memory.block((config.harness && config.harness.pipelineProject) || projects.of(run, meta)),
         ].join("\n");
-  const project = projects.get(projectOf(run));
   const auto = fill(automationBlock(project && project.auto), { USER });
   return `${fill(read("worker.md"), { USER, BRIDGE, TASK_ID: run.runId, REPORT: p.report, BRIEF: p.brief, WHERE: where }).trimEnd()}\n\n${auto ? `${auto}\n` : ""}${house}`;
 }
@@ -643,8 +659,11 @@ function sessionEnv(run, kind, role) {
   // Set when Bridge itself runs inside an IDE agent session; Devin then
   // refuses to use its own login ("Not logged in").
   delete base.ACP_BACKEND;
+  const project = projects.get(projectOf(run));
   return {
     ...base,
+    // The project's GitHub account: commit identity, gh and https pushes on its token.
+    ...accounts.sessionEnv(project && project.github),
     // `claude` and uvx (which some MCP servers are spawned through) live outside
     // launchd's default PATH — see EXTRA_PATH in .env.
     PATH: `${env.extraPath}:${process.env.PATH || "/usr/bin:/bin"}`,
@@ -2151,6 +2170,7 @@ module.exports = {
   interrupt,
   systemPrompt,
   automationBlock,
+  identityLine,
   startFollowup,
   startPipeline,
   answerAsk,
