@@ -42,13 +42,32 @@ function rootDir() {
   }
   return os.homedir();
 }
-const rootProject = () => ({ id: DEFAULT, name: rootPrefs().name || "Default", path: rootDir(), root: true });
+const rootProject = () => ({ id: DEFAULT, name: rootPrefs().name || "Default", path: rootDir(), root: true, auto: automation(rootPrefs().auto) });
+
+/**
+ * How autonomous workers are in a project (Settings › Projects). Only
+ * "rebase" is on by default: it is already a house rule. Hard limits (no
+ * Slack, Linear or new threads; no admin merge) hold whatever these say.
+ */
+const AUTO = { merge: false, review: false, resolve: false, rebase: true, decide: false };
+function automation(raw) {
+  const out = { ...AUTO };
+  for (const k of Object.keys(AUTO)) if (raw && typeof raw[k] === "boolean") out[k] = raw[k];
+  return out;
+}
+/** Stored form: only what differs from the defaults (undefined when nothing does). */
+function packAuto(prev, patch) {
+  const next = automation({ ...automation(prev), ...(patch || {}) });
+  const diff = Object.fromEntries(Object.keys(AUTO).filter((k) => next[k] !== AUTO[k]).map((k) => [k, next[k]]));
+  return Object.keys(diff).length ? diff : undefined;
+}
 
 /** Rename Default or point it at another folder (any folder: it needn't be a repo). */
 function updateRoot(patch) {
   if (patch.index !== undefined) throw new Error("Default stays first");
   const next = { ...rootPrefs() };
   if (patch.name !== undefined) next.name = String(patch.name).trim().slice(0, 60) || undefined;
+  if (patch.auto !== undefined) next.auto = packAuto(next.auto, patch.auto);
   if (patch.path !== undefined) {
     const dir = expand(patch.path);
     if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) throw new Error(`not a folder: ${dir}`);
@@ -95,12 +114,15 @@ function list(fallbackRepo = "") {
   return all;
 }
 
+const withAuto = (p) => ({ ...p, auto: automation(p.auto) });
+
 /** Default first, then every project: what the sidebar and pickers show. */
-const withRoot = (fallbackRepo = "") => [rootProject(), ...list(fallbackRepo)];
+const withRoot = (fallbackRepo = "") => [rootProject(), ...list(fallbackRepo).map(withAuto)];
 
 function get(id) {
   if (id === DEFAULT) return rootProject();
-  return list().find((p) => p.id === id) || null;
+  const p = list().find((x) => x.id === id);
+  return p ? withAuto(p) : null;
 }
 
 function add({ path: repo, name }) {
@@ -108,12 +130,12 @@ function add({ path: repo, name }) {
   if (!path.isAbsolute(dir) || !fs.existsSync(path.join(dir, ".git"))) throw new Error(`not a git checkout: ${dir}`);
   const all = list();
   const existing = all.find((p) => p.path === dir);
-  if (existing) return existing;
+  if (existing) return withAuto(existing);
   let id = slug(name || path.basename(dir));
   while (id === DEFAULT || all.some((p) => p.id === id)) id = `${id}-2`;
   const p = { id, name: String(name || path.basename(dir)).slice(0, 60), path: dir, createdAt: Date.now() };
   write([...all, p]);
-  return p;
+  return withAuto(p);
 }
 
 function update(id, patch) {
@@ -122,6 +144,11 @@ function update(id, patch) {
   const p = all.find((x) => x.id === id);
   if (!p) throw new Error(`no such project: ${id}`);
   if (patch.name) p.name = String(patch.name).slice(0, 60);
+  if (patch.auto !== undefined) {
+    const packed = packAuto(p.auto, patch.auto);
+    if (packed) p.auto = packed;
+    else delete p.auto;
+  }
   if (patch.index !== undefined) {
     // An index among the real projects (Default is always first, outside them).
     const to = Math.max(0, Math.min(all.length - 1, Math.floor(Number(patch.index)) || 0));
@@ -129,7 +156,7 @@ function update(id, patch) {
     all.splice(to, 0, p);
   }
   write(all);
-  return p;
+  return withAuto(p);
 }
 
 function remove(id) {
@@ -161,4 +188,4 @@ function of(run, meta = {}) {
 const orchestratorId = (projectId) => (!projectId || projectId === DEFAULT ? "orchestrator" : `orchestrator-${projectId}`);
 const isOrchestrator = (runId) => runId === "orchestrator" || String(runId || "").startsWith("orchestrator-");
 
-module.exports = { list, withRoot, get, add, update, remove, of, rootDir, DEFAULT, orchestratorId, isOrchestrator, FILE };
+module.exports = { list, withRoot, get, add, update, remove, of, rootDir, automation, AUTO, DEFAULT, orchestratorId, isOrchestrator, FILE };

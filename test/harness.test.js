@@ -158,6 +158,43 @@ test("spawn → worker in its own worktree → report → relayed, main checkout
   assert.equal(o.kind, "orchestrator");
 });
 
+test("per-project automation: saved per project, rendered for its workers, exported to the guard", async () => {
+  const project = (await api("GET", "/api/projects")).projects.find((p) => !p.root);
+  assert.deepEqual(project.auto, { merge: false, review: false, resolve: false, rebase: true, decide: false });
+  const sysOf = (id) => {
+    const line = fs.readFileSync(ENV.STUB_LOG, "utf8").trim().split("\n").map(JSON.parse).filter((l) => l.argv && l.env.BRIDGE_TASK_ID === id).pop();
+    return { env: line.env, sys: fs.readFileSync(line.argv[line.argv.indexOf("--append-system-prompt-file") + 1], "utf8") };
+  };
+
+  const plain = await spawnTask("defaults", "Nothing to automate.\nstub:report=ready-for-review");
+  await waitFor(idle(plain.taskId), 15000, "idle");
+  assert.doesNotMatch(sysOf(plain.taskId).sys, /This project's automation/, "all defaults: nothing added");
+  assert.equal(sysOf(plain.taskId).env.BRIDGE_PROJECT, project.id);
+
+  const saved = await api("POST", `/api/projects/${project.id}`, { auto: { merge: true, resolve: true, rebase: false, bogus: true } });
+  assert.deepEqual(saved.project.auto, { merge: true, review: false, resolve: true, rebase: false, decide: false });
+  const stored = JSON.parse(fs.readFileSync(path.join(DATA, "projects.json"), "utf8")).find((p) => p.id === project.id);
+  assert.deepEqual(stored.auto, { merge: true, resolve: true, rebase: false }, "only what differs from the defaults is stored");
+
+  const t = await spawnTask("automated", "Merge it when green.\nstub:report=ready-for-review");
+  await waitFor(idle(t.taskId), 15000, "idle");
+  const { sys } = sysOf(t.taskId);
+  assert.match(sys, /## This project's automation/);
+  assert.match(sys, /gh pr merge <n> --merge/);
+  assert.match(sys, /- Resolve:/);
+  assert.match(sys, /- Rebase: optional/);
+  assert.match(sys, /stay drafts for Alex/);
+  assert.doesNotMatch(sys, /- Review:|- Small decisions:/, "only the enabled toggles");
+
+  // Default keeps its own settings in data/default.json.
+  const def = await api("POST", "/api/projects/default", { auto: { decide: true } });
+  assert.equal(def.project.auto.decide, true);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(DATA, "default.json"), "utf8")).auto, { decide: true });
+  await api("POST", "/api/projects/default", { auto: { decide: false } });
+  assert.equal((await api("POST", `/api/projects/${project.id}`, { auto: { merge: false, resolve: false, rebase: true } })).project.auto.merge, false);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(DATA, "projects.json"), "utf8")).find((p) => p.id === project.id).auto, undefined);
+});
+
 test("needs-input → decision → answer goes back to the worker → ready", async () => {
   const t = await spawnTask("pick a format", "stub:report=needs-input\nstub:question=CSV or JSON? (recommend CSV)");
   await waitFor(statusIs(t.taskId, "needs-input"), 15000, "needs-input");
