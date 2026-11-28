@@ -29,7 +29,7 @@ struct InboxView: View {
                 .init(id: "quiet", label: "Quiet", icon: "moon"),
                 .init(id: "away", label: "Away", icon: "airplane"),
             ], selection: Binding(get: { model.inbox["mode"].nonEmpty ?? "normal" }, set: { m in Task { await model.setMode(m) } }))
-            .help("Normal relays everything to the orchestrator; quiet only what needs you; away holds it all for one catch-up")
+            .help("Normal: you decide everything. Quiet: Bridge takes routine approvals with the recommended option; only risky or outward things reach you. Away: the orchestrator runs things and leaves you one digest")
             BriefButton(orchestrator: model.orchestrator?.id ?? "orchestrator")
         }
     }
@@ -99,6 +99,10 @@ private struct AskStyle {
             (label, icon, tint, verb) = ("Approval", "hand.raised.fill", T.orange, "Approve")
             hint = "Approve sends the session to make this write; you see the exact payload once more before it goes out."
             placeholder = "Anything to add (optional)"
+        case "digest":
+            (label, icon, tint, verb) = ("Handled for you", "checklist", T.green, "Got it")
+            hint = "What Bridge and the orchestrator decided on their own in quiet or away mode. Open the chat for more."
+            placeholder = ""
         case "resume":
             (label, icon, tint, verb) = ("Stopped", "arrow.clockwise.circle.fill", T.yellow, "Resume")
             hint = "The session stopped before it finished. Resume picks it up where it left off."
@@ -174,7 +178,7 @@ struct DecisionRow: View {
 
     var controls: some View {
         HStack(spacing: 8) {
-            LField(placeholder: style.placeholder, text: $answer.v) { send() }
+            if kind != "digest" { LField(placeholder: style.placeholder, text: $answer.v) { send() } } else { Spacer() }
             if kind == "question" {
                 Button(style.verb) { send() }.buttonStyle(LButton(primary: options.isEmpty)).disabled(typed.isEmpty)
             } else {

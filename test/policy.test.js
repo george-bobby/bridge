@@ -3,9 +3,11 @@ const assert = require("node:assert");
 const { spawnSync } = require("child_process");
 const path = require("path");
 
+// A scratch data folder: the real config's mode (quiet/away) must not leak in.
+process.env.BRIDGE_DATA_DIR = require("fs").mkdtempSync(path.join(require("os").tmpdir(), "bridge-policy-"));
 const { check, DEFAULT_POLICY } = require("../server/policy");
 
-const P = { policy: { ...DEFAULT_POLICY }, auto: {} };
+const P = { policy: { ...DEFAULT_POLICY }, auto: {}, mode: "normal" };
 const bash = (command) => check("Bash", { command }, P);
 const verdict = (command) => (bash(command) || { decision: "pass" }).decision;
 
@@ -196,7 +198,7 @@ test("the hook reads the session's project (BRIDGE_PROJECT) for auto-merge", () 
 });
 
 test("policy overrides relax a category without touching the rails", () => {
-  const relaxed = { policy: { ...DEFAULT_POLICY, prComments: "ask", chat: "allow" } };
+  const relaxed = { policy: { ...DEFAULT_POLICY, prComments: "ask", chat: "allow" }, mode: "normal" };
   assert.equal(check("Bash", { command: "gh pr comment 1 -b x" }, relaxed).decision, "ask");
   assert.equal(check("mcp__acme__slack_send_message", { text: "hi" }, relaxed), null);
   assert.equal(check("Bash", { command: "pkill node" }, relaxed).decision, "deny");

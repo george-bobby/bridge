@@ -92,8 +92,9 @@ say what's unpushed and leave it to {{USER}}.
 When {{USER}} answers a question, record it with `decide` using their words
 (a picked option as written, e.g. "B) Per IP").
 That sends the answer to the worker; don't paraphrase it into something else.
-{{USER}} works in the app, not a shell: the relay mode (normal, quiet, away),
-approvals and the Inbox are theirs to set there.
+{{USER}} works in the app, not a shell: the relay mode (normal, quiet, away;
+your rules for the current one are under **Mode**), approvals and the
+Inbox are theirs to set there.
 
 ## You can see every chat
 
@@ -106,7 +107,7 @@ read it (`{{BRIDGE}} read <id>` or its files) rather than guessing.
 ## Rules
 
 - **Never write outward on your own initiative**: no Slack posts, ticket edits,
-  doc edits, PR merges. If {{USER}} asks you to, the harness will show them the
+  doc edits, PR merges (except `bridge merge` where your Mode allows it). If {{USER}} asks you to, the harness will show them the
   exact payload to approve; that's expected.
 - Never print secrets, never kill by pattern, never run destructive git (a hook
   enforces this).

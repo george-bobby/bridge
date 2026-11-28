@@ -29,6 +29,7 @@ const fs = require("fs");
 const path = require("path");
 
 const env = require("./env");
+const modes = require("./modes");
 
 const USER = process.env.SLACK_USER_NAME || env.slackUserName || "the user";
 const CONFIG = path.join(process.env.BRIDGE_DATA_DIR || path.join(__dirname, "..", "data"), "config.json");
@@ -62,6 +63,15 @@ const CATEGORY_LABEL = {
   destructiveGit: "a destructive git command",
 };
 
+/** The relay mode (harness.mode): quiet and away relax some asks, see server/modes.js. */
+function loadMode() {
+  try {
+    return modes.mode((JSON.parse(fs.readFileSync(CONFIG, "utf8")).harness || {}).mode);
+  } catch {
+    return "normal";
+  }
+}
+
 function loadPolicy() {
   try {
     const raw = JSON.parse(fs.readFileSync(CONFIG, "utf8"));
@@ -80,8 +90,16 @@ function loadPolicy() {
 
 const deny = (reason, category = "safety") => ({ decision: "deny", reason, category });
 
-function gate(category, what, policy) {
+/**
+ * An outward or destructive call: `ask` per the policy, then adjusted for the
+ * mode (`policy.mode`): away refuses hard limits (`toMain`: a force-push that
+ * reaches main).
+ */
+function gate(category, what, policy, { toMain = false } = {}) {
   if (policy[category] !== "ask") return null;
+  const m = modes.gate(policy.mode, { category, toMain });
+  if (m === "allow") return null;
+  if (m === "deny") return { decision: "deny", category, reason: modes.denyReason(category, USER) };
   return {
     decision: "ask",
     category,
@@ -380,21 +398,21 @@ function checkGit(t, policy, branchAt = NO_BRANCH) {
   const what = `git ${[sub, ...args].join(" ")}`.slice(0, 120);
 
   if (sub === "push") {
+    // A refspec's target is its dst (src:dst, refs/heads/x, x); a bare `HEAD`
+    // and no refspec at all push the current branch, resolved in the session's
+    // folder. Away refuses a force-push that reaches main (server/modes.js).
+    const dst = (r) => (r.replace(/^\+/, "").split(":").pop() || "").replace(/^refs\/heads\//, "").replace(/^HEAD$/, "");
+    const pushed = args.filter((a) => !a.startsWith("-")).slice(1).map(dst);
+    const targets = (pushed.length ? pushed : [""]).map((b) => b || branchAt(gitDir));
+    const toMain = has(/^(--all|--mirror)$/) || targets.some((b) => /^(main|master)$/.test(b || ""));
     // Force without a lease, deletes and prunes stay gated whatever the branch.
     if (has(/^(-f|--force|--mirror|--delete|-d|--prune)$/) || has(/^-[a-zA-Z]*f[a-zA-Z]*$/) || has(/^\+/) || has(/^:/)) {
-      return gate("destructiveGit", what, policy);
+      return gate("destructiveGit", what, policy, { toMain });
     }
     if (has(/^--force-with-lease/)) {
       // The workflow's own rebase push: allowed unless it can reach main or
-      // master. A refspec's target is its dst (src:dst, refs/heads/x, x); a
-      // bare `HEAD` and no refspec at all push the current branch, which the
-      // guard resolves in the session's folder. An unknown target asks.
-      const dst = (r) => (r.split(":").pop() || "").replace(/^refs\/heads\//, "").replace(/^HEAD$/, "");
-      const pushed = args.filter((a) => !a.startsWith("-")).slice(1).map(dst);
-      const targets = pushed.length ? pushed : [""];
-      if (has(/^--all$/) || targets.some((b) => { const t = b || branchAt(gitDir); return !t || /^(main|master)$/.test(t); })) {
-        return gate("destructiveGit", what, policy);
-      }
+      // master. An unknown target asks.
+      if (toMain || targets.some((b) => !b)) return gate("destructiveGit", what, policy, { toMain });
       return null;
     }
   }
@@ -449,7 +467,8 @@ function checkGh(t, policy) {
  */
 const BRIDGE_WRITES = [
   /^\/api\/tasks$/,
-  /^\/api\/tasks\/[^/]+\/(relaunch|declare|plan|cleanup)$/,
+  /^\/api\/tasks\/[^/]+\/(relaunch|declare|plan|cleanup|merge)$/,
+  /^\/api\/log$/,
   /^\/api\/runs$/,
   /^\/api\/runs\/[^/]+\/(followup|event|agent)$/,
   /^\/api\/decisions\/[^/]+$/,
@@ -650,9 +669,9 @@ function projectAuto(id = process.env.BRIDGE_PROJECT) {
  * checkout (the guard looks it up with lsof); without it every other local
  * API write asks.
  */
-function check(toolName, toolInput = {}, { policy = loadPolicy(), auto = projectAuto(), role: who = process.env.BRIDGE_ROLE || "", ownServer = NOT_OWN, branchAt = NO_BRANCH } = {}) {
+function check(toolName, toolInput = {}, { policy = loadPolicy(), auto = projectAuto(), role: who = process.env.BRIDGE_ROLE || "", ownServer = NOT_OWN, branchAt = NO_BRANCH, mode = loadMode() } = {}) {
   role = who;
-  policy = { ...policy, autoMerge: !!(auto && auto.merge) };
+  policy = { ...policy, autoMerge: !!(auto && auto.merge), mode };
   const name = String(toolName || "");
   const input = toolInput || {};
   if (name === "Bash") return checkBash(input.command, policy, ownServer, branchAt);
@@ -667,4 +686,4 @@ function check(toolName, toolInput = {}, { policy = loadPolicy(), auto = project
   return null;
 }
 
-module.exports = { check, loadPolicy, projectAuto, DEFAULT_POLICY, segments };
+module.exports = { check, loadPolicy, loadMode, projectAuto, DEFAULT_POLICY, segments };

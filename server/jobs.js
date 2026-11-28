@@ -66,6 +66,7 @@ const memory = require("./memory");
 const pipeline = require("./pipeline");
 const roster = require("./roster");
 const commonRules = require("./rules");
+const modes = require("./modes");
 
 const ROOT = path.join(__dirname, "..");
 const USER = env.slackUserName;
@@ -290,7 +291,8 @@ function systemPrompt(run, config) {
       DATA: env.dataDir,
       REPO: project ? project.path : resolveWorkdir(config, null),
     });
-    return `${base}\n\n${house}${orchestratorRoster(run)}\n`;
+    const mode = modes.mode(((config && config.harness) || store.readConfig().harness || {}).mode);
+    return `${base}\n\n## Mode\n\n${modeLines(mode)}\n\n${house}${orchestratorRoster(run)}\n`;
   }
   const p = tasks.paths(run.runId);
   const meta = tasks.readMeta(run.runId) || {};
@@ -318,6 +320,9 @@ function systemPrompt(run, config) {
   const auto = fill(automationBlock(project && project.auto), { USER });
   return `${fill(read("worker.md"), { USER, BRIDGE, TASK_ID: run.runId, REPORT: p.report, BRIEF: p.brief, WHERE: where }).trimEnd()}\n\n${auto ? `${auto}\n` : ""}${house}`;
 }
+
+/** The active mode's few lines for the orchestrator (server/modes.js). */
+const modeLines = (mode) => modes.orchestratorLines(mode, { user: USER, bridge: BRIDGE });
 
 /* ------------------------------------------------------- orchestrator roster */
 
@@ -524,6 +529,14 @@ function launch(run, { prompt: ask, kind, config, label }) {
       prompt = `<instructions>\n${systemPrompt(run, config)}\n</instructions>\n\n${prompt}`;
       briefingImport.add(run.runId);
     } catch {}
+  }
+  // The orchestrator's mode lines live in its system prompt, which a resumed
+  // session never re-reads: a turn after the mode changed carries them once.
+  if (roleOf(run) === "orchestrator" && kind !== "compact") {
+    const mode = modes.mode(((config && config.harness) || {}).mode);
+    const firstTurn = agent === "claude" ? fresh : !(run.agentSessions || {})[agent];
+    if (run.modeSeen !== mode && !firstTurn && !run.imported) prompt = `(Bridge: the relay mode changed.\n${modeLines(mode)})\n\n${prompt}`;
+    run.modeSeen = mode;
   }
   const reply = store.appendMessage(run, {
     role: "assistant",
@@ -1485,11 +1498,28 @@ function wire(child, runId, msgId, kind) {
       run.pendingAsk = { id: askId, msgId, tool, summary: askSummary(ask), askedAt: ask.askedAt };
     });
 
+    // Quiet and away take the routine ones here: a question whose options
+    // carry one "(Recommended)", or a local tool prompt from the session's own
+    // permission mode (never one the guard raised). See server/modes.js.
+    const mode = (store.readConfig().harness || {}).mode;
+    const picks = tool === "AskUserQuestion" ? modes.autoQuestions(mode, input.questions) : null;
+    const guarded = tool !== "AskUserQuestion" && !!require("./policy").check(tool, input);
+    if (picks || (tool !== "AskUserQuestion" && tool !== "ExitPlanMode" && !ask.requiresUser && modes.autoAllow(mode, { tool, input, guarded }))) {
+      setImmediate(() => {
+        try {
+          answerAsk(runId, askId, { behavior: "allow", answers: picks });
+          events.emit("auto", { runId, text: picks ? `answered "${Object.values(picks).join("; ")}"`.slice(0, 200) : `allowed ${tool}: ${detail}`.slice(0, 200) });
+        } catch {}
+      });
+      return;
+    }
+
     // Everything the browser needs to raise a notification without going back
     // to the server for it: who is waiting, where, and what for. The page turns
     // this into a desktop notification that deep-links to this exact chat.
     const run = store.loadRun(runId);
     bus.broadcast("ask", {
+      notify: modes.notify(mode, { kind: "ask" }),
       runId,
       msgId,
       i,
