@@ -39,7 +39,7 @@ struct InboxView: View {
         return VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
                 SlidingTabs(tabs: [
-                    .init(id: "decisions", label: "Needs you", count: model.decisions.count, hot: true),
+                    .init(id: "decisions", label: "Needs you", count: model.decisions.count + model.permissions.count, hot: true),
                     .init(id: "slack", label: "Slack", count: model.slackOpenCount, hot: model.slackOpenCount > 0),
                     .init(id: "todos", label: "To-dos", count: model.todos.count),
                     .init(id: "activity", label: "Activity"),
@@ -72,7 +72,8 @@ struct InboxView: View {
     @ViewBuilder var content: some View {
         switch model.inboxTab {
         case "decisions":
-            if model.decisions.isEmpty { EmptyState(icon: "checkmark.circle", title: "You're all caught up", detail: "When a session needs an answer or your OK, it lands here.") }
+            if model.decisions.isEmpty && model.permissions.isEmpty { EmptyState(icon: "checkmark.circle", title: "You're all caught up", detail: "When a session needs an answer or your OK, it lands here.") }
+            ForEach(model.permissions, id: \.self) { PermissionRow(p: $0).transition(.opacity.combined(with: .move(edge: .trailing))) }
             ForEach(model.decisions, id: \.self) { DecisionRow(d: $0).transition(.opacity.combined(with: .move(edge: .trailing))) }
         case "slack":
             if model.slackItems.isEmpty {
@@ -215,6 +216,65 @@ struct DecisionRow: View {
 
     func submit(_ action: String, _ value: String = "") {
         Task { await model.decide(d["id"].string, action: action, answer: value) }
+    }
+}
+
+/// A live allow/deny prompt a session is blocked on. Allow runs the call
+/// once; Always allow (offered when the agent proposed its own rules) also
+/// trusts them for calls like it. Click the card's top to open the chat.
+struct PermissionRow: View {
+    @Environment(AppModel.self) var model
+    let p: JSON
+    @StateObject private var busy = Box(false)
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            summary
+            controls
+        }
+        .padding(18)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(T.raised.opacity(0.45)))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(T.orange.opacity(0.4), lineWidth: 1))
+        .padding(.horizontal, 20).padding(.top, 14)
+        .disabled(busy.v)
+    }
+
+    var summary: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Chip(text: "Permission", icon: "lock.open.fill", tint: T.orange)
+                Text(p["title"].nonEmpty ?? p["runId"].string).font(T.ui(12.5, .medium)).foregroundStyle(T.text2).lineLimit(1)
+                Spacer()
+                Text(Fmt.ago(p["askedAt"].double)).font(T.ui(11.5)).foregroundStyle(T.text3)
+            }
+            Text("Allow \(p["display"].nonEmpty ?? p["tool"].string)?").font(T.ui(14, .semibold)).foregroundStyle(T.text)
+            RichText(plain: p["command"].nonEmpty ?? p["summary"].string, font: .monospacedSystemFont(ofSize: 11.5, weight: .regular), color: NT.text)
+                .padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 6).fill(T.panel))
+            if let d = p["description"].nonEmpty { Text(inline(d)).font(T.ui(12.5)).foregroundStyle(T.text2) }
+            if let r = p["reason"].nonEmpty { Text(inline(r)).font(T.ui(12)).foregroundStyle(T.orange) }
+            Text(p["always"].bool ? "Allow runs it once; Always allow also trusts the rules the agent proposed for calls like it." : "This call is gated by the harness policy; Allow runs it once.")
+                .font(T.ui(11.5)).foregroundStyle(T.text3)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .onTapGesture { model.open(p["runId"].string) }
+        .help("Open the chat")
+    }
+
+    var controls: some View {
+        HStack(spacing: 8) {
+            Button("Deny") { reply("deny") }.buttonStyle(LButton(danger: true))
+            Button("Allow") { reply("allow") }.buttonStyle(LButton(primary: true))
+            if p["always"].bool { Button("Always allow") { reply("allow", always: true) }.buttonStyle(LButton()).help("Trust the rules the agent proposed for calls like this one") }
+            Spacer()
+            Button { model.open(p["runId"].string) } label: { Label("Open chat", systemImage: "arrow.up.right") }.buttonStyle(LButton())
+        }
+    }
+
+    func reply(_ behavior: String, always: Bool = false) {
+        busy.v = true
+        Task { await model.answer(run: p["runId"].string, askId: p["askId"].string, behavior: behavior, always: always); busy.v = false }
     }
 }
 

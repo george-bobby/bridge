@@ -1139,6 +1139,7 @@ async function handle(req, res) {
           behavior: body.behavior,
           message: body.message,
           answers: body.answers,
+          always: body.always,
         });
         sendJson(res, 200, out);
       } catch (e) {

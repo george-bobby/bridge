@@ -244,7 +244,7 @@ function checkPs(t) {
 
 const ENVFILE = /(^|\/)\.env(\.(?!example$|sample$|template$)[^/\s]+)?$/;
 
-function checkBash(cmd, policy) {
+function checkBash(cmd, policy, own = NOT_OWN, branchAt = NO_BRANCH) {
   const c = String(cmd || "").replace(/\\\r?\n/g, " ");
 
   // Anything piping into kill, or killing whatever a substitution printed.
@@ -258,7 +258,13 @@ function checkBash(cmd, policy) {
   }
 
   const httpSegs = [];
+  const vars = {};
+  let cdDir = "";
   for (const seg of segments(c)) {
+    // `P=http://localhost:4420/api/x; curl -X POST $P/y`: remember the value so
+    // the curl is judged by where it really goes, not as "a URL in a variable".
+    const a = /^(?:export\s+)?([A-Za-z_]\w*)=(?:"([^"]*)"|'([^']*)'|(\S*))$/.exec(seg);
+    if (a) vars[a[1]] = expand(a[2] ?? a[3] ?? a[4] ?? "", vars);
     const t = tokens(seg);
     if (!t.length) continue;
     const [bin] = t;
@@ -276,12 +282,12 @@ function checkBash(cmd, policy) {
     if (["bash", "sh", "zsh", "dash", "ksh"].includes(base)) {
       const k = t.findIndex((a, i) => i > 0 && /^-[a-z]*c[a-z]*$/.test(a));
       if (k > 0 && t[k + 1]) {
-        const v = checkBash(t[k + 1], policy);
+        const v = checkBash(t[k + 1], policy, own, branchAt);
         if (v) return v;
       }
     }
     if (base === "eval" && t.length > 1) {
-      const v = checkBash(t.slice(1).join(" "), policy);
+      const v = checkBash(t.slice(1).join(" "), policy, own, branchAt);
       if (v) return v;
     }
     if (base === "env" && (t.length === 1 || t.slice(1).every((a) => a.startsWith("-") || ASSIGN.test(a)))) {
@@ -315,8 +321,9 @@ function checkBash(cmd, policy) {
       }
     }
 
+    if (base === "cd" && t[1]) cdDir = expand(t[1], vars);
     if (base === "git") {
-      const v = checkGit(t, policy);
+      const v = checkGit(t.map((x) => expand(x, vars)), policy, (dir) => branchAt(dir ? (cdDir && !path.isAbsolute(dir) ? path.join(cdDir, dir) : dir) : cdDir));
       if (v) return v;
     }
     if (base === "gh") {
@@ -325,27 +332,70 @@ function checkBash(cmd, policy) {
     }
     if (HTTP_TOOLS.includes(base)) {
       httpSegs.push(seg);
-      const v = checkHttp(t, policy);
+      const v = checkHttp(t.map((x) => expand(x, vars)), policy, own);
       if (v) return v;
     }
   }
-  return checkLoopScript(c, httpSegs, policy);
+  return checkLoopScript(c, httpSegs, policy, own);
 }
 
 const HTTP_TOOLS = ["curl", "wget", "http", "https", "xh"];
 
-function checkGit(t, policy) {
-  // Skip global options: git -C <dir> push ...
+/** `$NAME`/`${NAME}` replaced from assignments seen earlier on the line; unknown ones stay. */
+function expand(s, vars) {
+  return String(s).replace(/\$\{?([A-Za-z_]\w*)\}?/g, (m, k) => (Object.prototype.hasOwnProperty.call(vars, k) ? vars[k] : m));
+}
+
+/** Options whose next word is their value, not a URL, per tool (curl's -i and -O take none). */
+const CURL_VALUE = [
+  "-H", "--header", "-A", "--user-agent", "-e", "--referer", "-u", "--user", "-b", "--cookie", "-c", "--cookie-jar",
+  "-o", "--output", "-w", "--write-out", "-m", "--max-time", "--connect-timeout", "-x", "--proxy", "-U", "--proxy-user",
+  "-K", "--config", "-r", "--range", "-E", "--cert", "--key", "--cacert", "--capath", "--resolve", "--connect-to",
+  "--retry", "--retry-delay", "--retry-max-time", "-Y", "--speed-limit", "-y", "--speed-time", "--limit-rate",
+  "-z", "--time-cond", "--interface", "--dns-servers", "--output-dir", "--trace", "--trace-ascii", "--stderr",
+  "--unix-socket", "--abstract-unix-socket", "-C", "--continue-at", "--max-filesize", "--max-redirs", "--oauth2-bearer",
+];
+const VALUE_FLAGS = {
+  curl: new Set(CURL_VALUE),
+  wget: new Set(["-O", "-o", "-a", "-e", "-U", "-t", "-T", "-w", "-P", "-i", "-B", "--header", "--user", "--password", "--user-agent", "--referer"]),
+  http: new Set(["-a", "--auth", "-o", "--output", "--session", "--session-read-only", "--timeout", "--cert", "--cert-key", "--verify", "--proxy"]),
+};
+VALUE_FLAGS.https = VALUE_FLAGS.xh = VALUE_FLAGS.http;
+
+function checkGit(t, policy, branchAt = NO_BRANCH) {
+  // Skip global options, remembering -C's directory: git -C <dir> push ...
   let i = 1;
-  while (t[i] && t[i].startsWith("-")) i += t[i] === "-C" || t[i] === "-c" ? 2 : 1;
+  let gitDir = "";
+  while (t[i] && t[i].startsWith("-")) {
+    if (t[i] === "-C") {
+      gitDir = t[i + 1] || "";
+      i += 2;
+      continue;
+    }
+    i += t[i] === "-c" ? 2 : 1;
+  }
   const sub = t[i];
   const args = t.slice(i + 1);
   const has = (re) => args.some((a) => re.test(a));
   const what = `git ${[sub, ...args].join(" ")}`.slice(0, 120);
 
   if (sub === "push") {
-    if (has(/^(-f|--force|--force-with-lease.*|--force-if-includes|--mirror|--delete|-d|--prune)$/) || has(/^-[a-zA-Z]*f[a-zA-Z]*$/) || has(/^\+/) || has(/^:/)) {
+    // Force without a lease, deletes and prunes stay gated whatever the branch.
+    if (has(/^(-f|--force|--mirror|--delete|-d|--prune)$/) || has(/^-[a-zA-Z]*f[a-zA-Z]*$/) || has(/^\+/) || has(/^:/)) {
       return gate("destructiveGit", what, policy);
+    }
+    if (has(/^--force-with-lease/)) {
+      // The workflow's own rebase push: allowed unless it can reach main or
+      // master. A refspec's target is its dst (src:dst, refs/heads/x, x); a
+      // bare `HEAD` and no refspec at all push the current branch, which the
+      // guard resolves in the session's folder. An unknown target asks.
+      const dst = (r) => (r.split(":").pop() || "").replace(/^refs\/heads\//, "").replace(/^HEAD$/, "");
+      const pushed = args.filter((a) => !a.startsWith("-")).slice(1).map(dst);
+      const targets = pushed.length ? pushed : [""];
+      if (has(/^--all$/) || targets.some((b) => { const t = b || branchAt(gitDir); return !t || /^(main|master)$/.test(t); })) {
+        return gate("destructiveGit", what, policy);
+      }
+      return null;
     }
   }
   if (sub === "reset" && has(/^--hard$/)) return gate("destructiveGit", what, policy);
@@ -436,19 +486,30 @@ function loopTarget(a) {
   try {
     p = new URL(p, "http://x").pathname; // the dot segments curl and the server both resolve
   } catch {}
-  return { path: p.replace(/\/+$/, "") || "/", bridge: !!v || PORTS.has(m[2] || (/^https$/i.test(m[1] || "") ? "443" : "80")) };
+  const port = v ? null : m[2] || (/^https$/i.test(m[1] || "") ? "443" : "80");
+  return { path: p.replace(/\/+$/, "") || "/", port, bridge: !!v || PORTS.has(port) };
 }
 
-function loopWrite(target, what, policy) {
+/**
+ * A write to a server on this machine. Bridge's own API: only what bin/bridge
+ * sends. Another local server's API asks (it may be a daemon that acts
+ * outward), unless the session's own checkout runs it (`own(port)`, from the
+ * guard): a scratch Bridge or dev server the session started to test with.
+ */
+function loopWrite(target, what, policy, own = NOT_OWN) {
   if (BRIDGE_WRITES.some((re) => re.test(target.path))) return null;
   if (role === "orchestrator" && ORCHESTRATOR_WRITES.some((re) => re.test(target.path))) return null;
   if (target.bridge) {
     return deny(`${what} writes to Bridge's own API (${target.path}). Only the app changes settings, .env, Slack replies or answers; a session's writes go through bin/bridge.`);
   }
-  return target.path.startsWith("/api/") ? gate("otherWrites", what, policy) : null;
+  if (!target.path.startsWith("/api/") || (target.port && own(target.port))) return null;
+  return gate("otherWrites", what, policy);
 }
 
-function checkHttp(t, policy) {
+const NOT_OWN = () => false;
+const NO_BRANCH = () => "";
+
+function checkHttp(t, policy, own) {
   const base = path.basename(t[0]);
   const args = t.slice(1);
   let method = "";
@@ -459,6 +520,7 @@ function checkHttp(t, policy) {
     const m = /^(?:-X|--request=|--method=)(.+)$/.exec(a);
     if (a === "-X" || a === "--request" || a === "--method") method = args[++i] || "";
     else if (m) method = m[1];
+    else if (VALUE_FLAGS[base].has(a)) i++;
     else if (/^(-d|--data[\w-]*|-F|--form[\w-]*|--json|-T|--upload-file|--post-data|--post-file|--body-data|--body-file)$/.test(a)) {
       body = true;
       i++;
@@ -476,7 +538,7 @@ function checkHttp(t, policy) {
   const what = `${t[0]} ${method.toUpperCase() || "POST"} ${urls[0] || ""}`.slice(0, 140);
   for (const u of urls) {
     const target = loopTarget(u);
-    if (target) return loopWrite(target, what, policy);
+    if (target) return loopWrite(target, what, policy, own);
   }
   // Somewhere else, or a URL held in a variable: an outward write.
   if (urls.some((u) => /^(https?:\/\/|\$)/.test(u))) return gate("otherWrites", what, policy);
@@ -484,7 +546,7 @@ function checkHttp(t, policy) {
 }
 
 /** A script or raw socket writing to the dashboard, where no curl shows the method. */
-function checkLoopScript(c, httpSegs, policy) {
+function checkLoopScript(c, httpSegs, policy, own) {
   for (const s of segments(c)) {
     const t = tokens(s);
     const base = t.length ? path.basename(t[0]) : "";
@@ -500,7 +562,7 @@ function checkLoopScript(c, httpSegs, policy) {
   for (const m of c.matchAll(LOOP_IN_TEXT)) {
     if (httpSegs.some((s) => s.includes(m[0]))) continue;
     const target = loopTarget(m[0]);
-    const v = target && loopWrite(target, `a script writing to ${m[0]}`.slice(0, 140), policy);
+    const v = target && loopWrite(target, `a script writing to ${m[0]}`.slice(0, 140), policy, own);
     if (v) return v;
   }
   return null;
@@ -583,12 +645,17 @@ function projectAuto(id = process.env.BRIDGE_PROJECT) {
   }
 }
 
-function check(toolName, toolInput = {}, { policy = loadPolicy(), auto = projectAuto(), role: who = process.env.BRIDGE_ROLE || "" } = {}) {
+/**
+ * `ownServer(port)`: whether a local port is served from the session's own
+ * checkout (the guard looks it up with lsof); without it every other local
+ * API write asks.
+ */
+function check(toolName, toolInput = {}, { policy = loadPolicy(), auto = projectAuto(), role: who = process.env.BRIDGE_ROLE || "", ownServer = NOT_OWN, branchAt = NO_BRANCH } = {}) {
   role = who;
   policy = { ...policy, autoMerge: !!(auto && auto.merge) };
   const name = String(toolName || "");
   const input = toolInput || {};
-  if (name === "Bash") return checkBash(input.command, policy);
+  if (name === "Bash") return checkBash(input.command, policy, ownServer, branchAt);
   if (name === "Read" || name === "Grep" || name === "NotebookRead") {
     const p = String(input.file_path || input.path || "");
     if (ENVFILE.test(p)) return deny(`reading ${path.basename(p)} prints secret values. Check key names only, never values.`);

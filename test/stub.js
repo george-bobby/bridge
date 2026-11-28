@@ -16,6 +16,7 @@
  *   stub:limit                end with a usage-limit error
  *   stub:exit                 die without a result
  *   stub:ask                  ask a permission question and wait for the answer
+ *   stub:ask=suggest          the same, offering an "always allow" rule
  *   stub:stream=<n>           stream a reply as partial messages: n text deltas,
  *                             a tool call and its result, a second call's text
  *   stub:tasks                run a subagent (its own tool call) and a background
@@ -160,9 +161,11 @@ async function turn(prompt) {
     }
   }
   if (d.ask) {
-    out({ type: "control_request", request_id: "rq1", request: { subtype: "can_use_tool", tool_name: "Bash", input: { command: "git push --force" }, tool_use_id: "tu-ask" } });
+    // stub:ask=suggest offers "always allow" rules, as Claude Code's own prompts do.
+    const suggestions = d.ask === "suggest" ? [{ type: "addRules", rules: [{ toolName: "Bash", ruleContent: "npm test:*" }], behavior: "allow", destination: "localSettings" }] : undefined;
+    out({ type: "control_request", request_id: "rq1", request: { subtype: "can_use_tool", tool_name: "Bash", input: { command: "git push --force" }, tool_use_id: "tu-ask", permission_suggestions: suggestions } });
     const answer = await new Promise((r) => (waitingAnswer = r));
-    say(`answer: ${answer.behavior}`);
+    say(`answer: ${answer.behavior}${answer.updatedPermissions ? ` always: ${answer.updatedPermissions.length}` : ""}`);
   }
   if (d.tasks) await tasks();
   if (d.stream) await stream(Number(d.stream) || 20);

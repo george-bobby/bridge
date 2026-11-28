@@ -631,8 +631,9 @@ final class AppModel {
     var orchestrator: Session? { sessions.first { $0.isOrchestrator } }
     var servers: [DevServer] { ports["servers"].array.map(DevServer.init) }
     var decisions: [JSON] { inbox["decisions"].array }
+    var permissions: [JSON] { inbox["permissions"].array }
     var todos: [JSON] { inbox["todos"].array }
-    var needsCount: Int { boardSessions.filter { column(of: $0) == .needs }.count + decisions.count }
+    var needsCount: Int { boardSessions.filter { column(of: $0) == .needs }.count + decisions.count + permissions.count }
 
     var liveCount: Int { boardSessions.filter { isLive($0) }.count }
 
@@ -1333,9 +1334,10 @@ final class AppModel {
         return ok
     }
 
-    func answer(run: String, askId: String, behavior: String, message: String = "", answers: [String: String]? = nil) async {
+    func answer(run: String, askId: String, behavior: String, message: String = "", answers: [String: String]? = nil, always: Bool = false) async {
         var body: [String: Any] = ["askId": askId, "behavior": behavior, "message": message]
         if let answers { body["answers"] = answers }
+        if always { body["always"] = true }
         await act { try await API.post("/api/runs/\(API.q(run))/answer", body) }
         await refreshOpen()
     }

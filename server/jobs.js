@@ -104,6 +104,37 @@ function activity(runId) {
 const awaitingIds = () =>
   [...running.entries()].filter(([, j]) => j.asks && j.asks.size).map(([id]) => id);
 
+/** Tools whose ask is a question or a plan, not an allow/deny on a tool call. */
+const NOT_PERMISSION = new Set(["AskUserQuestion", "ExitPlanMode"]);
+
+/**
+ * Every allow/deny prompt a live session is blocked on, oldest first: the
+ * Inbox's Approval items. `always` is offered only when the agent sent
+ * permission suggestions (Claude Code's own prompts); the guard's hard-gate
+ * asks come without any, so they are allowed once at a time.
+ */
+function pendingPermissions() {
+  const out = [];
+  for (const [runId, j] of running) {
+    for (const [askId, e] of j.asks || []) {
+      if (!e.ask || NOT_PERMISSION.has(e.tool)) continue;
+      const a = e.ask;
+      out.push({ runId, askId, tool: a.tool, display: a.display, detail: a.detail, description: a.description, reason: a.reason, blockedPath: a.blockedPath, command: commandOf(e.input), summary: askSummary(a), askedAt: a.askedAt, always: a.suggestions.length > 0 });
+    }
+  }
+  return out.sort((x, y) => x.askedAt - y.askedAt);
+}
+
+/** The exact thing being allowed: a command, a path, or the raw input. */
+function commandOf(input) {
+  const i = input || {};
+  const v = i.command || i.file_path || i.path || i.url || i.pattern;
+  return String(v || JSON.stringify(i)).slice(0, 4000);
+}
+
+/** The Inbox lists live prompts; harness is required late (it requires this module). */
+const inboxChanged = () => setImmediate(() => bus.broadcast("inbox", require("./harness").inbox()));
+
 /**
  * Where a job is rooted: the chat's own pick, then (Slack pipeline runs only)
  * the pipeline's repo, then Default's folder. `run` is optional: omit it for
@@ -1434,7 +1465,7 @@ function wire(child, runId, msgId, kind) {
       askedAt: Math.floor(Date.now() / 1000),
     };
 
-    job.asks.set(askId, { requestId: ev.request_id, input, stepIndex: i, tool });
+    job.asks.set(askId, { requestId: ev.request_id, input, stepIndex: i, tool, ask });
 
     patch(() => {
       const step = stepAt(i);
@@ -1464,15 +1495,19 @@ function wire(child, runId, msgId, kind) {
     });
     bus.broadcast("jobs", { running: runningIds(), awaiting: awaitingIds() });
     bus.broadcast("runs", { runs: store.listRunSummaries() });
+    if (!NOT_PERMISSION.has(tool)) inboxChanged();
   }
 
   /** Resolve one ask. Called from answerAsk() below, which owns the lookup. */
   function settle(askId, entry, decision) {
-    const { behavior, message, answers } = decision;
+    const { behavior, message, answers, always } = decision;
     const allow = behavior === "allow";
+    const suggestions = (entry.ask && entry.ask.suggestions) || [];
     const response = allow
       ? { behavior: "allow", updatedInput: answers ? { ...entry.input, answers } : entry.input }
       : { behavior: "deny", message: message || `Denied by ${USER} from the dashboard.` };
+    // "Always allow": the rules the agent itself proposed for this call, applied as it would in a terminal.
+    if (allow && always && suggestions.length) response.updatedPermissions = suggestions;
 
     writeLine(child, {
       type: "control_response",
@@ -1496,6 +1531,7 @@ function wire(child, runId, msgId, kind) {
     push({ blockAskState: { i, state, answer } });
     bus.broadcast("jobs", { running: runningIds(), awaiting: awaitingIds() });
     bus.broadcast("runs", { runs: store.listRunSummaries() });
+    if (!NOT_PERMISSION.has(entry.tool)) inboxChanged();
   }
 
   // Hung off the job record so answerAsk() — which is called from an HTTP route
@@ -1796,6 +1832,7 @@ function wire(child, runId, msgId, kind) {
     clearTimeout(job.linger);
     // A steer the session never got to: say so rather than leave it "sent".
     for (const s of job.steers || []) if (!s.read && s.i >= 0) steerAt(s, "unread");
+    if ([...(job.asks || new Map()).values()].some((e) => !NOT_PERMISSION.has(e.tool))) inboxChanged();
     // Told after the run file is settled (below), via setImmediate, so the
     // watcher reads the final state.
     setImmediate(() =>
@@ -1923,6 +1960,7 @@ function answerAsk(runId, askId, decision) {
   job.settle(askId, entry, {
     behavior,
     answers,
+    always: behavior === "allow" && decision.always === true,
     message: String((decision && decision.message) || "").slice(0, 2000),
   });
   return { ok: true, behavior };
@@ -2261,6 +2299,7 @@ module.exports = {
   isRunning,
   runningIds,
   awaitingIds,
+  pendingPermissions,
   resolveWorkdir,
   sessionWorkdir,
   terminalInfo,
