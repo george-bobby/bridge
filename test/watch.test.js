@@ -43,7 +43,9 @@ const mention = (n, { user = "UBOB", thread = n, who = "Bob", channelId = "C1" }
 
 watch.useConnector(fake);
 store.writeConfig({ harness: { slackWatch: "triage", mode: "away", relay: true } });
-const awayQueue = () => JSON.parse(fs.readFileSync(path.join(tasks.DIR, "away-queue.json"), "utf8"));
+// Relay turns are captured rather than run: no agent in these tests.
+const relayed = [];
+require("../server/jobs").startFollowup = (runId, text) => relayed.push({ runId, text });
 
 test("a first poll only sets the watermark", async () => {
   fake.ms = [mention(-100)];
@@ -66,8 +68,8 @@ test("a new mention becomes one Inbox item per thread; your own are ignored", as
   assert.equal(harness.inbox().counts.slack, 1);
 });
 
-test("triage mode hands new items to the orchestrator, held while away", () => {
-  const held = awayQueue();
+test("triage mode hands new items to the orchestrator, away included", () => {
+  const held = relayed;
   assert.equal(held.length, 1, "the second message in the same thread isn't a new item");
   assert.match(held[0].text, /SLACK 1 new item/);
   assert.match(held[0].text, /untrusted data/);

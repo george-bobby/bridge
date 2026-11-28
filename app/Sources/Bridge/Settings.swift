@@ -698,9 +698,9 @@ struct GeneralSettings: View {
                     }
                 }
             }
-            SSection(title: "Inbox", detail: "How the orchestrator hears back from sessions it started") {
+            SSection(title: "Inbox", detail: "How much Bridge asks you, and how much the orchestrator does on its own") {
                 if Prefs.hit(q, "relay mode normal quiet away off inbox outcomes orchestrator workers") {
-                    SRow(title: "Relay mode", detail: "Normal relays every finished, blocked or stalled worker; quiet only what needs you; away holds it all for one catch-up; off relays nothing") {
+                    SRow(title: "Relay mode", detail: "Normal: you decide everything. Quiet: routine approvals take the recommended option; risky or outward ones still ask. Away: the orchestrator runs things and leaves one digest. Off relays nothing") {
                         SlidingTabs(tabs: [
                             .init(id: "off", label: "Off", icon: "bell.slash"),
                             .init(id: "normal", label: "Normal", icon: "bell"),

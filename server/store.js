@@ -123,9 +123,8 @@ function jobOpts(config, run) {
 }
 
 /**
- * mode         normal: every outcome is relayed to the orchestrator
- *              quiet:  only what needs you (questions, blocks, stalls, ...)
- *              away:   nothing is relayed; it's held and briefed on return
+ * mode         normal | quiet | away: how much Bridge asks you and how much the
+ *              orchestrator does on its own (server/modes.js)
  * relay        whether outcomes start a turn in the orchestrator chat at all
  * stallMinutes silence before a working worker is flagged as stalled
  * autoArchiveDays  archive a chat once its PR has been merged this many days (0 = off)

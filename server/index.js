@@ -305,7 +305,7 @@ async function handle(req, res) {
 
   // --- the harness ---------------------------------------------------------
   // What bin/bridge and the Inbox talk to. Same origin rules as every other route.
-  if (p === "/api/tasks" || p.startsWith("/api/tasks/") || p === "/api/inbox" || p === "/api/catchup" || p.startsWith("/api/decisions/") || p.startsWith("/api/todos") || p === "/api/mode" || p === "/api/brief") {
+  if (p === "/api/tasks" || p.startsWith("/api/tasks/") || p === "/api/inbox" || p === "/api/catchup" || p.startsWith("/api/decisions/") || p.startsWith("/api/todos") || p === "/api/mode" || p === "/api/brief" || p === "/api/log") {
     try {
       const body = req.method === "POST" ? JSON.parse((await readBody(req)) || "{}") : {};
       const ok = (extra) => sendJson(res, 200, { ok: true, ...extra });
@@ -317,6 +317,7 @@ async function handle(req, res) {
       if (req.method === "GET" && p === "/api/inbox") return ok(harness.inbox());
       if (req.method === "GET" && p === "/api/catchup") return ok(harness.catchup(url.searchParams.get("since") || "8h"));
       if (req.method === "POST" && p === "/api/mode") return ok({ harness: harness.setMode(String(body.mode || "")) });
+      if (req.method === "POST" && p === "/api/log") return ok({ entry: harness.log(String(body.text || ""), { taskId: tasks.safeTaskId(String(body.taskId || "")) || "", by: body.by === "orchestrator" ? "orchestrator" : "bridge" }) });
       if (req.method === "POST" && p === "/api/brief") return ok(harness.brief({ since: String(body.since || "8h"), orchestrator: String(body.orchestrator || "") }));
       if (req.method === "POST" && p === "/api/todos") {
         if (!String(body.text || "").trim()) throw new Error("a to-do needs text");
@@ -368,6 +369,7 @@ async function handle(req, res) {
           return ok({});
         }
         if (req.method === "POST" && verb === "cleanup") return ok(await harness.cleanup(id, { force: !!body.force }));
+        if (req.method === "POST" && verb === "merge") return ok(await harness.merge(id, { by: body.by === "orchestrator" ? "orchestrator" : "" }));
       }
       return sendJson(res, 404, { ok: false, error: `no harness route for ${req.method} ${p}` });
     } catch (e) {

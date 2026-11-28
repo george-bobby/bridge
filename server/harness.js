@@ -32,12 +32,13 @@ const tasks = require("./tasks");
 const bus = require("./bus");
 const projects = require("./projects");
 const failover = require("./failover");
+const modes = require("./modes");
 
 const ROOT = path.join(__dirname, "..");
 const ORCH = "orchestrator";
 const USER = env.slackUserName;
 const now = () => Math.floor(Date.now() / 1000);
-const AWAY_QUEUE = path.join(tasks.DIR, "away-queue.json");
+const MODE_LOG = path.join(tasks.DIR, "mode-log.json");
 
 const cfg = () => store.readConfig().harness;
 
@@ -143,27 +144,65 @@ function outcome(taskId, name, info = {}) {
     bus.broadcast("message", { runId: taskId, message: msg });
   }
 
-  const needsYou = NEEDS_YOU.has(name) || NEEDS_YOU.has(status) || (parsed && (parsed.actions.length > 0 || parsed.yours.length > 0));
-  bus.broadcast("outcome", { taskId, name, status, text, title, needsYou });
+  // Quiet and away take a question's recommended option (server/modes.js).
+  const mode = cfg().mode;
+  const auto = new Map();
+  for (const d of created) {
+    const answer = modes.autoAnswer(mode, d.kind, tasks.parseAsk(d.text));
+    if (answer) auto.set(d.id, answer);
+  }
+  const left = tasks.openDecisions().filter((d) => d.taskId === taskId && !auto.has(d.id));
+  const needsYou =
+    NEEDS_YOU.has(name) || (parsed && (parsed.actions.length > 0 || parsed.yours.length > 0)) || (NEEDS_YOU.has(status) && (left.length > 0 || !auto.size));
+  bus.broadcast("outcome", { taskId, name, status, text, title, needsYou, notify: modes.notify(mode, { kind: "outcome", needsYou }) });
   bus.broadcast("inbox", inbox());
   bus.broadcast("runs", { runs: store.listRunSummaries() });
 
-  relay(taskId, name, { status, text, title, parsed, needsYou, decisions: created });
+  relay(taskId, name, { status, text, title, parsed, needsYou, decisions: created, auto });
+  for (const [id, answer] of auto) {
+    decide(id, { answer, by: "auto" })
+      .then(() => log(`answered "${one(tasks.parseAsk(created.find((d) => d.id === id).text).question, 100)}" with ${answer}`, { taskId }))
+      .catch((e) => tasks.appendEvent({ taskId, name: "auto-answer-failed", text: e.message }));
+  }
+  if (name === "report") tasks.writeMeta(taskId, { autoRecoveries: 0 });
+  else if (modes.runsThings(mode)) autoRecover(taskId, name).catch((e) => tasks.appendEvent({ taskId, name: "auto-recover-failed", text: e.message }));
+}
+
+/**
+ * Away: the harness picks a stopped worker back up itself (a stalled one is
+ * interrupted with a nudge, a lost one relaunched, one at a usage limit moved
+ * to another agent first). Twice per report at most, then it's the Inbox's.
+ */
+async function autoRecover(taskId, name) {
+  if (!["worker-stalled", "worker-gone", "usage-limit"].includes(name)) return;
+  const meta = tasks.readMeta(taskId) || {};
+  if ((meta.autoRecoveries || 0) >= 2 || meta.archived) return;
+  if (name === "usage-limit" && !(await autoFailover(taskId, { force: true }))) return;
+  tasks.writeMeta(taskId, { autoRecoveries: (meta.autoRecoveries || 0) + 1 });
+  const note = "Picked up automatically while away. Continue toward the definition of done.";
+  if (name === "worker-stalled" && jobs.isRunning(taskId)) {
+    tasks.closeTaskDecisions(taskId, ["resume"], "answered");
+    jobs.interrupt(taskId, `[harness] You went quiet for a while, so you were interrupted. Check where you were (git status, your report) and carry on. ${note}`, { config: store.readConfig() });
+  } else if (!jobs.isRunning(taskId)) await relaunch(taskId, note);
+  else return;
+  log(`${name === "usage-limit" ? "moved to another agent and relaunched" : name === "worker-stalled" ? "nudged a stalled worker" : "relaunched a lost worker"}`, { taskId });
 }
 
 /** Apply automatic failover before a run's next turn. Usage.all() keeps the
  * existing provider cache and rate-limit backoff, so this adds no new polling. */
-async function autoFailover(runId) {
+async function autoFailover(runId, { force = false } = {}) {
   const run = store.loadRun(runId);
   if (!run) return null;
   const config = store.readConfig();
-  if (!config.harness.failover) return null;
+  // Away moves a worker that hit a usage limit even with failover off (autoRecover).
+  const harness = force ? { ...config.harness, failover: true } : config.harness;
+  if (!harness.failover) return null;
   const currentAgent = store.jobOpts(config, run).agent || "claude";
   if (currentAgent !== "claude") return null;
   const [usage, catalog] = await Promise.all([require("./usage").all(), require("./agents").catalog()]);
   const pick = failover.decide({
     usage,
-    harness: config.harness,
+    harness,
     currentAgent,
     orchestrator: projects.isOrchestrator(runId),
     installed: catalog.agents.filter((a) => a.installed).map((a) => a.id),
@@ -183,7 +222,7 @@ async function autoFailover(runId) {
 
 /* ----------------------------------------------------------------- relay */
 
-function relayText(taskId, name, { status, text, title, parsed, decisions }) {
+function relayText(taskId, name, { status, text, title, parsed, decisions, auto }) {
   const lines = [`[harness] OUTCOME ${name} · task ${taskId} · "${title}"`, `status: ${status}`, text];
   if (parsed) {
     if (/^https?:\/\//.test(parsed.fields.pr || "")) lines.push(`PR: ${parsed.fields.pr}`);
@@ -191,7 +230,7 @@ function relayText(taskId, name, { status, text, title, parsed, decisions }) {
     if (parsed.actions.length) lines.push(`action requests: ${parsed.actions.length}`);
     if (parsed.yours.length) lines.push(`for ${USER} to do: ${parsed.yours.length} (in To-dos)`);
   }
-  if (decisions && decisions.length) lines.push(`Inbox: ${decisions.map((d) => `${d.id} (${d.kind})`).join(", ")}`);
+  if (decisions && decisions.length) lines.push(`Inbox: ${decisions.map((d) => `${d.id} (${d.kind}${auto && auto.has(d.id) ? `, Bridge answered ${auto.get(d.id)}` : ""})`).join(", ")}`);
   lines.push(`Report: ${tasks.paths(taskId).report}`);
   lines.push(`Relay this to ${USER} in 1-3 lines, leading with anything they need to do.`);
   return lines.join("\n");
@@ -219,17 +258,10 @@ function relayKey(name, { status, text, parsed }) {
   return crypto.createHash("sha1").update(raw).digest("hex").slice(0, 16);
 }
 
-/** A relay turn, mode allowing: quiet keeps only what needs you, away holds it for the catch-up. */
+/** A relay turn, mode allowing: quiet keeps only what needs you; normal and away send everything. */
 function send(orch, text, needsYou) {
   const c = cfg();
-  if (!c.relay) return;
-  if (c.mode === "quiet" && !needsYou) return;
-  if (c.mode === "away") {
-    const q = readJson(AWAY_QUEUE, []);
-    q.push({ at: now(), text });
-    writeJson(AWAY_QUEUE, q.slice(-200));
-    return;
-  }
+  if (!c.relay || !modes.relays(c.mode, needsYou)) return;
   try {
     jobs.startFollowup(orch, text, { config: store.readConfig(), role: "relay", label: "relay", queue: true });
   } catch (e) {
@@ -242,24 +274,95 @@ function note(text, { needsYou = true } = {}) {
   send(ensureOrchestrator().runId, text, needsYou);
 }
 
-/** Leaving away mode: one catch-up turn with everything that was held back. */
+/** The orchestrators pick the new mode's lines up on their next turn (jobs.launch). */
 function setMode(mode) {
-  if (!["normal", "quiet", "away"].includes(mode)) throw new Error("mode is normal, quiet or away");
-  const before = cfg().mode;
+  if (!modes.MODES.includes(mode)) throw new Error("mode is normal, quiet or away");
   store.writeConfig({ harness: { mode } });
-  if (before === "away" && mode !== "away") {
-    const held = readJson(AWAY_QUEUE, []);
-    writeJson(AWAY_QUEUE, []);
-    if (held.length && cfg().relay) {
-      ensureOrchestrator();
-      const text = `[harness] ${USER} is back (mode: ${mode}). While away, ${held.length} outcome(s) were held:\n\n${held
-        .map((h) => h.text.replace(/\nRelay this to .*$/m, ""))
-        .join("\n\n")}\n\nBrief ${USER}: what needs them first, then the rest in a few lines.`;
-      jobs.startFollowup(ORCH, text, { config: store.readConfig(), role: "relay", label: "catch-up", queue: true });
-    }
-  }
   bus.broadcast("inbox", inbox());
   return cfg();
+}
+
+/* ---------------------------------------------------------------- digest */
+
+/**
+ * What Bridge or the orchestrator decided on your behalf (quiet and away): a
+ * line in data/tasks/mode-log.json, and one open Inbox item, the digest,
+ * rewritten in place until you dismiss it. Never a notification.
+ */
+function log(text, { taskId = "", by = "bridge" } = {}) {
+  const t = one(text, 300);
+  if (!t) throw new Error("a log line needs text");
+  const entries = readJson(MODE_LOG, []);
+  const entry = { at: now(), mode: cfg().mode, taskId, by, text: t };
+  entries.push(entry);
+  writeJson(MODE_LOG, entries.slice(-1000));
+  const open = tasks.decisions().find((d) => d.kind === "digest" && d.state === "open");
+  const since = open ? open.createdAt : entry.at;
+  const body = digestText(entries.filter((e) => e.at >= since));
+  if (open) tasks.updateDecision(open.id, { text: body });
+  else tasks.addDecision({ taskId: ORCH, kind: "digest", text: body, key: `digest:${entry.at}` });
+  bus.broadcast("inbox", inbox());
+  return entry;
+}
+
+function digestText(entries) {
+  const clock = (at) => new Date(at * 1000).toTimeString().slice(0, 5);
+  const shown = entries.slice(-25);
+  const head = `Handled for you in ${entries[entries.length - 1].mode} mode: ${entries.length} thing${entries.length === 1 ? "" : "s"}`;
+  const more = entries.length > shown.length ? [`· ${entries.length - shown.length} earlier ones in ${MODE_LOG}`] : [];
+  return [head, ...more, ...shown.map((e) => `· ${clock(e.at)}${e.taskId ? ` ${one(titleOf(e.taskId), 40)}` : ""}${e.by === "orchestrator" ? " (orchestrator)" : ""}: ${e.text}`)].join("\n").slice(0, 4000);
+}
+
+/* ----------------------------------------------------------------- merge */
+
+/**
+ * `bridge merge <task>`: merge its PR, only where the mode allows it (away;
+ * quiet where the project allows auto-merge) and only on green CI. Away then
+ * archives the chat. `gh` is injectable for the tests.
+ */
+async function merge(taskId, { by = "", gh = ghJson } = {}) {
+  const meta = tasks.readMeta(taskId);
+  if (!meta) throw new Error(`no such task: ${taskId}`);
+  const r = tasks.readReport(taskId);
+  const url = [meta.prUrl, r && r.parsed.fields.pr].find((u) => /^https?:\/\//.test(u || ""));
+  const mode = cfg().mode;
+  const project = projects.get(projects.of(store.loadRun(taskId) || {}, meta));
+  const early = modes.modeMergeRefusal(mode, project) || (!url && "the task has no PR");
+  if (early) return refuse(early);
+  const pr = await gh(["pr", "view", url, "--json", "state,isDraft,mergeable,headRefName,statusCheckRollup,number"]);
+  const why = modes.mergeRefusal(mode, { pr, project });
+  if (why) return refuse(why);
+  await gh(["pr", "merge", url, "--merge"], { raw: true });
+  tasks.writeMeta(taskId, { status: "merged", mergedAt: now() });
+  tasks.appendEvent({ taskId, name: "merged", text: `${url} merged (${mode} mode, CI green)` });
+  log(`merged ${url}`, { taskId, by: by || "bridge" });
+  let archived = false;
+  if (modes.runsThings(mode) && !jobs.isRunning(taskId)) {
+    try {
+      archived = archive(taskId, true).archived;
+    } catch {}
+  }
+  return { merged: true, url, archived };
+
+  function refuse(reason) {
+    const err = new Error(`refusing to merge: ${reason}`);
+    err.refused = true;
+    throw err;
+  }
+}
+
+function ghJson(args, { raw = false } = {}) {
+  return new Promise((resolve, reject) =>
+    require("child_process").execFile("gh", args, { encoding: "utf8", timeout: 60000 }, (err, out, errOut) => {
+      if (err) return reject(new Error(String(errOut || err.message).trim().split("\n").pop()));
+      if (raw) return resolve(out);
+      try {
+        resolve(JSON.parse(out));
+      } catch {
+        reject(new Error("gh answered something that isn't JSON"));
+      }
+    })
+  );
 }
 
 /* ------------------------------------------------------------- job ends */
@@ -600,10 +703,11 @@ function plan(taskId, op, args = []) {
  * follow-up in your words; "do it" on an action sends the worker to make
  * the call, which the guard then puts to you as an exact-payload approval.
  */
-async function decide(id, { answer = "", action = "answer" } = {}) {
+async function decide(id, { answer = "", action = "answer", by = "" } = {}) {
   const d = tasks.decisions().find((x) => x.id === id);
   if (!d) throw new Error(`no such decision: ${id}`);
   if (action === "dismiss") return tasks.updateDecision(id, { state: "dismissed" });
+  if (d.kind === "digest") return tasks.updateDecision(id, { state: action === "defer" ? "deferred" : "answered", ...(action === "defer" ? { deferUntil: answer } : {}) });
   if (action === "defer") {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(answer)) throw new Error("defer takes a date: YYYY-MM-DD");
     return tasks.updateDecision(id, { state: "deferred", deferUntil: answer });
@@ -615,11 +719,13 @@ async function decide(id, { answer = "", action = "answer" } = {}) {
   const msg =
     d.kind === "action"
       ? `[harness] ${USER} approved your action request:\n"""\n${d.text}\n"""\n${answer ? `${USER} adds: ${answer}\n` : ""}Make exactly this write now (the harness will show ${USER} the exact payload once more), then update your report.`
-      : `[harness] ${USER} answered your open question:\n"""\n${d.text}\n"""\nAnswer, in ${USER}'s words: ${answer}\n\nContinue, then update your report.`;
+      : by === "auto"
+        ? `[harness] ${USER} is in ${cfg().mode} mode, so Bridge took the recommended option for your open question:\n"""\n${d.text}\n"""\nAnswer: ${answer}\n\nContinue, then update your report.`
+        : `[harness] ${USER} answered your open question:\n"""\n${d.text}\n"""\nAnswer, in ${USER}'s words: ${answer}\n\nContinue, then update your report.`;
   if (d.kind === "question" && !String(answer).trim()) throw new Error("an answer needs words");
   await autoFailover(d.taskId);
   const out = jobs.startFollowup(d.taskId, msg, { config: store.readConfig(), role: "harness", label: d.kind === "action" ? "approved" : "answer", queue: true });
-  const rec = tasks.updateDecision(id, { state: "answered", answer: answer || "approved", deliveredAs: out && out.queued ? "queued" : "started" });
+  const rec = tasks.updateDecision(id, { state: "answered", answer: answer || "approved", deliveredAs: out && out.queued ? "queued" : "started", ...(by ? { by } : {}) });
   tasks.appendEvent({ taskId: d.taskId, name: "decided", text: `${d.kind}: ${answer || "approved"}`.slice(0, 300) });
   bus.broadcast("inbox", inbox());
   return rec;
@@ -813,7 +919,7 @@ function inbox() {
     if (!titles.has(id)) titles.set(id, titleOf(id));
     return titles.get(id);
   };
-  const decisions = tasks.openDecisions().map((d) => ({ ...d, ...tasks.parseAsk(d.text), title: t(d.taskId) }));
+  const decisions = tasks.openDecisions().map((d) => ({ ...d, ...tasks.parseAsk(d.text), title: d.kind === "digest" ? "Orchestrator" : t(d.taskId) }));
   const todos = tasks.todos().filter((x) => !x.done).map((x) => ({ ...x, title: x.taskId ? t(x.taskId) : "" }));
   // Required here, not at the top: watch.js starts pipelines through this module.
   const slack = require("./watch").open();
@@ -922,6 +1028,12 @@ function start() {
   started = true;
   fs.mkdirSync(tasks.DIR, { recursive: true });
   jobs.events.on("end", (e) => onJobEnd(e).catch((err) => console.error("harness: job end handling failed:", err)));
+  // A live prompt quiet/away took on their own (jobs.onAsk) goes in the digest.
+  jobs.events.on("auto", (e) => {
+    try {
+      log(e.text, { taskId: projects.isOrchestrator(e.runId) ? "" : e.runId });
+    } catch {}
+  });
   recover();
   const tick = Number(process.env.BRIDGE_TICK_MS) || 30000;
   let archivedAt = 0;
@@ -963,6 +1075,8 @@ module.exports = {
   catchup,
   brief,
   setMode,
+  log,
+  merge,
   note,
   outcome,
   workingCount,

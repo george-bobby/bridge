@@ -1166,11 +1166,12 @@ final class AppModel {
         case "run-updated":
             let id = d["runId"].string
             if id == openId || paneRuns.contains(id) { scheduleRefresh(id, task: true) }
-        case "ask" where notifyAsks:
+        // Quiet and away mark routine items `notify: false` (server/modes.js).
+        case "ask" where notifyAsks && (d["notify"].isNull || d["notify"].bool):
             notify(title: "\(d["who"].nonEmpty ?? "A session") needs you", body: d["summary"].nonEmpty ?? "Claude is waiting on your answer", runId: d["runId"].string)
         case "outcome":
             let st = d["status"].string
-            if notifyOutcomes, ["needs-input", "blocked", "ready-for-review", "worker-gone", "usage-limit", "worker-stalled"].contains(st) || d["name"].string != "report" {
+            if notifyOutcomes, d["notify"].isNull || d["notify"].bool, ["needs-input", "blocked", "ready-for-review", "worker-gone", "usage-limit", "worker-stalled"].contains(st) || d["name"].string != "report" {
                 notify(title: d["title"].nonEmpty ?? d["taskId"].string, body: statusLabels[st] ?? d["name"].string.replacingOccurrences(of: "-", with: " "), runId: d["taskId"].string)
             }
             if d["taskId"].string == openId { Task { await refreshOpen() } }

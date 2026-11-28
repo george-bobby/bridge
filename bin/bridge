@@ -24,6 +24,8 @@
  *   bridge archive <id> [--delete-worktree] | bridge unarchive <id>   (orchestrator only, like stop and rename)
  *   bridge stop <id>                          stop a chat's running turn
  *   bridge rename <id> "<title>"
+ *   bridge merge <id>                         merge its PR: quiet/away only, and only on green CI
+ *   bridge log "<one line>" [--task <id>]     add to the user's digest of what was decided for them
  *
  * The dashboard's address comes from $BRIDGE_URL (set in every harness session),
  * else BRIDGE_PORT in .env, else 4319.
@@ -318,6 +320,19 @@ async function main() {
       const out = await call("POST", `${at}/archive`, { by, archived: cmd === "archive", deleteWorktree: !!flags["delete-worktree"] });
       const wt = out.worktree;
       console.log(`${out.archived ? "archived" : "unarchived"}${wt ? (wt.removed ? `; worktree removed${wt.branch ? `, branch ${wt.branch} kept` : ""}` : `; ${wt.note || "worktree kept"}`) : flags["delete-worktree"] ? "; worktree kept (not one Bridge made, or already gone)" : ""}`);
+      return;
+    }
+    case "merge": {
+      if (!pos[0]) die("merge <id>");
+      const out = await call("POST", `/api/tasks/${encodeURIComponent(pos[0])}/merge`, { by: BY });
+      console.log(`merged ${out.url}${out.archived ? "; chat archived" : ""}`);
+      return;
+    }
+    case "log": {
+      if (!pos[0]) die('log "<one line>"');
+      const task = flags.task && flags.task !== true ? String(flags.task) : "";
+      await call("POST", "/api/log", { text: pos.join(" "), taskId: task, by: BY });
+      console.log("logged");
       return;
     }
     default:

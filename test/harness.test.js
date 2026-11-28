@@ -735,9 +735,14 @@ test("cleanup refuses unpushed work, removes with --force, keeps the branch", as
   assert.deepEqual([...inbox.decisions, ...inbox.todos].filter((x) => x.taskId === t.taskId || x.taskId === u.taskId), []);
 });
 
-test("modes: quiet relays only what needs you; away holds and briefs on return", async () => {
-  const relays = async () => (await api("GET", "/api/runs/orchestrator")).run.messages.filter((m) => m.role === "relay").length;
-  await waitFor(idle("orchestrator"), 10000, "orchestrator idle");
+test("modes: quiet takes the recommended option and stays silent; away relays everything to the orchestrator", async () => {
+  // Outcomes go to the orchestrator of the task's project (the scratch repo's).
+  const first = await spawnTask("modes warm-up", "stub:report=ready-for-review", { by: "orchestrator" });
+  await waitFor(statusIs(first.taskId, "ready-for-review"), 15000);
+  const orch = `orchestrator-${(await api("GET", "/api/projects")).projects.find((p) => p.path === REPO).id}`;
+  const relays = async () => ((await api("GET", `/api/runs/${orch}`)).run || { messages: [] }).messages.filter((m) => m.role === "relay").length;
+  await waitFor(async () => (await relays()) > 0, 10000, "normal relays (a check that can fail)");
+  await waitFor(idle(orch), 10000, "orchestrator idle");
 
   assert.equal((await api("POST", "/api/mode", { mode: "quiet" })).ok, true);
   const before = await relays();
@@ -746,17 +751,50 @@ test("modes: quiet relays only what needs you; away holds and briefs on return",
   await new Promise((r) => setTimeout(r, 800));
   assert.equal(await relays(), before, "a plain ready report is not relayed in quiet mode");
 
+  // A question with a recommended option is answered by Bridge, logged to the digest, not relayed.
+  const r = await spawnTask("quiet pick", "stub:report=needs-input\nstub:question=Rate limit per user or per IP?\\nA) Per user\\nB) Per IP (recommended)", { by: "orchestrator" });
+  const answered = await waitFor(async () => {
+    let all = [];
+    try {
+      all = JSON.parse(fs.readFileSync(path.join(DATA, "tasks", "decisions.json"), "utf8"));
+    } catch {}
+    return all.find((d) => d.taskId === r.taskId && d.kind === "question" && d.state === "answered");
+  }, 15000, "auto answer");
+  assert.equal(answered.answer, "B) Per IP");
+  assert.equal(answered.by, "auto");
+  const inbox = await api("GET", "/api/inbox");
+  assert.equal(inbox.decisions.filter((d) => d.taskId === r.taskId).length, 0, "nothing of it waits on you");
+  const digest = await waitFor(async () => (await api("GET", "/api/inbox")).decisions.find((d) => d.kind === "digest" && /B\) Per IP/.test(d.text)), 5000, "digest");
+  assert.match(digest.question, /Handled for you in quiet mode/);
+  await new Promise((r2) => setTimeout(r2, 800));
+  assert.equal(await relays(), before, "an auto-answered question is not relayed in quiet mode");
+
+  // merge: refused outside quiet/away rules; normal never merges. log: one digest item, rewritten.
+  assert.match(cli("merge", r.taskId).err, /refusing to merge: quiet mode merges only where the project allows/);
+  assert.equal(cli("log", "kept the old API name").code, 0);
+  const digests = (await api("GET", "/api/inbox")).decisions.filter((d) => d.kind === "digest");
+  assert.equal(digests.length, 1, "one digest, not one item per action");
+  assert.match(digests[0].text, /kept the old API name/);
+
+  // Away: every outcome goes to the orchestrator, and its next turn carries the away lines once.
+  await waitFor(idle(orch), 10000, "orchestrator idle");
   assert.equal((await api("POST", "/api/mode", { mode: "away" })).ok, true);
-  const w = await spawnTask("away q", "stub:report=needs-input\nstub:question=Which one?", { by: "orchestrator" });
-  await waitFor(statusIs(w.taskId, "needs-input"), 15000);
-  await new Promise((r) => setTimeout(r, 800));
-  assert.equal(await relays(), before, "held while away");
+  const w = await spawnTask("away ok", "stub:report=ready-for-review", { by: "orchestrator" });
+  await waitFor(statusIs(w.taskId, "ready-for-review"), 15000);
+  await waitFor(async () => (await relays()) > before, 10000, "relayed while away");
+  await waitFor(idle(orch), 10000, "orchestrator idle");
+  const prompts = fs.readFileSync(ENV.STUB_LOG, "utf8").trim().split("\n").map(JSON.parse).filter((l) => l.prompt && l.prompt.includes(`OUTCOME report · task ${w.taskId}`));
+  assert.match(prompts[0].prompt, /\(Bridge: the relay mode changed\.\nMode: away\./);
+  assert.ok(!/Mode: (normal|quiet)/.test(prompts[0].prompt), "only the active mode's lines");
+  const sys = fs.readFileSync(path.join(DATA, "tasks", `${orch}.system.md`), "utf8");
+  assert.match(sys, /## Mode\n\nMode: away\./);
+  assert.ok(!/Mode: (normal|quiet)\./.test(sys));
 
   assert.equal((await api("POST", "/api/mode", { mode: "normal" })).ok, true);
-  await waitFor(async () => {
-    const o = (await api("GET", "/api/runs/orchestrator")).run;
-    return o.messages.some((m) => m.role === "relay" && /Alex is back/.test(m.text) && m.text.includes(w.taskId));
-  }, 10000, "catch-up relay");
+  assert.match(cli("merge", w.taskId).err, /refusing to merge: normal mode/);
+  // Dismissing the digest closes it; the next entry opens a fresh one.
+  await api("POST", `/api/decisions/${digests[0].id}`, { action: "dismiss" });
+  assert.equal((await api("GET", "/api/inbox")).decisions.filter((d) => d.kind === "digest").length, 0);
 });
 
 test("a report rewritten with nothing new isn't relayed again; a new status is", async () => {
