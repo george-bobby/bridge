@@ -18,7 +18,7 @@ struct Sidebar: View {
 
                     SideLabel("Overview")
                     NavItem(icon: "house", label: "Home", route: .home)
-                    NavItem(icon: "tray", label: "Inbox", route: .inbox, badge: model.decisions.count + model.todos.count + model.slackOpenCount, hot: !model.decisions.isEmpty || model.slackOpenCount > 0)
+                    NavItem(icon: "tray", label: "Inbox", route: .inbox, badge: model.decisions.count + model.todos.count, hot: !model.decisions.isEmpty)
                     NavItem(icon: "rectangle.stack", label: "Sessions", route: model.sessionsRoute, also: [.board, .sessions],
                             count: model.boardSessions.filter { model.inFilter($0) && model.column(of: $0) != .done }.count)
 
@@ -64,7 +64,9 @@ struct Sidebar: View {
     @ViewBuilder func sourceItem(_ k: SourceKind) -> some View {
         switch k {
         case .slack:
-            NavItem(icon: k.icon, label: k.label, route: k.route, badge: model.slackUnread, count: model.mentions.filter { model.session(forPermalink: $0.permalink) == nil }.count, hot: model.slackUnread > 0)
+            // Watched-channel posts nobody started count too: the Inbox no longer shows them.
+            let posts = model.slackItems.filter { $0["kind"].string == "channel" && $0["verdict"].string != "skip" }.count
+            NavItem(icon: k.icon, label: k.label, route: k.route, badge: model.slackUnread + posts, count: model.mentions.filter { model.session(forPermalink: $0.permalink) == nil }.count, hot: model.slackUnread + posts > 0)
         case .github:
             NavItem(icon: k.icon, label: k.label, route: k.route, count: model.openPulls.count, hot: model.openPulls.contains(where: \.needsAttention))
         case .linear:
@@ -384,7 +386,9 @@ struct SlackView: View {
     var body: some View {
         VStack(spacing: 0) {
             PageHeader(title: "Slack", subtitle: model.slack["configured"].bool ? "\(model.slack["team"].string) · mentions of @\(model.slack["user"].string)" : "", icon: "number") {
-                IconButton(icon: "arrow.clockwise", help: "Refresh") { Task { await model.loadSlack() } }
+                if model.slack["configured"].bool { SlackWatchBar() } else {
+                    IconButton(icon: "arrow.clockwise", help: "Refresh") { Task { await model.loadSlack() } }
+                }
             }
             if !model.slack["configured"].bool {
                 SlackSetup()
@@ -392,6 +396,7 @@ struct SlackView: View {
                 HStack(spacing: 0) {
                     ScrollView {
                         LazyVStack(spacing: 0) {
+                            if !model.slackItems.isEmpty { watched }
                             if model.mentions.isEmpty { EmptyState(icon: "at", title: "No mentions", detail: "Messages that mention you show up here.") }
                             ForEach(model.mentions) { m in MentionRow(mention: m, selected: model.slackSelected == m.permalink) }
                         }
@@ -403,6 +408,16 @@ struct SlackView: View {
             }
         }
         .onAppear { Task { await model.loadSlack() } }
+    }
+
+    /// What the Slack watch found that no session has picked up yet: start it or dismiss it.
+    var watched: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            GroupHeader(title: "Not started", count: model.slackOpenCount)
+            ForEach(model.slackItems, id: \.self) { SlackItemRow(item: $0).transition(.opacity.combined(with: .move(edge: .trailing))) }
+            Spacer().frame(height: 10)
+            GroupHeader(title: "Mentions", count: model.mentions.count)
+        }
     }
 
     @ViewBuilder var thread: some View {
@@ -513,5 +528,85 @@ struct SlackSetup: View {
         .frame(maxWidth: 520, alignment: .leading)
         .padding(40)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// The watcher's state, and a way to poll now, in the Slack page's header.
+struct SlackWatchBar: View {
+    @Environment(AppModel.self) var model
+    @StateObject private var checking = Box(false)
+
+    var body: some View {
+        let w = model.slackWatch
+        HStack(spacing: 8) {
+            if let e = w["lastError"].nonEmpty {
+                Label(e, systemImage: "exclamationmark.triangle.fill").font(T.ui(11.5)).foregroundStyle(T.orange).lineLimit(1)
+            } else if w["mode"].string == "off" {
+                Text("Watching is off").font(T.ui(11.5)).foregroundStyle(T.text3)
+            } else if w["lastPollAt"].double > 0 {
+                Text(Fmt.checked(w["lastPollAt"].double)).font(T.ui(11.5)).foregroundStyle(T.text3)
+            }
+            IconButton(icon: "arrow.clockwise", help: "Check Slack now", spinning: checking.v) {
+                checking.v = true
+                Task { await model.slackCheckNow(); checking.v = false }
+            }
+            IconButton(icon: "gearshape", help: "Slack watch settings") { model.settingsPane = "integrations"; model.navigate(.settings) }
+        }
+    }
+}
+
+struct SlackItemRow: View {
+    @Environment(AppModel.self) var model
+    let item: JSON
+
+    var body: some View {
+        let skip = item["verdict"].string == "skip"
+        VStack(alignment: .leading, spacing: 10) {
+            head
+            MarkdownText(text: Session.plain(item["text"].string), size: 12.5, color: NT.text2)
+                .lineLimit(6)
+            if let r = item["reason"].nonEmpty {
+                Label("Orchestrator: \(r)", systemImage: "sparkles").font(T.ui(11.5)).foregroundStyle(T.text3)
+            }
+            actions
+        }
+        .padding(14)
+        .opacity(skip ? 0.6 : 1)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(T.raised.opacity(0.45)))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(T.line, lineWidth: 1))
+        .padding(.horizontal, 12).padding(.top, 10)
+    }
+
+    var head: some View {
+        HStack(spacing: 8) {
+            Avatar(name: item["who"].string, url: item["avatar"].string, size: 20)
+            Text(item["who"].string).font(T.ui(13, .semibold))
+            Text(item["channel"].nonEmpty ?? "Slack").font(T.ui(12)).foregroundStyle(T.text3)
+            Chip(text: item["kind"].string == "channel" ? "Channel post" : "Mention", icon: item["kind"].string == "channel" ? "number" : "at")
+            if item["count"].int > 1 { Chip(text: "\(item["count"].int) messages") }
+            if let v = item["verdict"].nonEmpty { Chip(text: v == "skip" ? "Triage: skip" : "Triage: actionable", icon: v == "skip" ? "minus.circle" : "checkmark.circle") }
+            Spacer()
+            Text(Fmt.ago(item["ts"].double)).font(T.ui(11.5)).foregroundStyle(T.text3)
+        }
+    }
+
+    var actions: some View {
+        HStack(spacing: 8) {
+            Button("Dismiss") { Task { await model.slackItem(item["id"].string, "dismiss") } }.buttonStyle(LButton())
+            Spacer()
+            if let link = item["permalink"].nonEmpty {
+                Button { model.openThread(link) } label: { Label("Read", systemImage: "text.bubble") }.buttonStyle(LButton())
+                Button { openURL(link) } label: { Image(systemName: "arrow.up.right") }.buttonStyle(LButton(square: true)).help("Open in Slack")
+                Menu {
+                    ForEach(model.projects) { p in
+                        Button(p.name) { Task { await model.slackItem(item["id"].string, "start", ["project": p.id]) } }
+                    }
+                } label: { Label("Hand to Claude", systemImage: "sparkles") } primaryAction: {
+                    Task { await model.slackItem(item["id"].string, "start", model.projectFilter.map { ["project": $0] } ?? [:]) }
+                }
+                .menuStyle(.button).buttonStyle(LButton(primary: true)).fixedSize()
+                .help("Run the Slack pipeline on this thread (pick a project from the arrow)")
+            }
+        }
     }
 }
