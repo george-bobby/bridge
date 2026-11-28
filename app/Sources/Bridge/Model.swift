@@ -610,6 +610,8 @@ final class AppModel {
     }
     /// The MCP editor or tools list, floating over the window (Servers.swift).
     var mcpSheet: MCPSheet? = nil
+    /// The archive dialog over the window (Archive.swift).
+    var archiveAsk: ArchiveAsk? = nil
     var composeText = ""
     /// Whether the New Task sheet was on "Start a worker now" when it closed.
     var composeDirect = false
@@ -1356,12 +1358,24 @@ final class AppModel {
         await refreshOpen()
     }
 
+    /// Every Archive goes through the dialog: it asks the server what the
+    /// chat's worktree holds, then offers to delete it along with archiving.
+    func confirmArchive(_ id: String) {
+        archiveAsk = ArchiveAsk(id: id, title: sessions.first { $0.id == id }?.title ?? "Session")
+        Task {
+            let w = (try? await API.get("/api/runs/\(API.q(id))/archive"))?["worktree"] ?? JSON.null
+            guard archiveAsk?.id == id else { return }
+            archiveAsk?.fill(w)
+        }
+    }
+
     /// Archive a chat (its open questions and to-dos are dismissed; the chat
-    /// is kept) or bring it back. Nothing is lost, so it doesn't ask first.
-    func setArchived(_ id: String, _ on: Bool) async {
+    /// is kept), optionally deleting the worktree Bridge made for it, or bring
+    /// it back. Use `confirmArchive` to archive from the UI.
+    func setArchived(_ id: String, _ on: Bool, deleteWorktree: Bool = false, force: Bool = false) async {
         let title = sessions.first { $0.id == id }?.title ?? "Session"
         await act {
-            try await API.post("/api/runs/\(API.q(id))/archive", ["archived": on])
+            let out = try await API.post("/api/runs/\(API.q(id))/archive", ["archived": on, "deleteWorktree": deleteWorktree, "force": force])
             if let i = self.sessions.firstIndex(where: { $0.id == id }) {
                 var o = self.sessions[i].j.object
                 o["archived"] = .bool(on)
@@ -1373,7 +1387,8 @@ final class AppModel {
                 if case .session(let r) = self.route, r == id { self.navigate(.sessions) }
                 if self.openId == id { self.openId = "" }
                 self.forgetPanes(of: id)
-                self.say("Archived \u{201C}\(title.count > 40 ? String(title.prefix(39)) + "…" : title)\u{201D}. Find it under Sessions › Archived")
+                let gone = out["worktree"]["removed"].bool ? " and deleted its worktree" : ""
+                self.say("Archived \u{201C}\(title.count > 40 ? String(title.prefix(39)) + "…" : title)\u{201D}\(gone). Find it under Sessions › Archived")
             } else {
                 self.say("Unarchived \u{201C}\(title.count > 40 ? String(title.prefix(39)) + "…" : title)\u{201D}")
             }

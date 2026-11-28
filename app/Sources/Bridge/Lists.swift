@@ -291,7 +291,7 @@ struct SessionMenu: View {
                 if session.archived {
                     Button { Task { await model.setArchived(session.id, false) } } label: { Label("Unarchive", systemImage: "tray.and.arrow.up") }
                 } else {
-                    Button { Task { await model.setArchived(session.id, true) } } label: { Label("Archive", systemImage: "archivebox") }
+                    Button { model.confirmArchive(session.id) } label: { Label("Archive…", systemImage: "archivebox") }
                         .disabled(model.isLive(session))
                 }
             }

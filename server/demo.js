@@ -187,8 +187,8 @@ const stoppedPids = new Set();
 function ports() {
   return {
     servers: [
-      { pid: 41210, command: "node", cwd: `${WT}/alex-web-124-apple-pay/web`, ports: [3000] },
-      { pid: 41388, command: "python3.12", cwd: `${WT}/alex-web-131-rate-limit-search/api`, ports: [8000] },
+      { pid: 41210, command: "node", cwd: `${WT}/web-124-apple-pay/web`, ports: [3000] },
+      { pid: 41388, command: "python3.12", cwd: `${WT}/web-131-rate-limit-search/api`, ports: [8000] },
     ].filter((s) => !stoppedPids.has(s.pid)),
     at: Date.now(),
   };
@@ -380,27 +380,27 @@ function sessions() {
             tool("Bash", "gh pr create --title 'feat(checkout): Apple Pay in the payment step (WEB-124)'", "https://github.com/acme/storefront/pull/482"),
             say("Apple Pay is live behind `wallets`.\n\n- Payment Request Button renders when the browser supports it, falling back to the card form\n- Domain association file served from `/.well-known/`\n- 20 checkout tests pass; verified on Safari with a sandbox card\n\nOpened **#482**. It needs a reviewer from payments."),
           ],
-          { cost: 4.12, ms: 612000, turns: 38, out: 18400, workdir: `${WT}/alex-web-124-apple-pay` },
+          { cost: 4.12, ms: 612000, turns: 38, out: 18400, workdir: `${WT}/web-124-apple-pay` },
         ),
         event("Report: PR #482 opened", 1500, "outcome"),
         user('Does the button show up on Chrome for desktop too, or only Safari?', 1400),
-        claude(1360, [say('Only where `canMakePayment()` says Apple Pay is available: Safari on macOS and iOS. Chrome gets Google Pay through the same Payment Request Button when the flag is on, which is what we want.')], { cost: 0.3, ms: 40000, turns: 3, workdir: `${WT}/alex-web-124-apple-pay` }),
+        claude(1360, [say('Only where `canMakePayment()` says Apple Pay is available: Safari on macOS and iOS. Chrome gets Google Pay through the same Payment Request Button when the flag is on, which is what we want.')], { cost: 0.3, ms: 40000, turns: 3, workdir: `${WT}/web-124-apple-pay` }),
         user("Let's keep Google Pay out of this PR. Can you scope it to Apple Pay only?", 1280),
-        claude(1240, [say("Done. `paymentRequest` now passes `wallets: { applePay: 'auto', googlePay: 'never' }`, so Chrome falls back to the card form. Tests updated.")], { cost: 0.3, ms: 40000, turns: 3, workdir: `${WT}/alex-web-124-apple-pay` }),
+        claude(1240, [say("Done. `paymentRequest` now passes `wallets: { applePay: 'auto', googlePay: 'never' }`, so Chrome falls back to the card form. Tests updated.")], { cost: 0.3, ms: 40000, turns: 3, workdir: `${WT}/web-124-apple-pay` }),
         user('What happens if the user cancels the Apple Pay sheet?', 1160),
-        claude(1120, [say('The `cancel` event resets `submitting` and keeps the card form visible below the button. No order is created until `paymentmethod` fires, so a cancel leaves nothing behind.')], { cost: 0.3, ms: 40000, turns: 3, workdir: `${WT}/alex-web-124-apple-pay` }),
+        claude(1120, [say('The `cancel` event resets `submitting` and keeps the card form visible below the button. No order is created until `paymentmethod` fires, so a cancel leaves nothing behind.')], { cost: 0.3, ms: 40000, turns: 3, workdir: `${WT}/web-124-apple-pay` }),
         user('Add a test for the cancel path.', 1040),
-        claude(1000, [say('Added `wallets.test.tsx › cancel keeps the card form`: it fires `cancel` on the mocked request and asserts no `createOrder` call. 21 tests pass.')], { cost: 0.3, ms: 40000, turns: 3, workdir: `${WT}/alex-web-124-apple-pay` }),
+        claude(1000, [say('Added `wallets.test.tsx › cancel keeps the card form`: it fires `cancel` on the mocked request and asserts no `createOrder` call. 21 tests pass.')], { cost: 0.3, ms: 40000, turns: 3, workdir: `${WT}/web-124-apple-pay` }),
         user('The domain association file: is it served with the right content type?', 920),
-        claude(880, [say("It's served as `application/octet-stream` by the static handler, which Apple accepts. I added a test that fetches `/.well-known/apple-developer-merchantid-domain-association` and checks a 200.")], { cost: 0.3, ms: 40000, turns: 3, workdir: `${WT}/alex-web-124-apple-pay` }),
+        claude(880, [say("It's served as `application/octet-stream` by the static handler, which Apple accepts. I added a test that fetches `/.well-known/apple-developer-merchantid-domain-association` and checks a 200.")], { cost: 0.3, ms: 40000, turns: 3, workdir: `${WT}/web-124-apple-pay` }),
         user('Can we log when Apple Pay is offered vs used, for the rollout dashboard?', 800),
-        claude(760, [say("Two analytics events: `wallet_offered` when the button renders and `wallet_used` on `paymentmethod`, both with `{ wallet: 'apple_pay' }`. They go through the existing `track()` helper.")], { cost: 0.3, ms: 40000, turns: 3, workdir: `${WT}/alex-web-124-apple-pay` }),
+        claude(760, [say("Two analytics events: `wallet_offered` when the button renders and `wallet_used` on `paymentmethod`, both with `{ wallet: 'apple_pay' }`. They go through the existing `track()` helper.")], { cost: 0.3, ms: 40000, turns: 3, workdir: `${WT}/web-124-apple-pay` }),
         user('Rename the events to checkout_wallet_offered and checkout_wallet_used to match our naming.', 680),
-        claude(640, [say('Renamed both, and updated the event catalog in `docs/analytics.md`.')], { cost: 0.3, ms: 40000, turns: 3, workdir: `${WT}/alex-web-124-apple-pay` }),
+        claude(640, [say('Renamed both, and updated the event catalog in `docs/analytics.md`.')], { cost: 0.3, ms: 40000, turns: 3, workdir: `${WT}/web-124-apple-pay` }),
         user('Payments review asked about 3DS. Do we handle it?', 560),
-        claude(520, [say("Yes: when the PaymentIntent comes back `requires_action`, we call `stripe.handleNextAction` before confirming the order, same as the card path. Added a test with Stripe's 3DS test card token.")], { cost: 0.3, ms: 40000, turns: 3, workdir: `${WT}/alex-web-124-apple-pay` }),
+        claude(520, [say("Yes: when the PaymentIntent comes back `requires_action`, we call `stripe.handleNextAction` before confirming the order, same as the card path. Added a test with Stripe's 3DS test card token.")], { cost: 0.3, ms: 40000, turns: 3, workdir: `${WT}/web-124-apple-pay` }),
         user('Squash the fixups and push, then summarize the PR for the reviewer.', 440),
-        claude(400, [say('Pushed a clean history (3 commits) to **#482**.\n\n- Apple Pay only (Google Pay off), behind `wallets`\n- Cancel and 3DS paths covered; 23 checkout tests pass\n- `checkout_wallet_offered` / `checkout_wallet_used` events for the rollout dashboard')], { cost: 0.3, ms: 40000, turns: 3, workdir: `${WT}/alex-web-124-apple-pay` }),
+        claude(400, [say('Pushed a clean history (3 commits) to **#482**.\n\n- Apple Pay only (Google Pay off), behind `wallets`\n- Cancel and 3DS paths covered; 23 checkout tests pass\n- `checkout_wallet_offered` / `checkout_wallet_used` events for the rollout dashboard')], { cost: 0.3, ms: 40000, turns: 3, workdir: `${WT}/web-124-apple-pay` }),
       ],
     }),
     run("t-241125-web-131-rate-limit", {
@@ -471,9 +471,9 @@ function sessions() {
 }
 
 const tasks = [
-  { id: "t-241125-web-124-apple-pay", title: "WEB-124 Apple Pay in the payment step", branch: "alex/web-124-apple-pay", worktree: `${WT}/alex-web-124-apple-pay`, status: "ready-for-review", prUrl: `${GH}/482` },
-  { id: "t-241125-web-131-rate-limit", title: "WEB-131 Rate-limit the search API", branch: "alex/web-131-rate-limit-search", worktree: `${WT}/alex-web-131-rate-limit-search`, status: "needs-input", prUrl: `${GH}/479`, phase: "waiting on a decision" },
-  { id: "t-241124-web-127-cdn", title: "WEB-127 Move product images to the new CDN", branch: "alex/web-127-cdn", worktree: `${WT}/alex-web-127-cdn`, status: "new" },
+  { id: "t-241125-web-124-apple-pay", title: "WEB-124 Apple Pay in the payment step", branch: "alex/web-124-apple-pay", worktree: `${WT}/web-124-apple-pay`, status: "ready-for-review", prUrl: `${GH}/482` },
+  { id: "t-241125-web-131-rate-limit", title: "WEB-131 Rate-limit the search API", branch: "alex/web-131-rate-limit-search", worktree: `${WT}/web-131-rate-limit-search`, status: "needs-input", prUrl: `${GH}/479`, phase: "waiting on a decision" },
+  { id: "t-241124-web-127-cdn", title: "WEB-127 Move product images to the new CDN", branch: "alex/web-127-cdn", worktree: `${WT}/web-127-cdn`, status: "new" },
 ];
 
 /** Write the demo team into `dataDir`, replacing whatever was there. */
@@ -729,18 +729,26 @@ const git = () => ({
   current: "main",
   branches: [
     { name: "main", remote: false, date: now() - 3600, subject: "Merge #479: faster product grid", worktree: REPO, default: true },
-    { name: "alex/web-124-apple-pay", remote: false, date: now() - 5400, subject: "Apple Pay behind the wallets flag", worktree: `${WT}/alex-web-124-apple-pay`, default: false },
-    { name: "alex/web-131-rate-limit", remote: false, date: now() - 9000, subject: "Rate-limit search per API key", worktree: `${WT}/alex-web-131-rate-limit`, default: false },
+    { name: "alex/web-124-apple-pay", remote: false, date: now() - 5400, subject: "Apple Pay behind the wallets flag", worktree: `${WT}/web-124-apple-pay`, default: false },
+    { name: "alex/web-131-rate-limit", remote: false, date: now() - 9000, subject: "Rate-limit search per API key", worktree: `${WT}/web-131-rate-limit`, default: false },
     { name: "release/2026.11", remote: false, date: now() - 2 * DAY, subject: "Cut 2026.11", worktree: "", default: false },
     { name: "origin/maya/vat-cart", remote: true, date: now() - 3 * DAY, subject: "Show VAT-inclusive prices in the cart", worktree: "", default: false },
     { name: "origin/kai/sitemap-cdn", remote: true, date: now() - 4 * DAY, subject: "Sitemap: use CDN URLs", worktree: "", default: false },
   ],
   worktrees: [
     { path: REPO, branch: "main", head: "a41c9e2", main: true, name: "storefront" },
-    { path: `${WT}/alex-web-124-apple-pay`, branch: "alex/web-124-apple-pay", head: "7d02b1f", main: false, name: "alex-web-124-apple-pay" },
-    { path: `${WT}/alex-web-131-rate-limit`, branch: "alex/web-131-rate-limit", head: "c93e0aa", main: false, name: "alex-web-131-rate-limit" },
+    { path: `${WT}/web-124-apple-pay`, branch: "alex/web-124-apple-pay", head: "7d02b1f", main: false, name: "web-124-apple-pay" },
+    { path: `${WT}/web-131-rate-limit`, branch: "alex/web-131-rate-limit", head: "c93e0aa", main: false, name: "web-131-rate-limit" },
   ],
 });
+
+/** The archive dialog's worktree check: Apple Pay's is clean, the rate limit's has work that isn't pushed. */
+function archive(id) {
+  const t = tasks.find((x) => x.id === id);
+  if (!t) return { owned: false, exists: false, reason: "no worktree" };
+  const risky = id.includes("web-131");
+  return { owned: true, exists: true, path: t.worktree, branch: t.branch, dirty: risky, dirtyFiles: risky ? 3 : 0, unpushed: risky ? 2 : 0 };
+}
 
 /** Chats from the agents' own histories (Import chat), all fictional. */
 const historyChats = () => [
@@ -1017,4 +1025,4 @@ function tokens() {
   };
 }
 
-module.exports = { seed, writeSessions, seedSkills, plugins, pulls, linear, ports, stopServer, slack, usage, agents, prActivity, mcp, git, history, vercel, incidents, granola, granolaNote, datadog, tokens, models };
+module.exports = { archive, seed, writeSessions, seedSkills, plugins, pulls, linear, ports, stopServer, slack, usage, agents, prActivity, mcp, git, history, vercel, incidents, granola, granolaNote, datadog, tokens, models };

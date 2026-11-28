@@ -1297,7 +1297,19 @@ async function handle(req, res) {
       return;
     }
 
-    // Archive a chat, or bring it back ({ archived: false }).
+    // What archiving would do with the chat's worktree (the archive dialog asks first).
+    if (req.method === "GET" && verb === "archive") {
+      try {
+        sendJson(res, 200, { ok: true, worktree: env.demo ? require("./demo").archive(id) : await harness.worktreeState(id) });
+      } catch (e) {
+        sendJson(res, 400, { ok: false, error: String(e.message || e) });
+      }
+      return;
+    }
+
+    // Archive a chat, or bring it back ({ archived: false }); `deleteWorktree`
+    // removes a worktree Bridge made, refusing (409, `refused`) on uncommitted
+    // or unpushed work unless `force`.
     if (req.method === "POST" && verb === "archive") {
       try {
         const body = JSON.parse((await readBody(req)) || "{}");
@@ -1310,9 +1322,9 @@ async function handle(req, res) {
           sendJson(res, 409, { ok: false, error: "stop the running job first" });
           return;
         }
-        sendJson(res, 200, { ok: true, ...harness.archive(id, on) });
+        sendJson(res, 200, { ok: true, ...(await harness.archive(id, on, { deleteWorktree: !!body.deleteWorktree, force: !!body.force })) });
       } catch (e) {
-        sendJson(res, 400, { ok: false, error: String(e.message || e) });
+        sendJson(res, e.refused ? 409 : 400, { ok: false, error: String(e.message || e), ...(e.refused ? { refused: true } : {}) });
       }
       return;
     }

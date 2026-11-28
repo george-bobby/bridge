@@ -411,8 +411,8 @@ async function spawnTask({ repo, title, brief, branch, base = "", workspace = ""
   const repoPath = path.resolve(String(repo || projects.rootDir()));
   const t = title ? String(title).replace(/^#+\s*/, "").slice(0, 80).trim() : tasks.titleFrom(text);
   const id = tasks.newTaskId(t);
-  // A short time-based suffix keeps two tasks with the same title apart.
-  const br = branch || `${env.branchPrefix}/${tasks.slugify(t) || "task"}-${Date.now().toString(36).slice(-4)}`;
+  // `<prefix>/<slug>`; two tasks with the same title get `-2`, `-3`… (createWorktree).
+  const br = branch || `${env.branchPrefix}/${tasks.slugify(t) || "task"}`;
 
   // Where it works: a fresh worktree (the default), the main checkout
   // ("local"), or an existing worktree of this repo (its path). Bridge never
@@ -422,7 +422,7 @@ async function spawnTask({ repo, title, brief, branch, base = "", workspace = ""
   // Not a git checkout (Default's root folder): the session just runs there.
   const plain = !fs.existsSync(path.join(repoPath, ".git"));
   if (plain) wt = { worktree: repoPath, branch: "", base: "", from: "", copied: 0, adopted: "folder" };
-  else if (!ws || ws === "worktree") wt = await tasks.createWorktree({ repo: repoPath, branch: br, from: base });
+  else if (!ws || ws === "worktree") wt = await tasks.createWorktree({ repo: repoPath, branch: br, from: base, unique: !branch });
   else {
     const info = await tasks.branches(repoPath);
     const dir = ws === "local" ? info.worktrees.find((w) => w.main) : info.worktrees.find((w) => path.resolve(w.path) === path.resolve(ws));
@@ -627,12 +627,18 @@ async function decide(id, { answer = "", action = "answer" } = {}) {
 
 /* --------------------------------------------------------------- cleanup */
 
+/** Another live task that adopted this task's checkout, if any. */
+function borrowerOf(taskId, meta) {
+  if (!meta.worktree || meta.adopted) return null;
+  return tasks.list().find((t) => t.id !== taskId && t.adopted && t.worktree && path.resolve(t.worktree) === path.resolve(meta.worktree) && !["cleaned", "deleted"].includes(t.status)) || null;
+}
+
 async function cleanup(taskId, { force = false } = {}) {
   if (jobs.isRunning(taskId)) throw new Error("stop the worker before cleaning up its worktree");
   const meta = tasks.readMeta(taskId);
   if (!meta) throw new Error(`no such task: ${taskId}`);
   // Another live task working in this checkout (it adopted it): leave it be.
-  const borrower = meta.worktree && !meta.adopted ? tasks.list().find((t) => t.id !== taskId && t.adopted && t.worktree && path.resolve(t.worktree) === path.resolve(meta.worktree) && !["cleaned", "deleted"].includes(t.status)) : null;
+  const borrower = borrowerOf(taskId, meta);
   if (borrower) {
     const err = new Error(`refusing: ${borrower.id} is working in ${meta.worktree}. Clean that task up first.`);
     err.refused = true;
@@ -689,12 +695,38 @@ function discard(taskId) {
 }
 
 /**
+ * What archiving could do with a chat's checkout. `owned`: Bridge made the
+ * worktree, it's still there and nobody else works in it, so it may go;
+ * `dirty`/`unpushed` say what deleting it would lose. Otherwise `reason`.
+ */
+async function worktreeState(id) {
+  const meta = tasks.exists(id) ? tasks.readMeta(id) : null;
+  if (!meta || !meta.worktree) return { owned: false, exists: false, reason: "no worktree" };
+  const base = { path: meta.worktree, branch: meta.branch || "" };
+  if (meta.adopted) {
+    const what = meta.adopted === "local" ? "the main checkout" : meta.adopted === "folder" ? "a plain folder" : meta.adopted === "import" ? "an imported chat's folder" : "an existing worktree";
+    return { ...base, owned: false, exists: fs.existsSync(meta.worktree), reason: `${what}, not Bridge's to delete` };
+  }
+  if (GONE.has(meta.status)) return { ...base, owned: false, exists: false, reason: "already removed" };
+  const borrower = borrowerOf(id, meta);
+  if (borrower) return { ...base, owned: false, exists: true, reason: `${borrower.id} is working in it` };
+  const insp = await tasks.inspectWorktree(meta.worktree);
+  if (!insp.exists) return { ...base, owned: false, exists: false, reason: "already removed" };
+  return { ...base, owned: true, ...insp };
+}
+
+/**
  * Archiving a chat puts it away without losing it: its open decisions and
  * to-dos close and it leaves the sidebar, board, Workers and the roster.
+ * With `deleteWorktree`, a worktree Bridge made goes too (the branch stays),
+ * through cleanup: uncommitted or unpushed work refuses (`err.refused`, the
+ * chat stays put) unless `force`. Anything else is left on disk.
  * Unarchiving brings the chat back as it was; the closed Inbox items stay closed.
  */
-function archive(id, on = true) {
+async function archive(id, on = true, { deleteWorktree = false, force = false } = {}) {
   if (on && jobs.isRunning(id)) throw new Error("stop the running job first");
+  let worktree = null;
+  if (on && deleteWorktree && (await worktreeState(id)).owned) worktree = await cleanup(id, { force });
   const archived = store.setArchived(id, on);
   if (tasks.exists(id)) {
     tasks.writeMeta(id, { archived });
@@ -702,7 +734,7 @@ function archive(id, on = true) {
   }
   if (archived) closeInbox(id);
   bus.broadcast("runs", { runs: store.listRunSummaries() });
-  return { archived };
+  return { archived, ...(worktree ? { worktree } : {}) };
 }
 
 /**
@@ -711,7 +743,7 @@ function archive(id, on = true) {
  * (sources.pulls()); a chat that is running or was unarchived by hand is left
  * alone. Worktrees stay on disk. Returns the ids it archived.
  */
-function autoArchive(pulls, nowMs = Date.now()) {
+async function autoArchive(pulls, nowMs = Date.now()) {
   const days = cfg().autoArchiveDays;
   if (!days || !pulls || !Array.isArray(pulls.merged)) return [];
   const norm = (u) => String(u || "").split(/[?#]/)[0].replace(/\/+$/, "").toLowerCase();
@@ -726,7 +758,8 @@ function autoArchive(pulls, nowMs = Date.now()) {
     const run = store.loadRun(s.runId);
     if (!run || run.unarchivedAt) continue;
     try {
-      archive(s.runId, true);
+      // No deleteWorktree: auto-archive leaves the worktree on disk.
+      await archive(s.runId, true);
       if (tasks.exists(s.runId)) tasks.appendEvent({ taskId: s.runId, name: "auto-archived", text: `PR merged ${days} day${days === 1 ? "" : "s"} ago` });
       done.push(s.runId);
     } catch (err) {
@@ -915,6 +948,7 @@ module.exports = {
   discard,
   archive,
   autoArchive,
+  worktreeState,
   status,
   inbox,
   catchup,

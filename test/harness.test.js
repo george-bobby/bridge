@@ -787,6 +787,69 @@ test("archiving a chat clears its Inbox items and hides it; unarchiving brings i
   assert.equal((await api("POST", "/api/runs/orchestrator/archive", {})).status, 409, "the orchestrator stays");
 });
 
+test("worktrees live at <repo>-worktrees/<branch minus user/>; a taken name moves on to -2", async () => {
+  const WT = ENV.WORKTREE_ROOT;
+  const named = await spawnTask("named", "x", { branch: "george-mercor/foo", start: false });
+  assert.equal(named.worktree, path.join(WT, "foo"));
+  assert.equal(named.branch, "george-mercor/foo");
+  assert.equal(git(["rev-parse", "--abbrev-ref", "HEAD"], named.worktree), "george-mercor/foo");
+
+  // A named branch must be free; only its folder moves on when one is in the way.
+  assert.equal((await api("POST", "/api/tasks", { repo: REPO, title: "x", brief: "x", branch: "george-mercor/foo", start: false })).ok, false);
+  const other = await spawnTask("other user", "x", { branch: "someone/foo", start: false });
+  assert.equal(other.worktree, path.join(WT, "foo-2"));
+
+  // Bridge's own names: `<prefix>/<slug>`, no random suffix; a repeat title takes -2 for both.
+  const a = await spawnTask("Same Title", "x", { start: false });
+  const b = await spawnTask("Same Title", "x", { start: false });
+  assert.deepEqual([a.branch, a.worktree], ["test/same-title", path.join(WT, "same-title")]);
+  assert.deepEqual([b.branch, b.worktree], ["test/same-title-2", path.join(WT, "same-title-2")]);
+});
+
+test("archive can delete the worktree Bridge made: refuses on unpushed work unless forced, keeps the chat and branch", async () => {
+  const summary = async (id) => (await api("GET", "/api/runs")).runs.find((r) => r.runId === id);
+  const clean = await spawnTask("archive and delete", "x", { start: false });
+  const pre = await api("GET", `/api/runs/${clean.taskId}/archive`);
+  assert.equal(pre.worktree.owned, true);
+  assert.equal(pre.worktree.path, clean.worktree);
+  const out = await api("POST", `/api/runs/${clean.taskId}/archive`, { deleteWorktree: true });
+  assert.equal(out.ok, true, out.error);
+  assert.equal(out.worktree.removed, true);
+  assert.ok(!fs.existsSync(clean.worktree), "worktree deleted");
+  assert.ok(git(["rev-parse", "--verify", "--quiet", `refs/heads/${clean.branch}`]), "branch kept");
+  assert.equal((await summary(clean.taskId)).archived, true, "the chat is kept");
+  assert.equal((await api("GET", `/api/runs/${clean.taskId}/archive`)).worktree.owned, false, "nothing left to delete");
+  // Unarchiving a chat whose worktree is gone still works and its transcript loads.
+  assert.equal((await api("POST", `/api/runs/${clean.taskId}/archive`, { archived: false })).archived, false);
+  assert.ok((await api("GET", `/api/runs/${clean.taskId}`)).run.messages.length > 0);
+
+  // Uncommitted and unpushed work: refused, nothing archived or deleted, until forced.
+  const dirty = await spawnTask("archive dirty", "x", { start: false });
+  fs.writeFileSync(path.join(dirty.worktree, "a.txt"), "a\n");
+  git(["add", "."], dirty.worktree);
+  git(["commit", "-q", "-m", "local only"], dirty.worktree);
+  fs.writeFileSync(path.join(dirty.worktree, "b.txt"), "b\n");
+  const st = (await api("GET", `/api/runs/${dirty.taskId}/archive`)).worktree;
+  assert.deepEqual([st.owned, st.dirty, st.dirtyFiles, st.unpushed], [true, true, 1, 1]);
+  const refused = await api("POST", `/api/runs/${dirty.taskId}/archive`, { deleteWorktree: true });
+  assert.equal(refused.status, 409);
+  assert.equal(refused.refused, true);
+  assert.ok(fs.existsSync(dirty.worktree), "worktree kept");
+  assert.ok(!(await summary(dirty.taskId)).archived, "not archived either");
+  const forced = await api("POST", `/api/runs/${dirty.taskId}/archive`, { deleteWorktree: true, force: true });
+  assert.equal(forced.ok, true, forced.error);
+  assert.ok(!fs.existsSync(dirty.worktree));
+  assert.equal((await summary(dirty.taskId)).archived, true);
+
+  // A checkout Bridge didn't make (the main checkout) is never offered or deleted.
+  const local = await spawnTask("archive local", "x", { workspace: "local", start: false });
+  const lst = (await api("GET", `/api/runs/${local.taskId}/archive`)).worktree;
+  assert.equal(lst.owned, false);
+  assert.match(lst.reason, /main checkout/);
+  assert.equal((await api("POST", `/api/runs/${local.taskId}/archive`, { deleteWorktree: true })).archived, true);
+  assert.ok(fs.existsSync(path.join(REPO, "README.md")), "the main checkout stays");
+});
+
 test("bridge plan: a worker's task list, set, ticked and shown on its session", async () => {
   const t = await spawnTask("planny", "stub:report=ready-for-review");
   await waitFor(statusIs(t.taskId, "ready-for-review"), 15000, "report");

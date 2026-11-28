@@ -26,7 +26,7 @@ import SwiftUI
     static let grave: UInt16 = 50, tab: UInt16 = 48, minus: UInt16 = 27, openBracket: UInt16 = 33, closeBracket: UInt16 = 30
 
     static func handle(_ e: NSEvent, _ model: AppModel) -> Bool {
-        guard e.window?.isKeyWindow ?? true, !model.importOpen, model.mcpSheet == nil else { return false }
+        guard e.window?.isKeyWindow ?? true, !model.importOpen, model.mcpSheet == nil, model.archiveAsk == nil else { return false }
         let f = e.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting([.numericPad, .function, .capsLock])
         let key = e.charactersIgnoringModifiers?.lowercased() ?? ""
         let console = ConsoleStore.shared
