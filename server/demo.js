@@ -908,4 +908,77 @@ function plugins() {
   };
 }
 
-module.exports = { seed, writeSessions, seedSkills, plugins, pulls, linear, ports, stopServer, slack, usage, agents, prActivity, mcp, git, history, vercel, incidents, granola, granolaNote, datadog };
+/** Settings › Tokens (server/tokens.js): CodeBurn's spend and the token savers. */
+const demoSavers = { rtk: true, caveman: false, ponytail: false };
+function tokens() {
+  const scale = { today: 0.04, week: 0.3, "30days": 1, month: 0.82 };
+  const saver = (id, name, blurb, repo, agents, stats) => ({
+    id,
+    name,
+    blurb,
+    url: `https://github.com/${repo}`,
+    installed: id === "rtk" || demoSavers[id],
+    enabled: demoSavers[id],
+    agents: agents.map((agent) => ({ agent, on: demoSavers[id] })),
+    changes: id === "rtk" ? "On adds RTK's PreToolUse hook to ~/.claude/settings.json, ~/.codex/hooks.json, ~/.cursor/hooks.json and an RTK.md referenced from CLAUDE.md/AGENTS.md (backups as .bak). Off runs RTK's uninstall, which removes only its own entries. New sessions pick it up." : "On installs the plugin for Claude Code (user scope) and sets it in enabledPlugins in ~/.claude/settings.json. Off disables it and leaves it installed. New sessions pick it up.",
+    enable: id === "rtk" ? [["rtk", "init", "-g", "--auto-patch"], ["rtk", "init", "-g", "--codex"], ["rtk", "init", "-g", "--agent", "cursor", "--auto-patch"]] : [["claude", "plugin", "marketplace", "add", repo], ["claude", "plugin", "install", `${id}@${id}`, "--scope", "user"]],
+    disable: id === "rtk" ? [["rtk", "init", "-g", "--uninstall"], ["rtk", "init", "-g", "--codex", "--uninstall"]] : [["claude", "plugin", "disable", `${id}@${id}`]],
+    ...(stats && demoSavers[id] ? { stats } : {}),
+  });
+  const savers = () => [
+    saver("rtk", "RTK", "Compresses shell output (tests, git, builds, logs) before the agent reads it, through a hook that rewrites commands to `rtk …`.", "rtk-ai/rtk", ["Claude", "Codex", "Cursor"], "1,284 commands, 2,913,402 tokens saved (78%)"),
+    saver("caveman", "Caveman", "Makes the agent's replies terse: drops filler, keeps code, commands and exact errors. Starts with every Claude Code session.", "JuliusBrussee/caveman", ["Claude"]),
+    saver("ponytail", "Ponytail", "Pushes the agent to the smallest change that works: reuse what exists, standard library first, no unrequested abstractions.", "DietrichGebert/ponytail", ["Claude"]),
+  ];
+  const k = (n, period) => Math.round(n * scale[period]);
+  const c = (n, period) => Math.round(n * scale[period] * 100) / 100;
+  return {
+    codeburn: (period) => ({
+      ok: true,
+      installed: true,
+      version: "0.9.28",
+      period,
+      label: { today: "Today", week: "7 Days", "30days": "Last 30 Days", month: "November 2026" }[period],
+      generated: new Date().toISOString(),
+      currency: "$",
+      cost: c(1846.2, period),
+      calls: k(21480, period),
+      sessions: k(312, period),
+      tokens: { input: k(4120000, period), output: k(11830000, period), cacheRead: k(5210000000, period), cacheWrite: k(96400000, period) },
+      cacheHit: 97,
+      oneShot: 91,
+      totals: { today: { cost: 73.85, calls: 860 }, week: { cost: 553.86, calls: 6444 }, "30days": { cost: 1846.2, calls: 21480 }, month: { cost: 1513.88, calls: 17614 } },
+      providers: [
+        { name: "Claude", cost: c(1622.4, period), calls: k(18310, period) },
+        { name: "Codex", cost: c(141.3, period), calls: k(2120, period) },
+        { name: "Cursor", cost: c(64.1, period), calls: k(810, period) },
+        { name: "Devin", cost: c(18.4, period), calls: k(240, period) },
+      ],
+      models: [
+        { name: "Opus 5.5", cost: c(1488.2, period), calls: k(15200, period) },
+        { name: "Sonnet 5.5", cost: c(201.7, period), calls: k(3900, period) },
+        { name: "GPT-6.1", cost: c(129.9, period), calls: k(1980, period) },
+        { name: "Haiku 5.5", cost: c(26.4, period), calls: k(400, period) },
+      ],
+      projects: [
+        { name: "storefront", cost: c(1102.5, period), sessions: k(184, period) },
+        { name: "payments-api", cost: c(512.8, period), sessions: k(92, period) },
+        { name: "design-system", cost: c(230.9, period), sessions: k(36, period) },
+      ],
+      activities: [
+        { name: "Coding", cost: c(722.4, period), turns: k(980, period) },
+        { name: "Exploration", cost: c(511.3, period), turns: k(1420, period) },
+        { name: "Debugging", cost: c(338.6, period), turns: k(410, period) },
+        { name: "Testing", cost: c(173.9, period), turns: k(260, period) },
+      ],
+    }),
+    savers,
+    toggle(id, on) {
+      if (!(id in demoSavers)) throw new Error(`unknown saver: ${id}`);
+      demoSavers[id] = !!on;
+      return { saver: savers().find((s) => s.id === id), log: "" };
+    },
+  };
+}
+
+module.exports = { seed, writeSessions, seedSkills, plugins, pulls, linear, ports, stopServer, slack, usage, agents, prActivity, mcp, git, history, vercel, incidents, granola, granolaNote, datadog, tokens };

@@ -7,7 +7,7 @@ import SwiftUI
 // save bar. Secrets are write-only: the server only says whether one is set.
 
 enum SettingsPane: String, CaseIterable, Identifiable {
-    case general, agents, rules, pipeline, mcp, integrations, projects, notifications, advanced
+    case general, agents, rules, pipeline, mcp, tokens, integrations, projects, notifications, advanced
     var id: String { rawValue }
     var label: String {
         switch self {
@@ -16,6 +16,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .rules: return "Rules"
         case .pipeline: return "Pipeline"
         case .mcp: return "Customize"
+        case .tokens: return "Tokens"
         case .integrations: return "Integrations"
         case .projects: return "Projects"
         case .notifications: return "Notifications"
@@ -29,6 +30,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .rules: return "checklist"
         case .pipeline: return "arrow.triangle.branch"
         case .mcp: return "puzzlepiece.extension"
+        case .tokens: return "flame"
         case .integrations: return "square.stack.3d.up"
         case .projects: return "folder"
         case .notifications: return "bell"
@@ -42,6 +44,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .rules: return "House rules every session follows, in every repo: added to each worker's and orchestrator's instructions."
         case .pipeline: return "How every new session works its task: gather context, check it isn't built, plan or build, verify, open the PR and see it through review and CI."
         case .mcp: return "What each agent loads: MCP servers, skills and plugins. Changes go into the agent's own folders and config."
+        case .tokens: return "What the agents on this Mac spent, from CodeBurn, and the token savers you can switch on for them."
         case .integrations: return "Connect your tools. Bridge works out who you are and which repo from each connection; nothing else to type. Keys are stored in .env and never shown again."
         case .projects: return "Default and your repositories, each with its own orchestrator. Git settings come from each project's own checkout."
         case .notifications: return "When Bridge interrupts you, on this Mac."
@@ -245,6 +248,7 @@ struct SettingsView: View {
         case .rules: CommonRulesSettings(q: q)
         case .pipeline: PipelineSettings(q: q)
         case .mcp: CustomizeSettings(q: q)
+        case .tokens: TokensSettings(q: q)
         case .integrations: IntegrationSettings(env: env, q: q)
         case .projects: ProjectSettings(env: env, q: q)
         case .notifications: NotificationSettings(q: q)
