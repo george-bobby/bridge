@@ -7,7 +7,7 @@ import SwiftUI
 // save bar. Secrets are write-only: the server only says whether one is set.
 
 enum SettingsPane: String, CaseIterable, Identifiable {
-    case general, agents, rules, pipeline, mcp, tokens, integrations, projects, notifications, advanced
+    case general, agents, rules, pipeline, mcp, plugins, tokens, integrations, notifications, advanced
     var id: String { rawValue }
     var label: String {
         switch self {
@@ -16,9 +16,9 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .rules: return "Rules"
         case .pipeline: return "Pipeline"
         case .mcp: return "Customize"
+        case .plugins: return "Plugins"
         case .tokens: return "Tokens"
         case .integrations: return "Integrations"
-        case .projects: return "Projects"
         case .notifications: return "Notifications"
         case .advanced: return "Advanced"
         }
@@ -29,10 +29,10 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .agents: return "cpu"
         case .rules: return "checklist"
         case .pipeline: return "arrow.triangle.branch"
-        case .mcp: return "puzzlepiece.extension"
+        case .mcp: return "wrench.and.screwdriver"
+        case .plugins: return "puzzlepiece.extension"
         case .tokens: return "flame"
         case .integrations: return "square.stack.3d.up"
-        case .projects: return "folder"
         case .notifications: return "bell"
         case .advanced: return "slider.horizontal.3"
         }
@@ -43,12 +43,12 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .agents: return "The agents on this Mac, and what a new session starts with."
         case .rules: return "House rules every session follows, in every repo: added to each worker's and orchestrator's instructions."
         case .pipeline: return "How every new session works its task: gather context, check it isn't built, plan or build, verify, open the PR and see it through review and CI."
-        case .mcp: return "What each agent loads: MCP servers, skills and plugins. Changes go into the agent's own folders and config."
+        case .mcp: return "What each agent loads: MCP servers and skills. Changes go into the agent's own folders and config."
+        case .plugins: return "Plugins for every agent on this Mac, by agent. Changes go through each agent's own CLI."
         case .tokens: return "What the agents on this Mac spent, from CodeBurn, and the token savers you can switch on for them."
         case .integrations: return "Connect your tools. Bridge works out who you are and which repo from each connection; nothing else to type. Keys are stored in .env and never shown again."
-        case .projects: return "Default and your repositories, each with its own orchestrator. Git settings come from each project's own checkout."
         case .notifications: return "When Bridge interrupts you, on this Mac."
-        case .advanced: return "Overrides for what Bridge works out itself, the server runtime, and developing Bridge with Bridge."
+        case .advanced: return "Every key set in your .env. Values stay hidden until you reveal them; secrets can only be replaced."
         }
     }
 }
@@ -62,13 +62,11 @@ final class EnvStore: ObservableObject {
     @Published var edits: [String: String] = [:]
     /// Secrets whose "Replace" was clicked: their field is open.
     @Published var replacing: Set<String> = []
-    @Published var file = ""
     @Published var loaded = false
 
     func load() async {
         let out = (try? await API.get("/api/env")) ?? .null
         entries = out["entries"].array
-        file = out["file"].string
         loaded = true
     }
 
@@ -131,8 +129,10 @@ struct SettingEntry {
         .init(pane: .agents, title: "Relay outcomes to the orchestrator", words: "relay outcomes orchestrator workers", query: "relay outcomes"),
         .init(pane: .agents, title: "Stalled after", words: "stalled silence minutes stall", query: "stalled"),
         .init(pane: .agents, title: "Auto-archive merged chats", words: "auto archive merged days pr", query: "auto archive"),
-        .init(pane: .rules, title: "Common rules", words: "common rules house rules instructions prompt worktree rebase branch pr", query: "common rules"),
+        .init(pane: .agents, title: "Automation", words: "automation auto merge review resolve rebase decide workers project", query: "automation"),
+        .init(pane: .rules, title: "Common rules", words: "common rules house rules instructions prompt worktree rebase branch pr markdown edit", query: "common rules"),
         .init(pane: .mcp, title: "MCP servers", words: "mcp server tools customize", query: ""),
+        .init(pane: .plugins, title: "Plugins", words: "plugins plugin claude code codex cursor devin marketplace install remove", query: ""),
         .init(pane: .integrations, title: "GitHub", words: "github pull requests gh login checks", query: "github"),
         .init(pane: .integrations, title: "Linear", words: "linear issues api key team tickets", query: "linear"),
         .init(pane: .integrations, title: "Slack", words: "slack token mentions channels threads", query: "slack"),
@@ -142,14 +142,14 @@ struct SettingEntry {
         .init(pane: .integrations, title: "incident.io", words: "incident.io incidents api key", query: "incidents"),
         .init(pane: .integrations, title: "Granola", words: "granola meeting notes api key", query: "granola"),
         .init(pane: .integrations, title: "Models", words: "models model providers openrouter anthropic api key pricing context", query: "models"),
-        .init(pane: .projects, title: "Projects", words: "project repository default add automation merge review resolve rebase", query: ""),
+        .init(pane: .integrations, title: "Only my Granola notes", words: "granola only my notes private shared public hide", query: "granola"),
         .init(pane: .notifications, title: "When a session needs you", words: "notify session needs you question ask", query: "notify ask"),
         .init(pane: .notifications, title: "When a worker reports", words: "notify worker outcome finished blocked stalled review", query: "notify worker"),
         .init(pane: .notifications, title: "When something new reaches you on Slack", words: "notify slack mention message", query: "notify slack"),
         .init(pane: .notifications, title: "Dock badge", words: "dock badge count", query: "dock badge"),
         .init(pane: .notifications, title: "Banners and sounds", words: "system notification settings sound banner", query: "sound banner"),
-        .init(pane: .advanced, title: ".env file", words: ".env file environment reveal", query: ".env"),
-        .init(pane: .advanced, title: "Rebuild and relaunch", words: "bridge source repository develop rebuild relaunch app build", query: "rebuild"),
+        .init(pane: .advanced, title: ".env keys", words: ".env environment keys overrides add key", query: ""),
+        .init(pane: .advanced, title: "Rebuild and relaunch", words: "rebuild relaunch app build bridge", query: ""),
     ]
 }
 
@@ -205,6 +205,7 @@ struct SettingsView: View {
                     withAnimation(M.snappy) { model.settingsPane = p.rawValue }
                 }
             }
+            RebuildButton().padding(.top, 10)
             Spacer()
             HStack(spacing: 6) {
                 Circle().fill(model.connected ? T.green : T.red).frame(width: 6, height: 6)
@@ -250,9 +251,9 @@ struct SettingsView: View {
         case .rules: CommonRulesSettings(q: q)
         case .pipeline: PipelineSettings(q: q)
         case .mcp: CustomizeSettings(q: q)
+        case .plugins: PluginsSettings(q: q)
         case .tokens: TokensSettings(q: q)
         case .integrations: IntegrationSettings(env: env, q: q)
-        case .projects: ProjectSettings(env: env, q: q)
         case .notifications: NotificationSettings(q: q)
         case .advanced: AdvancedSettings(env: env, q: q)
         }
@@ -285,6 +286,33 @@ struct SettingsNavItem: View {
         }
         .buttonStyle(Pressable(scale: 0.98))
         .hoverBox(hover)
+    }
+}
+
+/// Rebuild Bridge.app from its own checkout and relaunch it, after a confirmation.
+struct RebuildButton: View {
+    @Environment(AppModel.self) var model
+
+    var body: some View {
+        Button(action: confirm) {
+            HStack(spacing: 6) {
+                if model.building { ProgressView().controlSize(.mini) } else { Image(systemName: "hammer") }
+                Text(model.building ? "Building…" : "Rebuild and Relaunch")
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(LButton())
+        .disabled(model.building || model.bridgeRoot.isEmpty)
+        .help(model.bridgeRoot.isEmpty ? "Bridge's source folder is unknown" : "Builds \(model.bridgeRoot), swaps the app in ~/Applications and reopens it")
+    }
+
+    func confirm() {
+        let a = NSAlert()
+        a.messageText = "Rebuild and relaunch Bridge?"
+        a.informativeText = "Builds the app from \(model.bridgeRoot), replaces Bridge in ~/Applications and reopens it. The window closes while it relaunches; the server and running sessions keep going."
+        a.addButton(withTitle: "Rebuild")
+        a.addButton(withTitle: "Cancel")
+        if a.runModal() == .alertFirstButtonReturn { model.rebuildApp() }
     }
 }
 
@@ -471,12 +499,15 @@ struct SInput: View {
 }
 
 /// A row bound to one `.env` key: plain values edit in place, secrets show
-/// Set / Replace / Remove and never their value.
+/// Set / Replace / Remove and never their value. `masked` hides a plain
+/// value behind dots until its eye is clicked.
 struct EnvField: View {
     @ObservedObject var env: EnvStore
     let e: JSON
     /// What Bridge works out when the key is empty (server/identity.js), shown as the placeholder.
     var derived = ""
+    var masked = false
+    @StateObject private var shown = Box(false)
 
     static let titles: [String: String] = [
         "SLACK_USER_TOKEN": "User OAuth token", "SLACK_USER_ID": "Member ID", "SLACK_USER_NAME": "Display name",
@@ -509,17 +540,38 @@ struct EnvField: View {
 
     var body: some View {
         SRow(title: EnvField.title(key), detail: detail, key: EnvField.titles[key] == nil ? "" : key, modified: env.edits[key] != nil) {
-            if e["secret"].bool { secret } else {
-                SInput(placeholder: derived.isEmpty ? (e["example"].nonEmpty ?? "Not set") : derived, text: Binding(get: { env.edits[key] ?? e["value"].string }, set: { v in
-                    if v == e["value"].string { env.edits.removeValue(forKey: key) } else { env.edits[key] = v }
-                }), mono: key.contains("PATH") || key.contains("REPO") || key.contains("ROOT"))
+            if e["secret"].bool { secret } else if masked && e["set"].bool { revealable } else { input }
+        }
+    }
+
+    var input: some View {
+        SInput(placeholder: derived.isEmpty ? (e["example"].nonEmpty ?? "Not set") : derived, text: Binding(get: { env.edits[key] ?? e["value"].string }, set: { v in
+            if v == e["value"].string { env.edits.removeValue(forKey: key) } else { env.edits[key] = v }
+        }), mono: key.contains("PATH") || key.contains("REPO") || key.contains("ROOT"))
+    }
+
+    /// Dots until revealed; an unsaved edit stays visible.
+    var revealable: some View {
+        let open = shown.v || env.edits[key] != nil
+        return HStack(spacing: 6) {
+            if open { input } else { Dots() }
+            IconButton(icon: open ? "eye.slash" : "eye", help: open ? "Hide the value" : "Show and edit the value", size: B.small) {
+                withAnimation(M.snappy) { shown.v = !open }
             }
+            .disabled(env.edits[key] != nil)
         }
     }
 
     @ViewBuilder var secret: some View {
         let set = e["set"].bool
-        if set && env.edits[key] == "" {
+        if masked && set && env.edits[key] == nil && !env.replacing.contains(key) {
+            HStack(spacing: 8) {
+                Dots(width: 160)
+                Button("Replace") { withAnimation(M.snappy) { _ = env.replacing.insert(key) } }.buttonStyle(LButton())
+                Button { env.edits[key] = "" } label: { Image(systemName: "trash").font(.system(size: 11)) }
+                    .buttonStyle(LButton(danger: true, square: true)).help("Remove from .env")
+            }
+        } else if set && env.edits[key] == "" {
             HStack(spacing: 8) {
                 Chip(text: "Will be removed", tint: T.red)
                 Button("Undo") { env.edits.removeValue(forKey: key) }.buttonStyle(LButton())
@@ -541,6 +593,20 @@ struct EnvField: View {
                 }
             }
         }
+    }
+}
+
+/// A hidden value: the same box as `SInput`, filled with dots.
+struct Dots: View {
+    var width: CGFloat = 260
+    var body: some View {
+        Text(verbatim: "••••••••••")
+            .font(T.mono(12)).foregroundStyle(T.text3)
+            .padding(.horizontal, 9)
+            .frame(width: width, height: 28, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(T.bg.opacity(0.6)))
+            .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).stroke(T.line, lineWidth: 1))
+            .accessibilityLabel("Hidden value")
     }
 }
 
@@ -671,6 +737,7 @@ struct AgentSettings: View {
             DefaultsSettings(q: q)
             FailoverSettings(q: q)
             WorkerSettings(q: q)
+            ProjectAutomation(q: q)
         }
     }
 
@@ -915,7 +982,7 @@ struct IntegrationSettings: View {
             if show("slack token watch mentions channels pipeline threads triage") { slack }
             if show("vercel deployments token") { vercel }
             if show("incident.io incidents api key") { incidents }
-            if show("granola meeting notes api key") { granola }
+            if show("granola meeting notes api key only my private shared public") { granola }
             if show("datadog monitors errors error tracking api application key site") { datadog }
             if show("models model providers openrouter anthropic api key pricing context") { models }
         }
@@ -1007,8 +1074,12 @@ struct IntegrationSettings: View {
     }
 
     var granola: some View {
-        keyGroup(.granola, "Granola", "Your meeting notes with their summaries and attendees.", ["GRANOLA_API_KEY"],
-                 on: model.granola["configured"].bool, link: ("In the Granola app: Settings › Connectors › API keys (Business and Enterprise)", "https://docs.granola.ai"))
+        let on = model.granola["configured"].bool
+        return VStack(alignment: .leading, spacing: 0) {
+            keyGroup(.granola, "Granola", "Your meeting notes with their summaries and attendees.", ["GRANOLA_API_KEY"],
+                     on: on, link: ("In the Granola app: Settings › Connectors › API keys (Business and Enterprise)", "https://docs.granola.ai"))
+            if on { GranolaPrivacy() }
+        }
     }
 
     var datadog: some View {
@@ -1025,6 +1096,25 @@ struct IntegrationSettings: View {
     }
 
     func save(_ patch: [String: Any]) { Task { await model.saveConfig(["harness": patch]); await model.loadIdentity() } }
+}
+
+/// Granola's API has no visibility flag and notes are private until shared, so
+/// "yours" (owner = git's user.email) is the one reliable private/public line.
+struct GranolaPrivacy: View {
+    @Environment(AppModel.self) var model
+
+    var body: some View {
+        let me = model.granola["me"].string
+        let notes = model.granola["notes"].array
+        let mine = notes.filter { $0["mine"].bool }.count
+        SSection(title: "Notes") {
+            SRow(title: "Only my notes", detail: me.isEmpty
+                 ? "Hides notes others shared with you or posted to the workspace. Bridge matches note owners to git's user.email, which isn't set"
+                 : "Hides notes others shared with you or posted to the workspace: \(mine) of the last \(notes.count) are yours (\(me))") {
+                SToggle(on: Binding(get: { model.config["harness"]["granolaMine"].bool }, set: { v in Task { await model.saveConfig(["harness": ["granolaMine": v]]) } }))
+            }
+        }
+    }
 }
 
 /// Where a run started from a Slack thread works, with which model, and what it may prepare.
@@ -1133,59 +1223,6 @@ struct SlackWatchSettings: View {
     func save(_ patch: [String: Any]) { Task { await model.saveConfig(["harness": patch]) } }
 }
 
-// MARK: - Projects
-
-struct ProjectSettings: View {
-    @Environment(AppModel.self) var model
-    @ObservedObject var env: EnvStore
-    let q: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            SSection(title: "In the sidebar", detail: "Default for sessions outside any repo, then your repositories") {
-                ForEach(model.projects.filter { Prefs.hit(q, $0.name, $0.path, "project repository default") }) { p in ProjectRow(project: p) }
-                if !model.projects.contains(where: { !$0.root }) && Prefs.hit(q, "project add") {
-                    SRow(title: "No projects yet", detail: "Add a git checkout to start sessions in it") { EmptyView() }
-                }
-            } trailing: {
-                Button { model.addProject() } label: { Label("Add project", systemImage: "plus") }.buttonStyle(LButton())
-            }
-            ProjectAutomation(q: q)
-        }
-    }
-}
-
-struct ProjectRow: View {
-    @Environment(AppModel.self) var model
-    let project: Project
-
-    var body: some View {
-        SRow(title: project.name, detail: project.root ? "\(project.path) · sessions that aren't in a project" : project.path, icon: AnyView(ProjectBadge(project: project, size: 28))) {
-            HStack(spacing: 6) {
-                Button("Orchestrator") { model.openOrchestrator(project.id) }.buttonStyle(LButton())
-                MoreMenu { ProjectActions(project: project) }
-            }
-        }
-    }
-}
-
-/// Rename, folder and removal for a project: the Settings row's menu and the
-/// sidebar's context menu share these.
-struct ProjectActions: View {
-    @Environment(AppModel.self) var model
-    let project: Project
-    var body: some View {
-        Button { model.compose(in: project.id) } label: { Label("New Task…", systemImage: "square.and.pencil") }
-        Button { model.renameProject(project) } label: { Label("Rename…", systemImage: "pencil") }
-        if project.root { Button { model.chooseRootFolder() } label: { Label("Change Folder…", systemImage: "folder.badge.gearshape") } }
-        Button { NSWorkspace.shared.open(URL(fileURLWithPath: project.path)) } label: { Label("Reveal in Finder", systemImage: "folder") }
-        if !project.root {
-            Divider()
-            Button(role: .destructive) { model.confirmRemoveProject(project) } label: { Label("Remove Project…", systemImage: "trash") }
-        }
-    }
-}
-
 // MARK: - Notifications
 
 struct NotificationSettings: View {
@@ -1223,81 +1260,56 @@ struct NotificationSettings: View {
 
 // MARK: - Advanced
 
+/// The keys set in `.env`, by `.env.example` section: plain values hidden
+/// until revealed, secrets write-only. Unset documented keys can be added.
 struct AdvancedSettings: View {
     @Environment(AppModel.self) var model
     @ObservedObject var env: EnvStore
     let q: String
+    /// Keys picked from "Add key" this visit: shown with an empty field until saved.
+    @StateObject private var adding = Box([String]())
 
-    var rest: [JSON] { env.entries.filter { !Prefs.placed.contains($0["key"].string) } }
-    static let blurb = [
-        "Identity overrides": "Bridge reads these from gh, Slack and Linear; the grey text is what it found. Set one only to override it",
-        "Slack pipeline overrides": "Worked out from the project picked in Integrations › Slack and its git remote",
-        "Folders and runtime": "How the server runs under launchd; the PATH comes from your login shell",
-        "Other": "In your .env but no longer used by Bridge; safe to remove",
-    ]
+    var shown: [JSON] { env.entries.filter { $0["set"].bool || adding.v.contains($0["key"].string) } }
+    var unset: [JSON] { env.entries.filter { !$0["set"].bool && !adding.v.contains($0["key"].string) } }
     var sections: [String] {
         var seen: [String] = []
-        for e in rest where !seen.contains(e["section"].string) { seen.append(e["section"].string) }
+        for e in shown where !seen.contains(e["section"].string) { seen.append(e["section"].string) }
         return seen
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Color.clear.frame(height: 0).task { await model.loadIdentity() }
+            if env.loaded && shown.isEmpty && Prefs.hit(q, ".env environment keys empty") {
+                SSection(title: "") {
+                    SRow(title: "Nothing set in .env", detail: "Bridge works out the rest itself. Add a key to override it") { addMenu }
+                }
+            }
             ForEach(sections, id: \.self) { s in
-                SSection(title: s, detail: AdvancedSettings.blurb[s] ?? "") {
-                    ForEach(env.rows(rest.filter { $0["section"].string == s }.map { $0["key"].string }, q), id: \.self) {
-                        EnvField(env: env, e: $0, derived: model.identity["derived"][$0["key"].string].string)
+                SSection(title: s) {
+                    ForEach(env.rows(shown.filter { $0["section"].string == s }.map { $0["key"].string }, q), id: \.self) {
+                        EnvField(env: env, e: $0, derived: model.identity["derived"][$0["key"].string].string, masked: true)
                     }
+                } trailing: {
+                    if s == sections.first { addMenu }
                 }
             }
-            SSection(title: "Environment file") {
-                if Prefs.hit(q, ".env file environment reveal") {
-                    SRow(title: ".env", detail: env.file.isEmpty ? "Not found" : env.file) {
-                        Button { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: env.file)]) } label: { Label("Reveal", systemImage: "folder") }
-                            .buttonStyle(LButton()).disabled(env.file.isEmpty)
-                    }
-                }
-            }
-            DevelopSettings(q: q)
         }
     }
-}
 
-/// Bridge can work on itself: add its repo as a project, then rebuild.
-struct DevelopSettings: View {
-    @Environment(AppModel.self) var model
-    let q: String
-
-    var body: some View {
-        let root = model.bridgeRoot
-        let bridgeProject = model.projects.first { $0.path == root }
-        SSection(title: "Develop Bridge with Bridge", detail: "Add Bridge's own repo as a project, start sessions on it, then rebuild here") {
-            if Prefs.hit(q, "bridge source repository develop") {
-                SRow(title: "Bridge's source", detail: root.isEmpty ? "Unknown" : root) {
-                    HStack(spacing: 6) {
-                        if let p = bridgeProject {
-                            Button("New Task") { model.compose(in: p.id) }.buttonStyle(LButton())
-                            Button("Orchestrator") { model.openOrchestrator(p.id) }.buttonStyle(LButton())
-                        } else {
-                            Button("Add as Project") { Task { await model.addProject(path: root, name: "bridge") } }.buttonStyle(LButton()).disabled(root.isEmpty)
-                        }
-                        Button { NSWorkspace.shared.open(URL(fileURLWithPath: root)) } label: { Image(systemName: "folder") }.buttonStyle(LButton(square: true)).disabled(root.isEmpty).help("Reveal in Finder")
+    /// Documented keys that aren't set yet, by section.
+    var addMenu: some View {
+        Menu {
+            let groups = Dictionary(grouping: unset) { $0["section"].string }
+            ForEach(Array(groups.keys).sorted(), id: \.self) { s in
+                Section(s) {
+                    ForEach(groups[s] ?? [], id: \.self) { e in
+                        Button("\(EnvField.title(e["key"].string)) · \(e["key"].string)") { withAnimation(M.snappy) { adding.v.append(e["key"].string) } }
                     }
                 }
             }
-            if Prefs.hit(q, "rebuild relaunch app build") {
-                SRow(title: "Rebuild and relaunch", detail: "Compiles app, swaps the app in ~/Applications and reopens it") {
-                    HStack(spacing: 8) {
-                        if model.building { ProgressView().controlSize(.small) }
-                        Button(model.building ? "Building…" : "Rebuild") { model.rebuildApp() }.buttonStyle(LButton()).disabled(model.building || root.isEmpty)
-                    }
-                }
-            }
-            if !model.buildLog.isEmpty && Prefs.hit(q, "build log rebuild") {
-                Text(model.buildLog).font(T.mono(11)).foregroundStyle(T.text2).textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading).padding(14).background(T.bg.opacity(0.4))
-            }
-        }
+            if unset.isEmpty { Text("Every documented key is set") }
+        } label: { Label("Add key", systemImage: "plus") }
+        .menuStyle(.button).buttonStyle(LButton(small: true)).fixedSize()
     }
 }

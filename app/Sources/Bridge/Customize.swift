@@ -3,11 +3,10 @@ import SwiftUI
 
 // MARK: - Settings › Customize
 //
-// What each agent loads, in three tabs (`model.customizeTab`): MCP servers
-// (Servers.swift), skills and plugins (server/customize.js). Skills are edited
-// in place, created in any agent's folder, opened in Finder and deleted to the
-// Trash. Claude Code's plugins install, uninstall, enable and disable through
-// its own CLI; Cursor's are listed read-only (Cursor manages them itself).
+// What each agent loads, in two tabs (`model.customizeTab`): MCP servers
+// (Servers.swift) and skills (server/customize.js). Skills are edited in
+// place, created in any agent's folder, opened in Finder and deleted to the
+// Trash. Plugins have their own pane (Settings › Plugins, below).
 
 struct CustomizeSettings: View {
     @Environment(AppModel.self) var model
@@ -19,12 +18,10 @@ struct CustomizeSettings: View {
                 SlidingTabs(tabs: [
                     .init(id: "mcp", label: "MCP servers", icon: "server.rack"),
                     .init(id: "skills", label: "Skills", icon: "wand.and.stars"),
-                    .init(id: "plugins", label: "Plugins", icon: "puzzlepiece.extension"),
                 ], selection: Binding(get: { model.customizeTab }, set: { model.customizeTab = $0 }))
             }
             switch q.isEmpty ? model.customizeTab : "mcp" {
             case "skills": SkillsSettings()
-            case "plugins": PluginsSettings()
             default: MCPSettings(q: q)
             }
         }
@@ -389,9 +386,16 @@ struct NewSkillForm: View {
 }
 
 // MARK: Plugins
+//
+// Settings › Plugins, one section per agent (server/customize.js). Claude
+// Code's install, uninstall, enable and disable through its CLI, with its
+// marketplace; Codex's and Devin's are removed through theirs (install them
+// there: Codex from its marketplaces, Devin from a repo); Cursor's are
+// read-only, Cursor manages them itself.
 
 struct PluginsSettings: View {
     @Environment(AppModel.self) var model
+    let q: String
     @StateObject private var data = Box(JSON.null)
     @StateObject private var query = Box("")
     @StateObject private var busy = Box(Set<String>())
@@ -399,52 +403,111 @@ struct PluginsSettings: View {
 
     var claude: JSON { data.v["claude"] }
     var available: [JSON] {
-        let words = query.v.lowercased().split(separator: " ").map(String.init)
+        let words = (q.isEmpty ? query.v : q).lowercased().split(separator: " ").map(String.init)
         return claude["available"].array.filter { p in words.allSatisfy { "\(p["name"].string) \(p["description"].string)".lowercased().contains($0) } }
+    }
+    func hits(_ list: [JSON], _ agent: String) -> [JSON] {
+        list.filter { Prefs.hit(q, $0["name"].string, $0["description"].string, $0["marketplace"].string, agent, "plugin plugins") }
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if data.v.isNull {
-                ProgressView().controlSize(.small).frame(maxWidth: .infinity).padding(30)
+                if q.isEmpty { ProgressView().controlSize(.small).frame(maxWidth: .infinity).padding(30) }
             } else {
-                SSection(title: "Claude Code", detail: "Installed through Claude Code's plugin command; a plugin can add skills, commands, agents, hooks and MCP servers") {
-                    if let e = claude["error"].nonEmpty { SRow(title: "Couldn't list plugins", detail: e) { EmptyView() } }
-                    if claude["installed"].array.isEmpty && claude["error"].string.isEmpty {
-                        SRow(title: "No plugins installed", detail: "Browse the marketplace below") { EmptyView() }
-                    }
-                    ForEach(claude["installed"].array, id: \.self) { p in installedRow(p) }
-                } trailing: {
-                    IconButton(icon: "arrow.clockwise", help: "List again from the marketplaces", spinning: refreshing.v) { Task { await load(refresh: true) } }
-                }
-                SSection(title: "Marketplace", detail: "\(claude["available"].array.count) Claude Code plugins from your marketplaces, most installed first") {
-                    HStack { SearchField(placeholder: "Search plugins", text: $query.v); Spacer() }
-                        .padding(.horizontal, 16).padding(.vertical, 10)
-                    ForEach(Array(available.prefix(query.v.isEmpty ? 25 : 60)), id: \.self) { p in availableRow(p) }
-                    if available.isEmpty { SRow(title: "No plugins match", detail: "") { EmptyView() } }
-                }
-                SSection(title: "Cursor", detail: "Plugins Cursor has fetched. Install, remove and switch them off in Cursor itself") {
-                    if data.v["cursor"]["plugins"].array.isEmpty { SRow(title: "No Cursor plugins", detail: "Cursor keeps them in ~/.cursor/plugins") { EmptyView() } }
-                    ForEach(data.v["cursor"]["plugins"].array, id: \.self) { p in cursorRow(p) }
-                }
+                claudeSection
+                if q.isEmpty || !available.isEmpty { marketplace }
+                codexSection
+                cursorSection
+                devinSection
             }
         }
         .task { await load() }
     }
 
+    var claudeSection: some View {
+        SSection(title: "Claude Code", detail: "Installed through Claude Code's plugin command; a plugin can add skills, commands, agents, hooks and MCP servers") {
+            if q.isEmpty, let e = claude["error"].nonEmpty { SRow(title: "Couldn't list plugins", detail: e) { EmptyView() } }
+            if q.isEmpty && claude["installed"].array.isEmpty && claude["error"].string.isEmpty {
+                SRow(title: "No plugins installed", detail: "Browse the marketplace below") { EmptyView() }
+            }
+            ForEach(hits(claude["installed"].array, "claude code"), id: \.self) { p in installedRow(p) }
+        } trailing: {
+            if q.isEmpty { IconButton(icon: "arrow.clockwise", help: "List again from the marketplaces", spinning: refreshing.v) { Task { await load(refresh: true) } } }
+        }
+    }
+
+    var marketplace: some View {
+        SSection(title: "Claude Code marketplace", detail: "\(claude["available"].array.count) plugins from your marketplaces, most installed first") {
+            if q.isEmpty {
+                HStack { SearchField(placeholder: "Search plugins", text: $query.v); Spacer() }
+                    .padding(.horizontal, 16).padding(.vertical, 10)
+            }
+            ForEach(Array(available.prefix(q.isEmpty && query.v.isEmpty ? 25 : q.isEmpty ? 60 : 8)), id: \.self) { p in availableRow(p) }
+            if q.isEmpty && available.isEmpty { SRow(title: "No plugins match", detail: "") { EmptyView() } }
+        }
+    }
+
+    var codexSection: some View {
+        let j = data.v["codex"]
+        return SSection(title: "Codex", detail: "Installed with codex plugin add, from Codex's marketplaces; listed from ~/.codex/config.toml") {
+            if q.isEmpty && j["plugins"].array.isEmpty { SRow(title: "No Codex plugins", detail: j["error"].nonEmpty ?? "Codex lists them in ~/.codex/config.toml") { EmptyView() } }
+            ForEach(hits(j["plugins"].array, "codex"), id: \.self) { p in
+                agentRow(p, agent: "codex", chips: p["enabled"].bool ? [] : ["Off"])
+            }
+        }
+    }
+
+    var cursorSection: some View {
+        SSection(title: "Cursor", detail: "Plugins Cursor has fetched. Install, remove and switch them off in Cursor itself") {
+            if q.isEmpty && data.v["cursor"]["plugins"].array.isEmpty { SRow(title: "No Cursor plugins", detail: "Cursor keeps them in ~/.cursor/plugins") { EmptyView() } }
+            ForEach(hits(data.v["cursor"]["plugins"].array, "cursor"), id: \.self) { p in cursorRow(p) }
+        }
+    }
+
+    var devinSection: some View {
+        let j = data.v["devin"]
+        return SSection(title: "Devin", detail: "Installed with devin plugins install, from a GitHub repo; your org's required plugins come back if removed") {
+            if q.isEmpty && j["plugins"].array.isEmpty { SRow(title: j["error"].nonEmpty == nil ? "No Devin plugins" : "Couldn't list plugins", detail: j["error"].nonEmpty ?? "devin plugins list shows none") { EmptyView() } }
+            ForEach(hits(j["plugins"].array, "devin"), id: \.self) { p in
+                agentRow(p, agent: "devin", chips: p["blocked"].bool ? ["Blocked"] : [])
+            }
+        }
+    }
+
+    func meta(_ p: JSON) -> String {
+        [p["description"].string, [p["marketplace"].string, p["version"].nonEmpty.map { "v\($0)" } ?? ""].filter { !$0.isEmpty }.joined(separator: " · ")].filter { !$0.isEmpty }.joined(separator: "\n")
+    }
+
     func installedRow(_ p: JSON) -> some View {
         let id = p["id"].string
-        return SRow(title: p["name"].string, detail: [p["description"].string, [p["marketplace"].string, p["version"].nonEmpty.map { "v\($0)" } ?? ""].filter { !$0.isEmpty }.joined(separator: " · ")].filter { !$0.isEmpty }.joined(separator: "\n"),
-                    icon: AnyView(PluginIcon(name: p["name"].string))) {
+        return SRow(title: p["name"].string, detail: meta(p), icon: AnyView(PluginIcon(name: p["name"].string))) {
             HStack(spacing: 6) {
                 if busy.v.contains(id) { ProgressView().controlSize(.small) }
-                SToggle(on: Binding(get: { p["enabled"].bool }, set: { on in act(on ? "enable" : "disable", id) }))
+                SToggle(on: Binding(get: { p["enabled"].bool }, set: { on in act("claude", on ? "enable" : "disable", id) }))
                     .help(p["enabled"].bool ? "Turn off" : "Turn on")
                 MoreMenu(size: B.small) {
                     if let d = p["dir"].nonEmpty { Button { NSWorkspace.shared.open(URL(fileURLWithPath: d)) } label: { Label("Open Folder", systemImage: "folder") } }
                     Button { copyToPasteboard(id) } label: { Label("Copy Plugin ID", systemImage: "doc.on.doc") }
                     Divider()
-                    Button(role: .destructive) { uninstall(p) } label: { Label("Uninstall…", systemImage: "trash") }
+                    Button(role: .destructive) { confirmRemove(p, agent: "claude", action: "uninstall") } label: { Label("Uninstall…", systemImage: "trash") }
+                }
+            }
+        }
+    }
+
+    /// A Codex or Devin plugin: what it is, and Remove through the agent's CLI.
+    func agentRow(_ p: JSON, agent: String, chips: [String]) -> some View {
+        let id = p["id"].string
+        return SRow(title: p["name"].string, detail: meta(p), icon: AnyView(PluginIcon(name: p["name"].string))) {
+            HStack(spacing: 6) {
+                ForEach(chips, id: \.self) { Chip(text: $0) }
+                if busy.v.contains(id) { ProgressView().controlSize(.small) }
+                MoreMenu(size: B.small) {
+                    if let d = p["dir"].nonEmpty { Button { NSWorkspace.shared.open(URL(fileURLWithPath: d)) } label: { Label("Open Folder", systemImage: "folder") } }
+                    Button { copyToPasteboard(id) } label: { Label("Copy Plugin ID", systemImage: "doc.on.doc") }
+                    Divider()
+                    Button(role: .destructive) { confirmRemove(p, agent: agent, action: "remove") } label: { Label("Remove…", systemImage: "trash") }
                 }
             }
         }
@@ -456,14 +519,13 @@ struct PluginsSettings: View {
             HStack(spacing: 8) {
                 if p["installs"].int > 0 { Text(Fmt.tokens(p["installs"].int) + " installs").font(T.ui(11.5)).foregroundStyle(T.text3).monospacedDigit() }
                 if busy.v.contains(id) { ProgressView().controlSize(.small) }
-                Button("Install") { act("install", id) }.buttonStyle(LButton(small: true)).disabled(busy.v.contains(id))
+                Button("Install") { act("claude", "install", id) }.buttonStyle(LButton(small: true)).disabled(busy.v.contains(id))
             }
         }
     }
 
     func cursorRow(_ p: JSON) -> some View {
-        SRow(title: p["name"].string, detail: [p["description"].string, [p["marketplace"].string, p["version"].nonEmpty.map { "v\($0)" } ?? ""].filter { !$0.isEmpty }.joined(separator: " · ")].filter { !$0.isEmpty }.joined(separator: "\n"),
-             icon: AnyView(PluginIcon(name: p["name"].string))) {
+        SRow(title: p["name"].string, detail: meta(p), icon: AnyView(PluginIcon(name: p["name"].string))) {
             HStack(spacing: 6) {
                 if p["mcp"].bool { Chip(text: "MCP") }
                 if p["skills"].int > 0 { Chip(text: "\(p["skills"].int) skills") }
@@ -479,26 +541,31 @@ struct PluginsSettings: View {
         refreshing.v = false
     }
 
-    func act(_ action: String, _ id: String) {
-        busy.v.insert(id)
+    /// `id` is what the agent's CLI takes; `key` the row's id while it's busy.
+    func act(_ agent: String, _ action: String, _ id: String, key: String? = nil, name: String = "") {
+        let key = key ?? id
+        busy.v.insert(key)
         Task {
             await model.act {
-                try await API.post("/api/customize/plugins/claude", ["action": action, "id": id])
-                let verb = ["install": "Installed", "uninstall": "Uninstalled", "enable": "Turned on", "disable": "Turned off"][action] ?? "Done:"
-                self.model.say("\(verb) \(id.split(separator: "@").first.map(String.init) ?? id)")
+                try await API.post("/api/customize/plugins/\(agent)", ["action": action, "id": id])
+                let verb = ["install": "Installed", "uninstall": "Uninstalled", "remove": "Removed", "enable": "Turned on", "disable": "Turned off"][action] ?? "Done:"
+                self.model.say("\(verb) \(name.isEmpty ? id.split(separator: "@").first.map(String.init) ?? id : name)")
             }
-            busy.v.remove(id)
+            busy.v.remove(key)
             await load(refresh: true)
         }
     }
 
-    func uninstall(_ p: JSON) {
+    func confirmRemove(_ p: JSON, agent: String, action: String) {
+        let who = ["claude": "Claude Code", "codex": "Codex", "devin": "Devin"][agent] ?? agent
         let a = NSAlert()
-        a.messageText = "Uninstall \(p["name"].string)?"
-        a.informativeText = "Claude Code removes the plugin and what it adds: its skills, commands, agents, hooks and MCP servers."
-        a.addButton(withTitle: "Uninstall")
+        a.messageText = "\(action == "uninstall" ? "Uninstall" : "Remove") \(p["name"].string)?"
+        a.informativeText = "\(who) removes the plugin and what it adds: its skills, commands, hooks and MCP servers."
+        a.addButton(withTitle: action == "uninstall" ? "Uninstall" : "Remove")
         a.addButton(withTitle: "Cancel")
-        if a.runModal() == .alertFirstButtonReturn { act("uninstall", p["id"].string) }
+        guard a.runModal() == .alertFirstButtonReturn else { return }
+        // Devin removes by name (`remove`); the id only keeps same-named installs apart in the list.
+        act(agent, action, p["remove"].nonEmpty ?? p["id"].string, key: p["id"].string, name: p["name"].string)
     }
 }
 

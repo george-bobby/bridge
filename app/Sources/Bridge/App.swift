@@ -25,7 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// Dev aid: render every page of the window to PNGs, for checking the UI
     /// without screen-recording permission. `BRIDGE_SNAPSHOT_DIR=/tmp/x Bridge`.
     private func snapshots(to dir: String) {
-        let routes: [(String, Route)] = [("home", .home), ("board", .board), ("sessions", .sessions), ("archived", .sessions), ("pulls", .pulls), ("linear", .linear), ("vercel", .vercel), ("incidents", .incidents), ("granola", .granola), ("datadog", .datadog), ("models", .models), ("inbox", .inbox), ("inbox-slack", .inbox), ("inbox-todos", .inbox), ("memory", .memory), ("slack", .slack), ("usage", .usage), ("settings", .settings), ("compose", .compose), ("settings-agents", .settings), ("settings-rules", .settings), ("settings-pipeline", .settings), ("settings-mcp", .settings), ("settings-skills", .settings), ("skill-edit", .settings), ("settings-plugins", .settings), ("settings-tokens", .settings), ("mcp-tools", .settings), ("mcp-add", .settings), ("settings-integrations", .settings), ("settings-projects", .settings), ("settings-notifications", .settings), ("settings-advanced", .settings)]
+        let routes: [(String, Route)] = [("home", .home), ("board", .board), ("sessions", .sessions), ("archived", .sessions), ("pulls", .pulls), ("linear", .linear), ("vercel", .vercel), ("incidents", .incidents), ("granola", .granola), ("datadog", .datadog), ("models", .models), ("inbox", .inbox), ("inbox-slack", .inbox), ("inbox-todos", .inbox), ("memory", .memory), ("slack", .slack), ("usage", .usage), ("settings", .settings), ("compose", .compose), ("settings-agents", .settings), ("settings-rules", .settings), ("settings-pipeline", .settings), ("settings-mcp", .settings), ("settings-skills", .settings), ("skill-edit", .settings), ("settings-plugins", .settings), ("settings-tokens", .settings), ("mcp-tools", .settings), ("mcp-add", .settings), ("settings-integrations", .settings), ("settings-notifications", .settings), ("settings-advanced", .settings)]
         let browser = ProcessInfo.processInfo.environment["BRIDGE_SNAPSHOT_URL"]
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 8_000_000_000)
@@ -102,10 +102,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 }
                 if name == "slack", let m = model.mentions.first { model.openThread(m.permalink) }
                 if name == "mcp-tools" || name == "mcp-add" { model.settingsPane = "mcp" }
-                // Customize's tabs: settings-skills, settings-plugins, and a skill open in the editor.
+                // Customize's tabs: settings-skills and a skill open in the editor (settings-plugins is its own pane).
                 if route == .settings && name.hasPrefix("settings-") || name == "skill-edit" || name.hasPrefix("mcp-") {
-                    model.customizeTab = name == "settings-skills" || name == "skill-edit" ? "skills" : name == "settings-plugins" ? "plugins" : "mcp"
-                    if name == "settings-skills" || name == "settings-plugins" || name == "skill-edit" { model.settingsPane = "mcp" }
+                    model.customizeTab = name == "settings-skills" || name == "skill-edit" ? "skills" : "mcp"
+                    if name == "settings-skills" || name == "skill-edit" { model.settingsPane = "mcp" }
                     model.snapshotSkillEdit = name == "skill-edit"
                 }
                 model.mcpSheet = name == "mcp-add" ? .add(.claude) : nil

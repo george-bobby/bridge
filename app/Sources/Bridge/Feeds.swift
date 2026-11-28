@@ -333,12 +333,22 @@ struct IncidentRow: View {
 
 // MARK: Granola
 
+extension AppModel {
+    /// Granola's notes, only your own when Settings › Integrations › Granola says so
+    /// (and the server knew who you are: git's user.email).
+    var granolaNotes: [JSON] {
+        let all = granola["notes"].array
+        guard config["harness"]["granolaMine"].bool, !granola["me"].string.isEmpty else { return all }
+        return all.filter { $0["mine"].bool }
+    }
+}
+
 struct GranolaView: View {
     @Environment(AppModel.self) var model
     @StateObject private var selected = Box("")
     @StateObject private var note = Box(JSON.null)
 
-    var notes: [JSON] { model.granola["notes"].array }
+    var notes: [JSON] { model.granolaNotes }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -351,7 +361,7 @@ struct GranolaView: View {
             } else if !model.granola["configured"].bool {
                 SourceSetup(kind: .granola, how: "In the Granola app: Settings › Connectors › API keys › Create new key (Business and Enterprise plans; on Enterprise an admin turns API access on first). Paste it as GRANOLA_API_KEY.")
             } else if notes.isEmpty {
-                EmptyState(icon: "note.text", title: "No notes yet", detail: "Notes show up here once Granola has summarised them.")
+                EmptyState(icon: "note.text", title: "No notes yet", detail: model.granola["notes"].array.isEmpty ? "Notes show up here once Granola has summarised them." : "Only my notes is on (Settings › Integrations › Granola): the recent ones are all shared with you.")
             } else {
                 HStack(spacing: 0) {
                     ScrollView {

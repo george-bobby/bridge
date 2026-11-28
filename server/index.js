@@ -651,10 +651,11 @@ async function handle(req, res) {
       if (req.method === "POST" && p === "/api/customize/skills/delete") return ok(customize.deleteSkill(body.path, repo));
       if (req.method === "GET" && p === "/api/customize/plugins") {
         const refresh = url.searchParams.get("refresh") === "1";
-        const [claude, cursor] = await Promise.all([customize.claudePlugins({ refresh }), customize.cursorPlugins()]);
-        return ok({ claude, cursor });
+        const [claude, devin] = await Promise.all([customize.claudePlugins({ refresh }), customize.devinPlugins()]);
+        return ok({ claude, codex: customize.codexPlugins(), cursor: customize.cursorPlugins(), devin });
       }
-      if (req.method === "POST" && p === "/api/customize/plugins/claude") return ok(await customize.claudePlugin(String(body.action || ""), String(body.id || "")));
+      const agentPlugin = req.method === "POST" && p.match(/^\/api\/customize\/plugins\/(claude|codex|devin)$/);
+      if (agentPlugin) return ok(await customize.agentPlugin(agentPlugin[1], String(body.action || ""), String(body.id || "")));
       return sendJson(res, 404, { ok: false, error: `no customize route for ${req.method} ${p}` });
     } catch (e) {
       return sendJson(res, 400, { ok: false, error: String(e.message || e) });

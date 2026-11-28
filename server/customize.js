@@ -15,10 +15,14 @@
  * link), so it can be undone from Finder. Every path the app sends back is
  * checked against these roots: nothing outside a skills folder is touched.
  *
- * Plugins: Claude Code's through its own CLI (`claude plugin list|install|
- * uninstall|enable|disable`), with the marketplace catalog for browsing.
- * Cursor keeps the plugins it has fetched under ~/.cursor/plugins/cache and
- * manages them in its own UI, so they're listed read-only.
+ * Plugins (Settings › Plugins), per agent:
+ *   Claude   its CLI (`claude plugin list|install|uninstall|enable|disable`),
+ *            with the marketplace catalog for browsing
+ *   Codex    [plugins."name@marketplace"] in ~/.codex/config.toml, described by
+ *            the manifests in ~/.codex/plugins/cache (`codex plugin list` waits
+ *            on remote marketplaces); removed with `codex plugin remove`
+ *   Cursor   fetched under ~/.cursor/plugins/cache, managed in Cursor: read-only
+ *   Devin    `devin plugins list`; removed with `devin plugins remove`
  *
  * BRIDGE_MCP_HOME points this at a scratch home in tests; the demo seeds one.
  */
@@ -304,4 +308,88 @@ function cursorPlugins() {
   return { ok: true, plugins: out.sort((a, b) => a.name.localeCompare(b.name)) };
 }
 
-module.exports = { roots, listSkills, readSkill, writeSkill, createSkill, deleteSkill, claudePlugins, claudePlugin, cursorPlugins, home, AGENTS, LABEL };
+/** A plugin manifest under `dir`, whichever agent wrote it. */
+function manifest(dir) {
+  for (const f of [".codex-plugin/plugin.json", ".cursor-plugin/plugin.json", ".claude-plugin/plugin.json", "plugin.json"]) {
+    try {
+      return JSON.parse(fs.readFileSync(path.join(dir, f), "utf8"));
+    } catch {}
+  }
+  return {};
+}
+
+/** Codex's installed plugins: config.toml's [plugins."id"] tables, newest cached copy for the details. */
+function codexPlugins() {
+  if (env.demo) return require("./demo").plugins().codex;
+  const codexHome = process.env.CODEX_HOME || path.join(home(), ".codex");
+  let text = "";
+  try {
+    text = fs.readFileSync(path.join(codexHome, "config.toml"), "utf8");
+  } catch {
+    return { ok: true, plugins: [] };
+  }
+  const out = [];
+  let cur = null;
+  for (const line of text.split("\n")) {
+    const head = /^\s*\[(.+)\]\s*(?:#.*)?$/.exec(line);
+    if (head) {
+      const m = /^plugins\."([^"]+)"$/.exec(head[1].trim());
+      cur = m ? { id: m[1], enabled: true } : null;
+      if (cur) out.push(cur);
+      continue;
+    }
+    const en = cur && /^\s*enabled\s*=\s*(true|false)\b/.exec(line);
+    if (en) cur.enabled = en[1] === "true";
+  }
+  return {
+    ok: true,
+    plugins: out
+      .map(({ id, enabled }) => {
+        const [name, market = ""] = id.split("@");
+        const pdir = path.join(codexHome, "plugins", "cache", market, name);
+        let dir = "";
+        try {
+          dir = fs.readdirSync(pdir).map((v) => path.join(pdir, v)).filter((v) => fs.statSync(v).isDirectory()).sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0] || "";
+        } catch {}
+        const man = dir ? manifest(dir) : {};
+        const ui = man.interface || {};
+        return { id, name: ui.displayName || man.name || name, marketplace: market, version: man.version || "", description: String(ui.shortDescription || man.description || "").slice(0, 400), enabled, dir };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name)),
+  };
+}
+
+/** Devin's installed plugins, from `devin plugins list` ("• name (source) v1.2.0"). */
+async function devinPlugins() {
+  if (env.demo) return require("./demo").plugins().devin;
+  const r = await sh("devin", ["plugins", "list", "--process-model", "in-process"], 30000);
+  if (!r.ok) return { ok: false, error: /ENOENT/.test(r.err) ? "Devin isn't installed" : r.err.split("\n")[0] || "devin plugins list failed", plugins: [] };
+  return { ok: true, plugins: parseDevinPlugins(r.out) };
+}
+
+function parseDevinPlugins(text) {
+  const out = [];
+  for (const line of String(text).split("\n")) {
+    const m = /^\s*[•*-]\s+(\S+)(?:\s+\(([^)]*)\))?\s+(?:v(\S+)|unversioned)(.*)$/.exec(line);
+    if (!m) continue;
+    const source = m[2] || "";
+    // Two installs can share a name: the source tells them apart (and is what `remove` takes then).
+    out.push({ id: source ? `${m[1]}@${source}` : m[1], name: m[1], marketplace: source.split("#")[0], version: m[3] || "", blocked: /blocked/i.test(m[4]), remove: m[1] });
+  }
+  return out;
+}
+
+/** Remove one of Codex's or Devin's plugins through its own CLI. */
+async function agentPlugin(agent, action, id) {
+  if (agent === "claude") return claudePlugin(action, id);
+  if (!/^[A-Za-z0-9][A-Za-z0-9._@/#:-]*$/.test(String(id || ""))) throw new Error("bad plugin id");
+  if (action !== "remove") throw new Error(`unknown action: ${action}`);
+  if (env.demo) return { ok: true, demo: true };
+  const args = { codex: ["codex", ["plugin", "remove", id]], devin: ["devin", ["plugins", "remove", id, "--yes", "--process-model", "in-process"]] }[agent];
+  if (!args) throw new Error(`${agent} plugins can't be changed from Bridge`);
+  const r = await sh(args[0], args[1], 120000);
+  if (!r.ok) throw new Error(r.err.split("\n").filter(Boolean).slice(-1)[0] || `${agent} plugin remove failed`);
+  return { ok: true, output: r.out.trim().slice(-2000) };
+}
+
+module.exports = { roots, listSkills, readSkill, writeSkill, createSkill, deleteSkill, claudePlugins, claudePlugin, cursorPlugins, codexPlugins, devinPlugins, parseDevinPlugins, agentPlugin, home, AGENTS, LABEL };
