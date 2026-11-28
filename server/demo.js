@@ -531,7 +531,7 @@ function seed(dataDir) {
   );
   fs.writeFileSync(
     path.join(dataDir, "config.json"),
-    JSON.stringify({ followup: { model: "opus", permissionMode: "bypassPermissions", effort: "medium" }, harness: { relay: false } }),
+    JSON.stringify({ followup: { model: "opus", permissionMode: "bypassPermissions", effort: "medium" }, harness: { relay: false, autoArchiveDays: 0 } }), // keep the merged fixture chats in the sidebar
   );
 }
 

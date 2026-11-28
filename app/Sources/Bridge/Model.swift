@@ -484,8 +484,24 @@ final class AppModel {
 
     // MARK: chat order, drafts, browser tabs
 
+    /// A project's chats in three groups, newest first within each: waiting on
+    /// you (an ask, or the board's Needs You), then in progress or in review,
+    /// then done (PR merged or closed, cleaned up) at the bottom.
     func sidebarSessions(in projectId: String) -> [Session] {
-        sessions(in: projectId).filter { !$0.pinned }.sorted { $0.updatedAt > $1.updatedAt }
+        sessions(in: projectId).filter { !$0.pinned }
+            .map { ($0, attentionRank($0)) }
+            .sorted { $0.1 != $1.1 ? $0.1 < $1.1 : $0.0.updatedAt > $1.0.updatedAt }
+            .map(\.0)
+    }
+
+    /// 0 needs you, 1 pending, 2 done. A live ask beats a merged PR.
+    func attentionRank(_ s: Session) -> Int {
+        if isAwaiting(s) { return 0 }
+        switch column(of: s) {
+        case .needs: return 0
+        case .done: return 2
+        default: return 1
+        }
     }
 
     var chatOrder: [String] {

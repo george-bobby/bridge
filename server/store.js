@@ -128,12 +128,13 @@ function jobOpts(config, run) {
  *              away:   nothing is relayed; it's held and briefed on return
  * relay        whether outcomes start a turn in the orchestrator chat at all
  * stallMinutes silence before a working worker is flagged as stalled
+ * autoArchiveDays  archive a chat once its PR has been merged this many days (0 = off)
  * policy       per-category overrides of server/policy.js (ask | allow)
  */
 // slackWatch: "off" | "watch" (file mentions in the Inbox) | "triage" (and let
 // the orchestrator decide which ones to start); server/watch.js.
 const DEFAULT_HARNESS = {
-  mode: "normal", relay: true, stallMinutes: 15, policy: {},
+  mode: "normal", relay: true, stallMinutes: 15, autoArchiveDays: 1, policy: {},
   slackWatch: "watch", slackPollSec: 120, slackChannels: [],
   failover: false, failoverThreshold: 95, failoverOrder: ["devin", "codex", "cursor"],
 };
@@ -152,6 +153,8 @@ function sanitizeHarness(patch, base) {
     const order = [...new Set(patch.failoverOrder.map(String).filter((a) => ["devin", "codex", "cursor"].includes(a)))];
     if (order.length === 3) out.failoverOrder = order;
   }
+  // The pulls feed only lists PRs merged in the last 14 days, so a longer wait would never fire.
+  if (Number.isFinite(Number(patch.autoArchiveDays)) && patch.autoArchiveDays !== "") out.autoArchiveDays = int(patch.autoArchiveDays, 0, 14);
   if (["off", "watch", "triage"].includes(patch.slackWatch)) out.slackWatch = patch.slackWatch;
   // Picked in Settings instead of typed into .env (server/identity.js): the
   // project Slack threads are worked in, the Linear team tickets go to, and the
@@ -474,7 +477,11 @@ function setArchived(id, archived) {
   const run = loadRun(id);
   if (!run) throw new Error("no such run");
   if (archived) run.archivedAt = run.archivedAt || Math.floor(Date.now() / 1000);
-  else delete run.archivedAt;
+  else if (run.archivedAt) {
+    delete run.archivedAt;
+    // Brought back by hand: auto-archive leaves it alone from now on.
+    run.unarchivedAt = Math.floor(Date.now() / 1000);
+  }
   writeRun(run);
   return !!run.archivedAt;
 }
