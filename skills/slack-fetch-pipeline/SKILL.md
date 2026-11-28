@@ -221,20 +221,12 @@ Sweep again until one finds nothing, at most three times.
 
 ## 9.5 Memory proposal (`saveToMemory`): usually skip
 
-You file a **proposal** that nothing loads; a second run on the same ground or
-{{SLACK_USER_NAME}}'s approval promotes it. Propose only if it generalises
-beyond this ticket, isn't in the repo, isn't already remembered (read
-`MEMORY.md`; overlap means `update`), and was non-obvious.
-
-```bash
-{{PROJECT_DIR}}/scripts/emit.sh "<runId>" memory "<one line, or 'nothing durable'>" \
-  verdict=skip|update|create territory=<slug> target=<existing.md> name=<new.md> \
-  section="<MEMORY.md heading>" citation="<PR or thread URL>" textFile=<path>
-```
-
-For update/create, write the whole file (frontmatter `name`, `description`,
-`metadata.type`) to `{{PROJECT_DIR}}/data/runs/memories/<runId>.md`. Never write
-to `~/.claude/projects/*/memory/` yourself.
+Propose only if it generalises beyond this ticket, isn't in the repo, isn't
+already remembered (read the project's `MEMORY.md`; overlap means amending that
+file), and was non-obvious. Write the whole topic file into the memory folder's
+`.proposed/`, as your instructions under "This project's memory" describe; it is
+kept only once {{SLACK_USER_NAME}} approves it in Bridge. Never edit the memory
+files themselves.
 
 ## 10. Slack reply (`reply`)
 

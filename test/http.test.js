@@ -18,7 +18,7 @@ let server;
 
 test.before(async () => {
   server = spawn(process.execPath, [path.join(__dirname, "..", "server")], {
-    env: { ...process.env, BRIDGE_DATA_DIR: path.join(tmp, "data"), BRIDGE_PORT: String(PORT), BRIDGE_ENV_FILE: path.join(tmp, "none.env"), CLAUDE_BIN: path.join(__dirname, "stub.js"), TARGET_REPO: tmp, PORT: "1" },
+    env: { ...process.env, BRIDGE_DATA_DIR: path.join(tmp, "data"), BRIDGE_PORT: String(PORT), BRIDGE_ENV_FILE: path.join(tmp, "none.env"), BRIDGE_MCP_HOME: path.join(tmp, "home"), CLAUDE_CONFIG_DIR: path.join(tmp, "claude-home"), CLAUDE_BIN: path.join(__dirname, "stub.js"), TARGET_REPO: tmp, PORT: "1" },
     stdio: "ignore",
   });
   const end = Date.now() + 10000;

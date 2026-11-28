@@ -5,7 +5,7 @@
   "botReview": true,
   "saveToMemory": true,
   "reply": true,
-  "_toggles": "Passed through to the pipeline. createLinearIssue: draft a Linear ticket once the verdict is in and create it only after you say yes. botReview: after the PR opens, wait for the review bots on the head commit, then run /resolve. saveToMemory: let a run PROPOSE a memory into data/runs/memories/, never write one; recurrence or your approval promotes it. reply: draft the verdict for the Slack thread and post it once you approve.",
+  "_toggles": "Passed through to the pipeline. createLinearIssue: draft a Linear ticket once the verdict is in and create it only after you say yes. botReview: after the PR opens, wait for the review bots on the head commit, then run /resolve. saveToMemory: let a run propose a memory into the project memory folder's .proposed/; it is kept only once you approve it on the Memory page. reply: draft the verdict for the Slack thread and post it once you approve.",
 
   "followup": {
     "model": "opus",

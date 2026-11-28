@@ -28,6 +28,7 @@ const ENV = {
   BRIDGE_DATA_DIR: DATA,
   CLAUDE_BIN: path.join(__dirname, "stub.js"),
   CLAUDE_CONFIG_DIR: path.join(tmp, "claude-home"),
+  BRIDGE_MCP_HOME: path.join(tmp, "home"),
   BRIDGE_PORT: String(PORT),
   BRIDGE_ENV_FILE: path.join(tmp, "none.env"),
   TARGET_REPO: REPO,
