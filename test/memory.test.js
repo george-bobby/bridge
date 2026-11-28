@@ -91,9 +91,15 @@ test("a server on a scratch data dir never writes the pointers into your real ho
   const home = path.join(tmp, "real-home");
   fs.mkdirSync(home, { recursive: true });
   const env = { ...process.env, HOME: home, BRIDGE_DATA_DIR: path.join(tmp, "blank-data") };
-  for (const k of ["BRIDGE_MCP_HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME"]) delete env[k];
+  for (const k of ["BRIDGE_MCP_HOME", "BRIDGE_WRITE_HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME"]) delete env[k];
   const run = (extra) => execFileSync(process.execPath, ["-e", `require(${JSON.stringify(path.join(__dirname, "..", "server", "memory"))}).connect()`], { env: { ...env, ...extra } });
   run({});
   run({ BRIDGE_DEMO: "1" });
+  run({ BRIDGE_WRITE_HOME: "1" }); // opted in, but on a scratch data dir
+  run({ BRIDGE_DATA_DIR: "" }); // this checkout's own data/, not opted in
   assert.deepEqual(fs.readdirSync(home), []);
+  // Opted in on this checkout's data/: only a main checkout writes (a worktree's .git is a file).
+  run({ BRIDGE_WRITE_HOME: "1", BRIDGE_DATA_DIR: "" });
+  const main = fs.statSync(path.join(__dirname, "..", ".git")).isDirectory();
+  assert.equal(fs.existsSync(path.join(home, ".codex", "AGENTS.md")), main);
 });

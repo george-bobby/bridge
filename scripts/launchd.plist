@@ -38,6 +38,9 @@
   <dict>
     <key>BRIDGE_PORT</key>
     <string>__PORT__</string>
+    <!-- The one server that keeps the memory pointers in your agents' homes. -->
+    <key>BRIDGE_WRITE_HOME</key>
+    <string>1</string>
   </dict>
 
   <key>StandardOutPath</key>

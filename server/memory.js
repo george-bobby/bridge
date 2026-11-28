@@ -238,12 +238,15 @@ const claudeDir = () => (!scratch() && process.env.CLAUDE_CONFIG_DIR) || path.jo
 const codexDir = () => (!scratch() && process.env.CODEX_HOME) || path.join(home(), ".codex");
 const BEGIN = "<!-- bridge:memory -->";
 
-// Only the main checkout's own data/ speaks for your home: a scratch data dir
-// (BRIDGE_DATA_DIR=/tmp/..., a worktree's server, tests) would point every
-// agent at its own throwaway memory. A scratch home is always fair game.
+// Your home is written only by a server launched to own it: launchd and
+// `npm run dev` set BRIDGE_WRITE_HOME=1; tests, the demo and a bare
+// `node server` never do. Even then only from the main checkout's own data/,
+// so a worktree's or a /tmp server can't point every agent at its memory.
+// A scratch home (BRIDGE_MCP_HOME) is always fair game.
 function ownsHome() {
   if (scratch()) return true;
-  if (env.demo || env.dataDir !== path.join(REPO, "data")) return false;
+  if (process.env.BRIDGE_WRITE_HOME !== "1" || env.demo) return false;
+  if (env.dataDir !== path.join(REPO, "data")) return false;
   try {
     return fs.statSync(path.join(REPO, ".git")).isDirectory(); // a worktree's .git is a file
   } catch {
@@ -285,7 +288,8 @@ function upsertBlock(file, body) {
  * Codex through ~/.codex/AGENTS.md, Cursor through a user rule. Claude's own
  * auto memory is turned off, so it proposes like the rest instead of writing
  * a second memory under ~/.claude/projects. Idempotent; run at startup and
- * whenever projects change. Only the real server touches your home (`ownsHome`).
+ * whenever projects change, and every few minutes to undo a stale checkout's
+ * test run. Only the real server touches your home (`ownsHome`).
  */
 function connect() {
   if (!ownsHome()) return;
