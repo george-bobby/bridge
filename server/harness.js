@@ -818,7 +818,7 @@ function inbox() {
   // Required here, not at the top: watch.js starts pipelines through this module.
   const slack = require("./watch").open();
   // Allow/deny prompts live sessions are blocked on, answered with POST /api/runs/:id/answer.
-  const permissions = jobs.pendingPermissions().map((p) => ({ ...p, title: t(p.runId) }));
+  const permissions = (env.demo ? require("./demo").permissions() : jobs.pendingPermissions()).map((p) => ({ ...p, title: p.title || t(p.runId) }));
   return {
     mode: c.mode,
     decisions,

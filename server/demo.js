@@ -1180,4 +1180,39 @@ const changes = {
   activity: (url, o) => require("./changes").activity(url, o),
 };
 
-module.exports = { REPO, changes, archive, seed, writeSessions, seedSkills, plugins, pulls, linear, ports, stopServer, slack, usage, agents, prActivity, mcp, git, history, vercel, incidents, granola, granolaNote, datadog, tokens, models };
+/**
+ * Two live allow/deny prompts for the Inbox, in jobs.pendingPermissions'
+ * shape: one of the agent's own (Always allow is offered) and one of the
+ * guard's hard gates (Allow once only). Demo has no running jobs, so
+ * harness.inbox reads these instead.
+ */
+function permissions() {
+  return [
+    {
+      runId: "t-241125-web-131-rate-limit",
+      askId: "m-perm1-tu-ask",
+      tool: "Bash",
+      display: "Bash",
+      description: "Run the rate-limit tests in watch mode",
+      reason: "",
+      command: "npm test -- --watch src/api/limit.test.ts",
+      summary: "Bash: npm test -- --watch src/api/limit.test.ts",
+      askedAt: now() - 180,
+      always: true,
+    },
+    {
+      runId: "t-241125-web-124-apple-pay",
+      askId: "m-perm2-tu-ask",
+      tool: "Bash",
+      display: "Bash",
+      description: "Force-push the rebased branch",
+      reason: "git push --force is a destructive git command: it needs your OK on this exact call (harness write policy).",
+      command: "git push --force origin alex/web-124-apple-pay",
+      summary: "Bash: git push --force origin alex/web-124-apple-pay",
+      askedAt: now() - 720,
+      always: false,
+    },
+  ];
+}
+
+module.exports = { REPO, changes, archive, seed, writeSessions, seedSkills, plugins, pulls, linear, ports, stopServer, slack, usage, agents, prActivity, mcp, git, history, vercel, incidents, granola, granolaNote, datadog, tokens, models, permissions };
