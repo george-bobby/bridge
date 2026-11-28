@@ -111,12 +111,13 @@ struct LinearView: View {
             }
             .padding(.horizontal, 14).padding(.top, 4).padding(.bottom, 6)
             PopRow(icon: "rectangle.3.group", label: "Grouping") {
+                // "No grouping" only means something in the list: a board always
+                // groups into columns, so it's left out there.
                 ValueMenu(options: [
                     .init(id: "status", label: "Status", icon: "circle.lefthalf.filled"),
                     .init(id: "priority", label: "Priority", icon: "chart.bar"),
                     .init(id: "project", label: "Project", icon: "cube"),
-                    .init(id: "none", label: "No grouping", icon: "minus"),
-                ], selection: $grouping)
+                ] + (layout == "board" ? [] : [.init(id: "none", label: "No grouping", icon: "minus")]), selection: $grouping)
             }
             PopRow(icon: "arrow.up.arrow.down", label: "Ordering") {
                 ValueMenu(options: [

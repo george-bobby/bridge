@@ -126,8 +126,6 @@ struct ChatView: View {
                 OpenInButton(session: s)
                 IconButton(icon: s.pinned ? "star.fill" : "star", help: s.pinned ? "Unpin" : "Pin to the sidebar") { Task { await model.setPinned(s.id, !s.pinned) } }
                 MoreMenu {
-                    Button { model.splitRight() } label: { Label("Split Right", systemImage: "rectangle.split.2x1") }.keyboardShortcut("\\")
-                    Divider()
                     if !s.permalink.isEmpty { Button { model.openThread(s.permalink) } label: { Label("Read the Slack Thread", systemImage: "number") } }
                     SessionMenu(session: s, inChat: true)
                 }

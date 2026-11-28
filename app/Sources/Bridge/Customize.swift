@@ -223,8 +223,6 @@ struct SkillRow: View {
             Button("Edit", action: edit).buttonStyle(LButton(small: true))
             IconButton(icon: "folder", help: "Open the skill's folder", size: B.small) { NSWorkspace.shared.open(URL(fileURLWithPath: skill.dir)) }
             MoreMenu(size: B.small) {
-                Button(action: edit) { Label("Edit SKILL.md", systemImage: "pencil") }
-                Button { NSWorkspace.shared.open(URL(fileURLWithPath: skill.dir)) } label: { Label("Open Folder", systemImage: "folder") }
                 Button { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: skill.file)]) } label: { Label("Reveal SKILL.md in Finder", systemImage: "doc.text.magnifyingglass") }
                 Button { copyToPasteboard(skill.dir) } label: { Label("Copy Path", systemImage: "doc.on.doc") }
                 Divider()

@@ -228,9 +228,14 @@ struct SessionRow: View {
 struct SessionMenu: View {
     @Environment(AppModel.self) var model
     let session: Session
-    /// In the chat's own ⋯ menu: opening it again (or beside itself) and the
-    /// terminal (the + menu has it) would only repeat what's on screen.
+    /// In the chat's own ⋯ menu: opening it again (or beside itself), the
+    /// terminal (the + menu has it), and anything the header already shows
+    /// (pin star, stop, unarchive, brief, open in) would only repeat what's
+    /// on screen. A split pane's header has none of those, so they stay there.
     var inChat = false
+    /// Header-covered actions drop out only in the single chat; a split
+    /// pane's ⋯ is their only home.
+    var ownHeader: Bool { inChat && !model.isSplit }
     var body: some View {
         if !inChat {
             Section {
@@ -240,10 +245,14 @@ struct SessionMenu: View {
                 Button { model.open(session.id); model.openTerminalTab(session.id) } label: { Label("Terminal", systemImage: "terminal") }
             }
         }
-        Section { OpenInMenu(session: session) }
+        if !ownHeader {
+            Section { OpenInMenu(session: session) }
+        }
         Section {
-            Button { Task { await model.setPinned(session.id, !session.pinned) } } label: {
-                Label(session.pinned ? "Unpin from Sidebar" : "Pin to Sidebar", systemImage: session.pinned ? "star.slash" : "star")
+            if !inChat {
+                Button { Task { await model.setPinned(session.id, !session.pinned) } } label: {
+                    Label(session.pinned ? "Unpin from Sidebar" : "Pin to Sidebar", systemImage: session.pinned ? "star.slash" : "star")
+                }
             }
             Menu {
                 ForEach(Column.allCases) { c in
@@ -265,13 +274,6 @@ struct SessionMenu: View {
                 } label: { Label("Move to Project", systemImage: "folder") }
             }
         }
-        if !session.prUrl.isEmpty || !session.linearUrl.isEmpty || !session.permalink.isEmpty {
-            Section {
-                if !session.prUrl.isEmpty { Button { openURL(session.prUrl) } label: { Label("Open Pull Request", systemImage: "arrow.triangle.pull") } }
-                if !session.linearUrl.isEmpty { Button { openURL(session.linearUrl) } label: { Label("Open in Linear", systemImage: "circle.lefthalf.filled") } }
-                if !session.permalink.isEmpty { Button { openURL(session.permalink) } label: { Label("Open Slack Thread", systemImage: "number") } }
-            }
-        }
         Menu {
             if !session.branch.isEmpty { Button { copyToPasteboard(session.branch) } label: { Label("Branch Name", systemImage: "arrow.triangle.branch") } }
             if !session.prUrl.isEmpty { Button { copyToPasteboard(session.prUrl) } label: { Label("Pull Request Link", systemImage: "link") } }
@@ -279,20 +281,26 @@ struct SessionMenu: View {
             Button { copyToPasteboard(session.title) } label: { Label("Title", systemImage: "textformat") }
             Button { copyToPasteboard(session.id) } label: { Label("Session ID", systemImage: "barcode") }
         } label: { Label("Copy", systemImage: "doc.on.doc") }
-        Section {
-            if model.isLive(session) {
-                Button { Task { await model.stop(session.id) } } label: { Label("Stop", systemImage: "stop.circle") }
-            }
-            if session.isOrchestrator {
-                Button { Task { await model.brief(session.id) } } label: { Label("Brief Me", systemImage: "sparkles") }
-                Button(role: .destructive) { Task { await model.clearChat(session.id) } } label: { Label("Clear Chat…", systemImage: "eraser") }
-                    .disabled(model.isLive(session))
-            } else {
-                if session.archived {
-                    Button { Task { await model.setArchived(session.id, false) } } label: { Label("Unarchive", systemImage: "tray.and.arrow.up") }
-                } else {
-                    Button { model.confirmArchive(session.id) } label: { Label("Archive…", systemImage: "archivebox") }
+        if session.isOrchestrator || !session.archived || !ownHeader {
+            Section {
+                if model.isLive(session) && !inChat {
+                    Button { Task { await model.stop(session.id) } } label: { Label("Stop", systemImage: "stop.circle") }
+                }
+                if session.isOrchestrator {
+                    if !ownHeader {
+                        Button { Task { await model.brief(session.id) } } label: { Label("Brief Me", systemImage: "sparkles") }
+                    }
+                    Button(role: .destructive) { Task { await model.clearChat(session.id) } } label: { Label("Clear Chat…", systemImage: "eraser") }
                         .disabled(model.isLive(session))
+                } else {
+                    if session.archived {
+                        if !ownHeader {
+                            Button { Task { await model.setArchived(session.id, false) } } label: { Label("Unarchive", systemImage: "tray.and.arrow.up") }
+                        }
+                    } else {
+                        Button { model.confirmArchive(session.id) } label: { Label("Archive…", systemImage: "archivebox") }
+                            .disabled(model.isLive(session))
+                    }
                 }
             }
         }
@@ -632,7 +640,6 @@ struct BoardColumn: View {
                 Text(verbatim: "\(sessions.count)").font(T.ui(12)).foregroundStyle(T.text3).monospacedDigit()
                     .contentTransition(.numericText())
                 Spacer()
-                if column == .backlog { IconButton(icon: "plus", help: "New task") { model.compose(in: model.projectFilter) } }
             }
             .padding(.horizontal, 12).frame(height: 42)
             ScrollView {

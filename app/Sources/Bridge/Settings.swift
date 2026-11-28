@@ -117,16 +117,14 @@ struct SettingEntry {
 
     static let all: [SettingEntry] = [
         .init(pane: .general, title: "Theme", words: "appearance theme light dark mode system color", query: "theme"),
-        .init(pane: .general, title: "Server status", words: "server status connected offline address", query: "server status"),
         .init(pane: .general, title: "Restart the server", words: "restart server reload", query: "restart server"),
-        .init(pane: .general, title: "Relay mode", words: "relay mode normal quiet away inbox", query: "relay mode"),
+        .init(pane: .general, title: "Relay mode", words: "relay mode normal quiet away off inbox outcomes orchestrator workers", query: "relay mode"),
         .init(pane: .agents, title: "Installed agents", words: "agent installed version claude codex cursor devin", query: "agent installed"),
         .init(pane: .agents, title: "Default agent", words: "default agent new sessions", query: "default agent"),
         .init(pane: .agents, title: "Default model", words: "default model new sessions", query: "default model"),
         .init(pane: .agents, title: "Default permissions and thinking", words: "default permission thinking effort mode", query: "default permission"),
         .init(pane: .agents, title: "Automatic failover", words: "automatic failover claude usage threshold preference order", query: "automatic failover"),
         .init(pane: .agents, title: "Opening skill", words: "opening skill worker skill fetch new session", query: "opening skill"),
-        .init(pane: .agents, title: "Relay outcomes to the orchestrator", words: "relay outcomes orchestrator workers", query: "relay outcomes"),
         .init(pane: .agents, title: "Stalled after", words: "stalled silence minutes stall", query: "stalled"),
         .init(pane: .agents, title: "Auto-archive merged chats", words: "auto archive merged days pr", query: "auto archive"),
         .init(pane: .agents, title: "Automation", words: "automation auto merge review resolve rebase decide workers project", query: "automation"),
@@ -694,11 +692,6 @@ struct GeneralSettings: View {
                 }
             }
             SSection(title: "Server") {
-                if Prefs.hit(q, "server status connected offline address") {
-                    SRow(title: "Status", detail: model.connected ? "Bridge's server is running at \(API.base.absoluteString)" : "Can't reach \(API.base.absoluteString)") {
-                        StatusChip(on: model.connected, onText: "Connected", offText: "Offline")
-                    }
-                }
                 if Prefs.hit(q, "restart server reload") {
                     SRow(title: "Restart the server", detail: "Reloads server/, .env and the skills. Running sessions restart with it.") {
                         Button("Restart") { Task { await model.restartServer() } }.buttonStyle(LButton())
@@ -706,13 +699,20 @@ struct GeneralSettings: View {
                 }
             }
             SSection(title: "Inbox", detail: "How the orchestrator hears back from sessions it started") {
-                if Prefs.hit(q, "relay mode normal quiet away inbox") {
-                    SRow(title: "Relay mode", detail: "Normal relays everything; quiet only what needs you; away holds it all for one catch-up") {
+                if Prefs.hit(q, "relay mode normal quiet away off inbox outcomes orchestrator workers") {
+                    SRow(title: "Relay mode", detail: "Normal relays every finished, blocked or stalled worker; quiet only what needs you; away holds it all for one catch-up; off relays nothing") {
                         SlidingTabs(tabs: [
+                            .init(id: "off", label: "Off", icon: "bell.slash"),
                             .init(id: "normal", label: "Normal", icon: "bell"),
                             .init(id: "quiet", label: "Quiet", icon: "moon"),
                             .init(id: "away", label: "Away", icon: "airplane"),
-                        ], selection: Binding(get: { model.inbox["mode"].nonEmpty ?? model.config["harness"]["mode"].nonEmpty ?? "normal" }, set: { m in Task { await model.setMode(m) } }))
+                        ], selection: Binding(
+                            get: { model.config["harness"]["relay"].bool ? (model.inbox["mode"].nonEmpty ?? model.config["harness"]["mode"].nonEmpty ?? "normal") : "off" },
+                            set: { v in Task {
+                                let on = v != "off"
+                                if on != model.config["harness"]["relay"].bool { await model.saveConfig(["harness": ["relay": on]]) }
+                                if on { await model.setMode(v) }
+                            } }))
                     }
                 }
             }
@@ -898,11 +898,6 @@ struct WorkerSettings: View {
 
     var body: some View {
         SSection(title: "Sessions", detail: "Workers run in parallel, with no cap") {
-            if Prefs.hit(q, "relay outcomes orchestrator workers") {
-                SRow(title: "Relay outcomes to the orchestrator", detail: "A finished, blocked or stalled worker starts a turn in the orchestrator chat") {
-                    SToggle(on: Binding(get: { h["relay"].bool }, set: { v in save(["relay": v]) }))
-                }
-            }
             if Prefs.hit(q, "stalled silence minutes stall") {
                 SRow(title: "Stalled after", detail: "Silence before a working worker is flagged") {
                     SStepper(value: h["stallMinutes"].int, range: 5...120, step: 5, unit: "min") { save(["stallMinutes": $0]) }

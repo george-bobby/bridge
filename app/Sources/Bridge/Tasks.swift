@@ -425,21 +425,12 @@ struct TaskHeader: View {
 
     @ViewBuilder var actions: some View {
         let t = task
-        HStack(spacing: 6) {
-            if t.running {
-                if compact {
-                    IconButton(icon: "stop.fill", help: "Stop this task", tint: T.red) { Task { await model.stopAgentTask(runId, t) } }
-                } else {
-                    Button { Task { await model.stopAgentTask(runId, t) } } label: { Label("Stop", systemImage: "stop.fill") }
-                        .buttonStyle(LButton(danger: true)).fixedSize()
-                }
-            }
+        if t.running {
             if compact {
-                IconButton(icon: "bubble.left", help: "Back to the chat that started it") { withAnimation(M.snappy) { model.showTab("chat", of: runId) } }
+                IconButton(icon: "stop.fill", help: "Stop this task", tint: T.red) { Task { await model.stopAgentTask(runId, t) } }
             } else {
-                Button { withAnimation(M.snappy) { model.showTab("chat", of: runId) } } label: { Label("Chat", systemImage: "bubble.left") }
-                    .buttonStyle(LButton()).fixedSize()
-                    .help("Back to the chat that started it")
+                Button { Task { await model.stopAgentTask(runId, t) } } label: { Label("Stop", systemImage: "stop.fill") }
+                    .buttonStyle(LButton(danger: true)).fixedSize()
             }
         }
     }

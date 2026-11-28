@@ -709,10 +709,10 @@ struct PaneHeader: View {
                 if let s, s.isOrchestrator {
                     Button { model.pinOrchestrator(s.id) } label: { Label("Pin to the Right", systemImage: "pin") }
                 }
-                Button { model.splitRight() } label: { Label("Split Right", systemImage: "rectangle.split.2x1") }
-                Button { model.collapsePane(pane.id) } label: { Label("Minimize Pane", systemImage: "arrow.right.and.line.vertical.and.arrow.left") }
-                    .disabled(model.panes.filter { !$0.collapsed }.count < 2)
-                Button { model.closeOtherPanes() } label: { Label("Close Other Panes", systemImage: "rectangle") }
+                if narrow {
+                    Button { model.collapsePane(pane.id) } label: { Label("Minimize Pane", systemImage: "arrow.right.and.line.vertical.and.arrow.left") }
+                        .disabled(model.panes.filter { !$0.collapsed }.count < 2)
+                }
                 if let s {
                     Divider()
                     if !s.permalink.isEmpty { Button { model.openThread(s.permalink) } label: { Label("Read the Slack Thread", systemImage: "number") } }
