@@ -61,6 +61,22 @@ for p in ${PAGES//,/ }; do
   else
     echo "ok   $p ($((size / 1024)) KB)"
   fi
+  # A window can look nonblank while its transcript is entirely empty: the
+  # sidebar, header and composer still render. Check the center separately.
+  if [[ "$p" == "chat" ]]; then
+    width=$(sips -g pixelWidth "$f" | awk '/pixelWidth/{print $2}')
+    height=$(sips -g pixelHeight "$f" | awk '/pixelHeight/{print $2}')
+    crop="$OUT/chat-transcript.png"
+    cp "$f" "$crop"
+    sips -c $((height / 2)) $((width / 2)) --cropOffset $((height / 5)) $((width / 4)) "$crop" >/dev/null
+    crop_size=$(wc -c <"$crop" | tr -d ' ')
+    if [[ "$crop_size" -lt $((width * height / 100)) ]]; then
+      echo "error: finished chat has a blank transcript ($crop_size bytes)" >&2
+      fail=1
+    else
+      echo "ok   finished chat transcript ($((crop_size / 1024)) KB)"
+    fi
+  fi
 done
 if [[ "$fail" -ne 0 ]]; then
   tail -40 "$OUT/app.log" >&2 || true

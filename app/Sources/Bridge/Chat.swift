@@ -346,7 +346,6 @@ struct Transcript: View {
                 .frame(maxWidth: 920, alignment: .leading)
                 .frame(maxWidth: .infinity)
             }
-            .defaultScrollAnchor(.bottom)
             .scrollIndicators(.never)
             .scrollPosition(id: Binding(get: { nav.top }, set: { v in if nav.top != v { nav.top = v } }), anchor: .top)
             .onScrollGeometryChange(for: Bool.self) { g in
@@ -355,8 +354,9 @@ struct Transcript: View {
                 nav.bottomChanged(bottom)
             }
             // Streaming text, a new step or an ask card: stay at the end if you were there.
+            // Shrinking too: rows measured shorter than guessed must not leave the view past the end.
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { old, new in
-                if new > old + 0.5, nav.following, nav.pinned == nil, !nav.userScrolling { proxy.scrollTo("end", anchor: .bottom) }
+                if abs(new - old) > 0.5, nav.following, nav.pinned == nil, !nav.userScrolling { proxy.scrollTo("end", anchor: .bottom) }
             }
             .onScrollPhaseChange { _, phase in
                 nav.userScrolling = phase == .interacting || phase == .decelerating
@@ -369,6 +369,11 @@ struct Transcript: View {
             .onAppear {
                 nav.proxy = proxy
                 model.messageNavs[runId] = nav
+                // `defaultScrollAnchor(.bottom)` asks a lazy stack for its
+                // bottom before its variable-height rows exist. Its estimated
+                // offset can land beyond the rendered rows and leave the chat
+                // blank. Mount at the top, then move to the real end.
+                if nav.following { DispatchQueue.main.async { proxy.scrollTo("end", anchor: .bottom) } }
             }
             .onDisappear { if model.messageNavs[runId] === nav { model.messageNavs[runId] = nil } }
             .onChange(of: messages.count, initial: true) { nav.update(messages) }
