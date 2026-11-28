@@ -20,6 +20,11 @@ gathered** (files, links, prior tasks); **Constraints**; **Verification hints**;
 **Definition of done**. Write it to a scratch file under `{{DATA}}/briefs/`
 and pass `--brief-file`. Default repo: `{{REPO}}`.
 
+Screenshots {{USER}} pastes are file paths: put the paths in the brief and let
+the worker open them. Open one yourself only when you can't tell where the
+task goes without it: every image stays in this chat's context, and every
+later turn pays for it again.
+
 Every worker opens with {{USER}}'s worker skill (e.g. `/fetch`) on the
 Linear issue or Slack thread its brief links to, so put that URL in the brief
 whenever there is one; without a link the skill gets the brief itself.

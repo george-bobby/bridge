@@ -21,6 +21,7 @@
  * orchestrator started and mode allowing, a relay turn in the orchestrator chat.
  */
 
+const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 
@@ -201,8 +202,21 @@ function relay(taskId, name, info) {
   // Only work the orchestrator started goes back to it. A chat you started
   // yourself is already in front of you, and every relay is a whole
   // orchestrator turn (its instructions and roster included).
-  if ((tasks.readMeta(taskId) || {}).by !== "orchestrator") return;
+  const meta = tasks.readMeta(taskId) || {};
+  if (meta.by !== "orchestrator") return;
+  // A report rewritten with the same status, TL;DR and asks says nothing new,
+  // and relaying it re-reads the orchestrator's whole context for a no-op.
+  const key = relayKey(name, info);
+  if (meta.lastRelay === key) return;
+  tasks.writeMeta(taskId, { lastRelay: key });
   send(orchestratorFor(taskId), relayText(taskId, name, info), info.needsYou);
+}
+
+/** What a relay says, minus Inbox ids (new on every report even when the asks are the same). */
+function relayKey(name, { status, text, parsed }) {
+  const p = parsed || { fields: {}, questions: [], actions: [], yours: [] };
+  const raw = [name, status, text, p.fields.pr || "", p.questions.join("\n"), p.actions.join("\n"), (p.yours || []).join("\n")].join("\u0001");
+  return crypto.createHash("sha1").update(raw).digest("hex").slice(0, 16);
 }
 
 /** A relay turn, mode allowing: quiet keeps only what needs you, away holds it for the catch-up. */

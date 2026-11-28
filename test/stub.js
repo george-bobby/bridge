@@ -8,6 +8,7 @@
  *   stub:question=<text>      (with report) add an open question ("\n" for its next line)
  *   stub:you=<text>           (with report) add a "For you" item
  *   stub:action=<text>        (with report) add an action request
+ *   stub:note=<text>          (with report) add a line to the summary (same status and asks)
  *   stub:noreport             end the turn without a report
  *   stub:report-on-nudge      write a ready-for-review report when nudged
  *   stub:edit                 leave an uncommitted file in the worktree (real work to report)
@@ -93,7 +94,7 @@ branch: stub-branch
 Stub worker finished with ${status}.
 
 ## Summary
-Did the stub thing.
+Did the stub thing.${d.note ? ` ${[].concat(d.note).join(" ")}` : ""}
 
 ## Changes
 - none
