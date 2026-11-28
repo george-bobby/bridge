@@ -1383,11 +1383,16 @@ async function refreshIdentity() {
 
 server.listen(PORT, "127.0.0.1", () => {
   setTimeout(() => refreshIdentity(), 1500);
-  try {
-    memory.connect();
-  } catch (e) {
-    console.error("memory pointers:", e.message);
-  }
+  const pointers = () => {
+    try {
+      memory.connect();
+    } catch (e) {
+      console.error("memory pointers:", e.message);
+    }
+  };
+  pointers();
+  // An older checkout's test run can still overwrite them: put them back.
+  setInterval(pointers, 5 * 60 * 1000).unref();
   const config = store.readConfig();
   console.log(`bridge server  ->  http://localhost:${PORT}/api${LEGACY_WEB ? `  (legacy web UI: http://localhost:${PORT})` : ""}`);
   console.log(`  runs:      ${store.PATHS.runs}`);
