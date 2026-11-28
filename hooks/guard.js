@@ -65,6 +65,9 @@ function ownServer(cwd) {
   };
 }
 
+/** The branch a `git push --force-with-lease` with no refspec would update. */
+const branchAt = (dir, cwd) => run("git", [...(dir ? ["-C", dir] : []), "rev-parse", "--abbrev-ref", "HEAD"], cwd);
+
 let raw = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (c) => (raw += c));
@@ -75,7 +78,11 @@ process.stdin.on("end", () => {
   } catch {
     process.exit(0);
   }
-  const verdict = policy.check(input.tool_name, input.tool_input || {}, { policy: policy.loadPolicy(), ownServer: ownServer(input.cwd) });
+  const verdict = policy.check(input.tool_name, input.tool_input || {}, {
+    policy: policy.loadPolicy(),
+    ownServer: ownServer(input.cwd),
+    branchAt: (dir) => branchAt(dir, input.cwd),
+  });
   if (!verdict) process.exit(0);
   process.stdout.write(
     JSON.stringify({

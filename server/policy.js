@@ -244,7 +244,7 @@ function checkPs(t) {
 
 const ENVFILE = /(^|\/)\.env(\.(?!example$|sample$|template$)[^/\s]+)?$/;
 
-function checkBash(cmd, policy, own = NOT_OWN) {
+function checkBash(cmd, policy, own = NOT_OWN, branchAt = NO_BRANCH) {
   const c = String(cmd || "").replace(/\\\r?\n/g, " ");
 
   // Anything piping into kill, or killing whatever a substitution printed.
@@ -259,6 +259,7 @@ function checkBash(cmd, policy, own = NOT_OWN) {
 
   const httpSegs = [];
   const vars = {};
+  let cdDir = "";
   for (const seg of segments(c)) {
     // `P=http://localhost:4420/api/x; curl -X POST $P/y`: remember the value so
     // the curl is judged by where it really goes, not as "a URL in a variable".
@@ -281,12 +282,12 @@ function checkBash(cmd, policy, own = NOT_OWN) {
     if (["bash", "sh", "zsh", "dash", "ksh"].includes(base)) {
       const k = t.findIndex((a, i) => i > 0 && /^-[a-z]*c[a-z]*$/.test(a));
       if (k > 0 && t[k + 1]) {
-        const v = checkBash(t[k + 1], policy, own);
+        const v = checkBash(t[k + 1], policy, own, branchAt);
         if (v) return v;
       }
     }
     if (base === "eval" && t.length > 1) {
-      const v = checkBash(t.slice(1).join(" "), policy, own);
+      const v = checkBash(t.slice(1).join(" "), policy, own, branchAt);
       if (v) return v;
     }
     if (base === "env" && (t.length === 1 || t.slice(1).every((a) => a.startsWith("-") || ASSIGN.test(a)))) {
@@ -320,8 +321,9 @@ function checkBash(cmd, policy, own = NOT_OWN) {
       }
     }
 
+    if (base === "cd" && t[1]) cdDir = expand(t[1], vars);
     if (base === "git") {
-      const v = checkGit(t, policy);
+      const v = checkGit(t.map((x) => expand(x, vars)), policy, (dir) => branchAt(dir ? (cdDir && !path.isAbsolute(dir) ? path.join(cdDir, dir) : dir) : cdDir));
       if (v) return v;
     }
     if (base === "gh") {
@@ -360,18 +362,40 @@ const VALUE_FLAGS = {
 };
 VALUE_FLAGS.https = VALUE_FLAGS.xh = VALUE_FLAGS.http;
 
-function checkGit(t, policy) {
-  // Skip global options: git -C <dir> push ...
+function checkGit(t, policy, branchAt = NO_BRANCH) {
+  // Skip global options, remembering -C's directory: git -C <dir> push ...
   let i = 1;
-  while (t[i] && t[i].startsWith("-")) i += t[i] === "-C" || t[i] === "-c" ? 2 : 1;
+  let gitDir = "";
+  while (t[i] && t[i].startsWith("-")) {
+    if (t[i] === "-C") {
+      gitDir = t[i + 1] || "";
+      i += 2;
+      continue;
+    }
+    i += t[i] === "-c" ? 2 : 1;
+  }
   const sub = t[i];
   const args = t.slice(i + 1);
   const has = (re) => args.some((a) => re.test(a));
   const what = `git ${[sub, ...args].join(" ")}`.slice(0, 120);
 
   if (sub === "push") {
-    if (has(/^(-f|--force|--force-with-lease.*|--force-if-includes|--mirror|--delete|-d|--prune)$/) || has(/^-[a-zA-Z]*f[a-zA-Z]*$/) || has(/^\+/) || has(/^:/)) {
+    // Force without a lease, deletes and prunes stay gated whatever the branch.
+    if (has(/^(-f|--force|--mirror|--delete|-d|--prune)$/) || has(/^-[a-zA-Z]*f[a-zA-Z]*$/) || has(/^\+/) || has(/^:/)) {
       return gate("destructiveGit", what, policy);
+    }
+    if (has(/^--force-with-lease/)) {
+      // The workflow's own rebase push: allowed unless it can reach main or
+      // master. A refspec's target is its dst (src:dst, refs/heads/x, x); a
+      // bare `HEAD` and no refspec at all push the current branch, which the
+      // guard resolves in the session's folder. An unknown target asks.
+      const dst = (r) => (r.split(":").pop() || "").replace(/^refs\/heads\//, "").replace(/^HEAD$/, "");
+      const pushed = args.filter((a) => !a.startsWith("-")).slice(1).map(dst);
+      const targets = pushed.length ? pushed : [""];
+      if (has(/^--all$/) || targets.some((b) => { const t = b || branchAt(gitDir); return !t || /^(main|master)$/.test(t); })) {
+        return gate("destructiveGit", what, policy);
+      }
+      return null;
     }
   }
   if (sub === "reset" && has(/^--hard$/)) return gate("destructiveGit", what, policy);
@@ -483,6 +507,7 @@ function loopWrite(target, what, policy, own = NOT_OWN) {
 }
 
 const NOT_OWN = () => false;
+const NO_BRANCH = () => "";
 
 function checkHttp(t, policy, own) {
   const base = path.basename(t[0]);
@@ -625,12 +650,12 @@ function projectAuto(id = process.env.BRIDGE_PROJECT) {
  * checkout (the guard looks it up with lsof); without it every other local
  * API write asks.
  */
-function check(toolName, toolInput = {}, { policy = loadPolicy(), auto = projectAuto(), role: who = process.env.BRIDGE_ROLE || "", ownServer = NOT_OWN } = {}) {
+function check(toolName, toolInput = {}, { policy = loadPolicy(), auto = projectAuto(), role: who = process.env.BRIDGE_ROLE || "", ownServer = NOT_OWN, branchAt = NO_BRANCH } = {}) {
   role = who;
   policy = { ...policy, autoMerge: !!(auto && auto.merge) };
   const name = String(toolName || "");
   const input = toolInput || {};
-  if (name === "Bash") return checkBash(input.command, policy, ownServer);
+  if (name === "Bash") return checkBash(input.command, policy, ownServer, branchAt);
   if (name === "Read" || name === "Grep" || name === "NotebookRead") {
     const p = String(input.file_path || input.path || "");
     if (ENVFILE.test(p)) return deny(`reading ${path.basename(p)} prints secret values. Check key names only, never values.`);

@@ -59,6 +59,38 @@ test("destructive git asks; ordinary git passes", () => {
   }
 });
 
+test("force-with-lease to a non-main branch passes; main, --all and the unknown ask", () => {
+  const at = (c, o) => (check("Bash", { command: c }, o) || { decision: "pass" }).decision;
+  const feat = { policy: { ...DEFAULT_POLICY }, branchAt: () => "george-mercor/feat-x" };
+  // Explicit non-main targets pass without needing the branch lookup.
+  for (const ok of ["git push --force-with-lease origin feat", "git push --force-with-lease origin HEAD:feat", "git push --force-with-lease=feat:abc123 origin feat", "git push --force-with-lease origin feat dev"]) {
+    assert.equal(verdict(ok), "pass", ok);
+  }
+  // Anything that can reach main or master still asks, refspec or not.
+  for (const ask of ["git push --force-with-lease origin main", "git push --force-with-lease origin HEAD:main", "git push --force-with-lease origin feat:master", "git push --force-with-lease origin refs/heads/main", "git push --force-with-lease --all origin", "git push --force-with-lease", "git push --force-with-lease origin HEAD"]) {
+    assert.equal(verdict(ask), "ask", ask);
+  }
+  // A bare lease and a bare HEAD push the session's current branch.
+  for (const ok of ["git push --force-with-lease", "git push --force-with-lease origin", "git push --force-with-lease origin HEAD", "cd repo && git push --force-with-lease", "git -C repo push --force-with-lease"]) {
+    assert.equal(at(ok, feat), "pass", ok);
+  }
+  for (const b of ["main", "master"]) {
+    assert.equal(at("git push --force-with-lease", { policy: { ...DEFAULT_POLICY }, branchAt: () => b }), "ask", `current branch ${b}`);
+  }
+  // The -C or cd directory decides which branch is resolved.
+  const byDir = (d) => (d === "/repo" ? "feat" : "main");
+  const dirOpts = { policy: { ...DEFAULT_POLICY }, branchAt: byDir };
+  assert.equal(at("git -C /repo push --force-with-lease", dirOpts), "pass");
+  assert.equal(at("cd /repo && git push --force-with-lease", dirOpts), "pass");
+  assert.equal(at("cd /repo && git -C ../main push --force-with-lease", { policy: { ...DEFAULT_POLICY }, branchAt: (d) => (d === "/main" ? "main" : "feat") }), "ask");
+  // A variable holding the target resolves like the URL ones do.
+  assert.equal(verdict("B=main; git push --force-with-lease origin $B"), "ask");
+  // Plain force, +/-refspecs and deletes stay gated whatever the branch.
+  for (const ask of ["git push -f origin feat", "git push --force origin feat", "git push --force --force-with-lease origin feat", "git push origin +feat", "git push --force-with-lease --delete origin feat"]) {
+    assert.equal(verdict(ask), "ask", ask);
+  }
+});
+
 test("destructive git inside substitutions, shells, eval and wrappers still asks", () => {
   for (const ask of ['echo "$(git push --force origin main)"', 'echo "`git reset --hard`"', 'x="$(git branch -D feat)"', 'bash -c "git push --force"', "sh -lc 'git clean -fdx'", 'eval "git stash drop"', "env FOO=1 git push --force", "xargs -n 1 git branch -D", "nice -n 5 git reset --hard"]) {
     assert.equal(verdict(ask), "ask", ask);
