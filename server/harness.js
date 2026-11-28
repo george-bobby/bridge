@@ -691,6 +691,37 @@ function archive(id, on = true) {
   return { archived };
 }
 
+/**
+ * Settings › Sessions "Auto-archive merged chats": archive a chat once its PR
+ * has been merged for `autoArchiveDays` (0 = off). Takes the pulls feed
+ * (sources.pulls()); a chat that is running or was unarchived by hand is left
+ * alone. Worktrees stay on disk. Returns the ids it archived.
+ */
+function autoArchive(pulls, nowMs = Date.now()) {
+  const days = cfg().autoArchiveDays;
+  if (!days || !pulls || !Array.isArray(pulls.merged)) return [];
+  const norm = (u) => String(u || "").split(/[?#]/)[0].replace(/\/+$/, "").toLowerCase();
+  const mergedAt = new Map();
+  for (const p of pulls.merged) if (p && p.url && p.mergedAt) mergedAt.set(norm(p.url), Date.parse(p.mergedAt));
+  if (!mergedAt.size) return [];
+  const done = [];
+  for (const s of store.listRunSummaries()) {
+    if (s.archived || s.kind === "orchestrator" || projects.isOrchestrator(s.runId) || !s.prUrl) continue;
+    const at = mergedAt.get(norm(s.prUrl));
+    if (!at || nowMs - at < days * 86400_000 || jobs.isRunning(s.runId)) continue;
+    const run = store.loadRun(s.runId);
+    if (!run || run.unarchivedAt) continue;
+    try {
+      archive(s.runId, true);
+      if (tasks.exists(s.runId)) tasks.appendEvent({ taskId: s.runId, name: "auto-archived", text: `PR merged ${days} day${days === 1 ? "" : "s"} ago` });
+      done.push(s.runId);
+    } catch (err) {
+      console.error(`harness: auto-archive of ${s.runId} failed:`, err.message);
+    }
+  }
+  return done;
+}
+
 /* -------------------------------------------------------- status/catchup */
 
 const GONE = new Set(["cleaned", "deleted"]);
@@ -837,11 +868,20 @@ function start() {
   jobs.events.on("end", (e) => onJobEnd(e).catch((err) => console.error("harness: job end handling failed:", err)));
   recover();
   const tick = Number(process.env.BRIDGE_TICK_MS) || 30000;
+  let archivedAt = 0;
   setInterval(() => {
     try {
       checkStalls();
     } catch (err) {
       console.error("harness: stall check failed:", err);
+    }
+    // Merged PRs move slowly: look every ten minutes, off the feed's cache.
+    if (cfg().autoArchiveDays && Date.now() - archivedAt > 600_000) {
+      archivedAt = Date.now();
+      require("./sources")
+        .pulls()
+        .then((p) => autoArchive(p))
+        .catch(() => {}); // no gh login or offline: try again next round
     }
   }, tick).unref();
 }
@@ -860,6 +900,7 @@ module.exports = {
   cleanup,
   discard,
   archive,
+  autoArchive,
   status,
   inbox,
   catchup,

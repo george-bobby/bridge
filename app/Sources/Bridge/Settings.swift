@@ -130,6 +130,7 @@ struct SettingEntry {
         .init(pane: .agents, title: "Opening skill", words: "opening skill worker skill fetch new session", query: "opening skill"),
         .init(pane: .agents, title: "Relay outcomes to the orchestrator", words: "relay outcomes orchestrator workers", query: "relay outcomes"),
         .init(pane: .agents, title: "Stalled after", words: "stalled silence minutes stall", query: "stalled"),
+        .init(pane: .agents, title: "Auto-archive merged chats", words: "auto archive merged days pr", query: "auto archive"),
         .init(pane: .rules, title: "Common rules", words: "common rules house rules instructions prompt worktree rebase branch pr", query: "common rules"),
         .init(pane: .mcp, title: "MCP servers", words: "mcp server tools customize", query: ""),
         .init(pane: .integrations, title: "GitHub", words: "github pull requests gh login checks", query: "github"),
@@ -825,6 +826,8 @@ struct WorkerSettings: View {
     let q: String
 
     var h: JSON { model.config["harness"] }
+    /// The days field as typed; nil shows the saved value.
+    @StateObject private var archiveDays = Box<String?>(nil)
 
     var body: some View {
         SSection(title: "Sessions", detail: "Workers run in parallel, with no cap") {
@@ -836,6 +839,19 @@ struct WorkerSettings: View {
             if Prefs.hit(q, "stalled silence minutes stall") {
                 SRow(title: "Stalled after", detail: "Silence before a working worker is flagged") {
                     SStepper(value: h["stallMinutes"].int, range: 5...120, step: 5, unit: "min") { save(["stallMinutes": $0]) }
+                }
+            }
+            if Prefs.hit(q, "auto archive merged days pr") {
+                let days = h["autoArchiveDays"].int
+                SRow(title: "Auto-archive merged chats", detail: days == 0 ? "Off: merged chats stay in the sidebar" : "Archived once the PR has been merged this long (up to 14 days); the worktree stays") {
+                    HStack(spacing: 8) {
+                        SInput(placeholder: "0", text: Binding(get: { archiveDays.v ?? "\(days)" }, set: { v in
+                            archiveDays.v = v
+                            if let n = Int(v.trimmingCharacters(in: .whitespaces)), (0...14).contains(n), n != days { save(["autoArchiveDays": n]) }
+                        }), width: 52)
+                        Text(days == 1 ? "day" : "days").font(T.ui(12.5)).foregroundStyle(T.text2)
+                        SToggle(on: Binding(get: { days > 0 }, set: { on in archiveDays.v = nil; save(["autoArchiveDays": on ? 1 : 0]) }))
+                    }
                 }
             }
         }
