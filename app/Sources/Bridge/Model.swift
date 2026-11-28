@@ -826,7 +826,7 @@ final class AppModel {
         let fresh = d["fresh"].array, replies = d["followups"].array
         if !fresh.isEmpty { Task { await loadSlack(quiet: true) } }
         guard notifyMentions else { return }
-        if let m = fresh.first, !(NSApp.isActive && (route == .slack || route == .inbox)) {
+        if let m = fresh.first, !(NSApp.isActive && route == .slack) {
             let title = fresh.count == 1 ? "\(m["who"].string) in \(m["channel"].nonEmpty ?? "Slack")" : "\(fresh.count) new on Slack"
             let body = fresh.count == 1 ? Session.plain(m["text"].string) : fresh.prefix(3).map { "\($0["who"].string): \(Session.plain($0["text"].string))" }.joined(separator: "\n")
             notify(title: title, body: body, runId: "", slack: m["permalink"].string)
