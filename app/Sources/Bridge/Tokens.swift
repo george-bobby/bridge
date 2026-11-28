@@ -190,9 +190,12 @@ struct SaversSection: View {
     @StateObject private var busy = Box("")
 
     var body: some View {
-        SSection(title: "Token savers", detail: "Off unless you turn them on. Each switch runs the commands its project documents, shown to you first; new sessions pick up the change") {
-            ForEach(savers.v, id: \.self["id"].string) { s in
-                if Prefs.hit(q, "token savers reduce", s["name"].string, s["blurb"].string) { row(s) }
+        // SSection hides itself with no rows, so the load hangs off a wrapper that is always there.
+        VStack(alignment: .leading, spacing: 0) {
+            SSection(title: "Token savers", detail: "Off unless you turn them on. Each switch runs the commands its project documents, shown to you first; new sessions pick up the change") {
+                ForEach(savers.v, id: \.self["id"].string) { s in
+                    if Prefs.hit(q, "token savers reduce", s["name"].string, s["blurb"].string) { row(s) }
+                }
             }
         }
         .task { await load() }
